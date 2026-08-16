@@ -1,0 +1,364 @@
+diff --git a/test/WebJobs.Script.Tests/WaitForBlobAndGetStringAsyncTests.cs b/test/WebJobs.Script.Tests/WaitForBlobAndGetStringAsyncTests.cs
+new file mode 100644
+index 000000000..111111111
+--- /dev/null
++++ b/test/WebJobs.Script.Tests/WaitForBlobAndGetStringAsyncTests.cs
+@@ -0,0 +1,358 @@
++// Copyright (c) .NET Foundation. All rights reserved.
++// Licensed under the MIT License. See License.txt in the project root for license information.
++
++using System;
++using System.Collections.Generic;
++using System.Reflection;
++using System.Runtime.ExceptionServices;
++using System.Threading;
++using System.Threading.Tasks;
++using Azure;
++using Azure.Storage.Blobs;
++using Azure.Storage.Blobs.Models;
++using Moq;
++using Xunit;
++
++namespace Microsoft.Azure.WebJobs.Script.Tests.TestHelpersTests
++{
++    public class WaitForBlobAndGetStringAsyncTests
++    {
++        [Fact]
++        public async Task ContentAwareWaitHandlesInitiallyMissingBlob()
++        {
++            var blob = new ScriptedBlobClient(new[] { false, true }, new[] { DownloadResult("ready") });
++
++            string result = await InvokeContentAwareWaitAsync(blob, content => content == "ready");
++
++            Assert.Equal("ready", result);
++            Assert.Equal(2, blob.ExistsCalls);
++            Assert.Equal(1, blob.DownloadCalls);
++        }
++
++        [Fact]
++        public async Task ContentAwareWaitHandlesRepeatedlyMissingBlob()
++        {
++            var blob = new ScriptedBlobClient(new[] { false, false, true }, new[] { DownloadResult("ready") });
++
++            string result = await InvokeContentAwareWaitAsync(blob, content => content == "ready");
++
++            Assert.Equal("ready", result);
++            Assert.Equal(3, blob.ExistsCalls);
++            Assert.Equal(1, blob.DownloadCalls);
++        }
++
++        [Fact]
++        public async Task ContentAwareWaitReturnsAcceptedFirstDownload()
++        {
++            var blob = new ScriptedBlobClient(new[] { true }, new[] { DownloadResult("expected") });
++
++            string result = await InvokeContentAwareWaitAsync(blob, content => content == "expected");
++
++            Assert.Equal("expected", result);
++            Assert.Equal(1, blob.DownloadCalls);
++        }
++
++        [Fact]
++        public async Task ContentAwareWaitRetriesUntilContentIsAccepted()
++        {
++            var blob = new ScriptedBlobClient(new[] { true, true }, new[] { DownloadResult("stale"), DownloadResult("fresh") });
++
++            string result = await InvokeContentAwareWaitAsync(blob, content => content == "fresh");
++
++            Assert.Equal("fresh", result);
++            Assert.Equal(2, blob.DownloadCalls);
++        }
++
++        [Fact]
++        public async Task ContentAwareWaitEvaluatesEveryDownloadedValue()
++        {
++            var seen = new List<string>();
++            var blob = new ScriptedBlobClient(new[] { true, true, true }, new[] { DownloadResult("first"), DownloadResult("second"), DownloadResult("third") });
++
++            string result = await InvokeContentAwareWaitAsync(blob, content =>
++            {
++                seen.Add(content);
++                return content == "third";
++            });
++
++            Assert.Equal("third", result);
++            Assert.Equal(new[] { "first", "second", "third" }, seen);
++        }
++
++        [Fact]
++        public async Task ContentAwareWaitHandlesTemporaryReadUnavailability()
++        {
++            var blob = new ScriptedBlobClient(new[] { true, true }, new Func<Response<BlobDownloadResult>>[]
++            {
++                () => throw new RequestFailedException(404, "not found"),
++                () => DownloadResult("ready")
++            });
++
++            string result = await InvokeContentAwareWaitAsync(blob, content => content == "ready");
++
++            Assert.Equal("ready", result);
++            Assert.Equal(2, blob.DownloadCalls);
++        }
++
++        [Fact]
++        public async Task ContentAwareWaitDoesNotMaskPersistentReadFailure()
++        {
++            var blob = new ScriptedBlobClient(new[] { true }, new Func<Response<BlobDownloadResult>>[]
++            {
++                () => throw new RequestFailedException(500, "server error")
++            });
++
++            await Assert.ThrowsAsync<RequestFailedException>(() =>
++                InvokeContentAwareWaitAsync(blob, content => content == "ready"));
++
++            Assert.Equal(1, blob.DownloadCalls);
++        }
++
++        [Fact]
++        public async Task ContentAwareWaitReturnsAcceptedContentAfterTemporaryFailureAndRejectedContent()
++        {
++            var blob = new ScriptedBlobClient(new[] { true, true, true }, new Func<Response<BlobDownloadResult>>[]
++            {
++                () => throw new RequestFailedException(404, "not found"),
++                () => DownloadResult("stale"),
++                () => DownloadResult("ready")
++            });
++
++            string result = await InvokeContentAwareWaitAsync(blob, content => content == "ready");
++
++            Assert.Equal("ready", result);
++            Assert.Equal(3, blob.DownloadCalls);
++        }
++
++        [Fact]
++        public async Task ContentAwareWaitCanAcceptEmptyContent()
++        {
++            var blob = new ScriptedBlobClient(new[] { true }, new[] { DownloadResult(string.Empty) });
++
++            string result = await InvokeContentAwareWaitAsync(blob, content => content.Length == 0);
++
++            Assert.Equal(string.Empty, result);
++            Assert.Equal(1, blob.DownloadCalls);
++        }
++
++        [Fact]
++        public async Task ExistingCallersHandleTemporaryReadUnavailability()
++        {
++            var blob = new ScriptedBlobClient(new[] { true, true }, new Func<Response<BlobDownloadResult>>[]
++            {
++                () => throw new RequestFailedException(404, "not found"),
++                () => DownloadResult("ready")
++            });
++
++            string result = await TestHelpers.WaitForBlobAndGetStringAsync(blob);
++
++            Assert.Equal("ready", result);
++            Assert.Equal(2, blob.ExistsCalls);
++            Assert.Equal(2, blob.DownloadCalls);
++        }
++
++        [Fact]
++        public async Task ContentAwareWaitPreservesUsefulTimeoutDiagnostics()
++        {
++            var blob = new DiagnosticBlobClient();
++
++            ApplicationException exception = await Assert.ThrowsAsync<ApplicationException>(() =>
++                InvokeContentAwareWaitAsync(blob, content => content == "ready"));
++
++            Assert.False(string.IsNullOrWhiteSpace(exception.Message));
++            Assert.InRange(blob.ExistsCalls, 100, 130);
++            Assert.InRange(blob.DownloadCalls, 100, 130);
++        }
++
++        [Fact]
++        public async Task ExistingOverloadStillAcceptsAnyContent()
++        {
++            var blob = new ScriptedBlobClient(new[] { true }, new[] { DownloadResult(string.Empty) });
++            bool callbackInvoked = false;
++
++            string result = await TestHelpers.WaitForBlobAndGetStringAsync(blob, () =>
++            {
++                callbackInvoked = true;
++                return "unexpected callback";
++            });
++
++            Assert.Equal(string.Empty, result);
++            Assert.Equal(1, blob.DownloadCalls);
++            Assert.False(callbackInvoked);
++        }
++
++        private static async Task<string> InvokeContentAwareWaitAsync(
++            BlobClient blob,
++            Func<string, bool> contentCondition)
++        {
++            MethodInfo method = null;
++            foreach (MethodInfo candidate in typeof(TestHelpers).GetMethods(BindingFlags.Public | BindingFlags.Static))
++            {
++                if (candidate.Name != nameof(TestHelpers.WaitForBlobAndGetStringAsync))
++                {
++                    continue;
++                }
++
++                ParameterInfo[] parameters = candidate.GetParameters();
++                bool hasBlob = false;
++                bool hasContentCondition = false;
++                bool canInvoke = true;
++                foreach (ParameterInfo parameter in parameters)
++                {
++                    if (!hasBlob && parameter.ParameterType == typeof(BlobClient))
++                    {
++                        hasBlob = true;
++                    }
++                    else if (!hasContentCondition && IsStringPredicate(parameter.ParameterType))
++                    {
++                        hasContentCondition = true;
++                    }
++                    else if (!parameter.HasDefaultValue && parameter.ParameterType.IsValueType)
++                    {
++                        canInvoke = false;
++                    }
++                }
++
++                if (hasBlob && hasContentCondition && canInvoke)
++                {
++                    method = candidate;
++                    break;
++                }
++            }
++
++            Assert.NotNull(method);
++
++            try
++            {
++                ParameterInfo[] parameters = method.GetParameters();
++                var arguments = new object[parameters.Length];
++                for (int i = 0; i < parameters.Length; i++)
++                {
++                    if (parameters[i].ParameterType == typeof(BlobClient))
++                    {
++                        arguments[i] = blob;
++                    }
++                    else if (IsStringPredicate(parameters[i].ParameterType))
++                    {
++                        arguments[i] = contentCondition.Method.CreateDelegate(parameters[i].ParameterType, contentCondition.Target);
++                    }
++                    else
++                    {
++                        arguments[i] = parameters[i].HasDefaultValue ? parameters[i].DefaultValue : null;
++                    }
++                }
++
++                var invocation = method.Invoke(null, arguments);
++                return await Assert.IsAssignableFrom<Task<string>>(invocation);
++            }
++            catch (TargetInvocationException exception) when (exception.InnerException != null)
++            {
++                ExceptionDispatchInfo.Capture(exception.InnerException).Throw();
++                throw;
++            }
++        }
++
++        private static bool IsStringPredicate(Type candidate)
++        {
++            if (!typeof(Delegate).IsAssignableFrom(candidate))
++            {
++                return false;
++            }
++
++            MethodInfo invoke = candidate.GetMethod("Invoke");
++            if (invoke == null)
++            {
++                return false;
++            }
++
++            ParameterInfo[] parameters = invoke.GetParameters();
++            return invoke.ReturnType == typeof(bool) &&
++                parameters.Length == 1 &&
++                parameters[0].ParameterType == typeof(string);
++        }
++
++        private static Response<BlobDownloadResult> DownloadResult(string content)
++        {
++            return Response.FromValue(BlobsModelFactory.BlobDownloadResult(BinaryData.FromString(content), details: null), Mock.Of<Response>());
++        }
++
++        private sealed class ScriptedBlobClient : BlobClient
++        {
++            private readonly IEnumerator<bool> _existsResponses;
++            private readonly IEnumerator<Func<Response<BlobDownloadResult>>> _downloadResponses;
++
++            public ScriptedBlobClient(IEnumerable<bool> existsResponses, IEnumerable<Response<BlobDownloadResult>> downloadResponses)
++                : this(existsResponses, ToFactories(downloadResponses))
++            {
++            }
++
++            public ScriptedBlobClient(IEnumerable<bool> existsResponses, IEnumerable<Func<Response<BlobDownloadResult>>> downloadResponses)
++            {
++                _existsResponses = existsResponses.GetEnumerator();
++                _downloadResponses = downloadResponses.GetEnumerator();
++            }
++
++            public int ExistsCalls { get; private set; }
++
++            public int DownloadCalls { get; private set; }
++
++            public override string Name => "diagnostic-blob";
++
++            public override Task<Response<bool>> ExistsAsync(CancellationToken cancellationToken = default)
++            {
++                ExistsCalls++;
++                if (!_existsResponses.MoveNext())
++                {
++                    throw new InvalidOperationException("No scripted ExistsAsync response was available.");
++                }
++
++                return Task.FromResult(Response.FromValue(_existsResponses.Current, Mock.Of<Response>()));
++            }
++
++            public override Task<Response<BlobDownloadResult>> DownloadContentAsync(CancellationToken cancellationToken = default)
++            {
++                DownloadCalls++;
++                if (!_downloadResponses.MoveNext())
++                {
++                    throw new InvalidOperationException("No scripted DownloadContentAsync response was available.");
++                }
++
++                return Task.FromResult(_downloadResponses.Current());
++            }
++
++            private static IEnumerable<Func<Response<BlobDownloadResult>>> ToFactories(IEnumerable<Response<BlobDownloadResult>> responses)
++            {
++                foreach (var response in responses)
++                {
++                    yield return () => response;
++                }
++            }
++        }
++
++        private sealed class DiagnosticBlobClient : BlobClient
++        {
++            public int ExistsCalls { get; private set; }
++
++            public int DownloadCalls { get; private set; }
++
++            public override string Name => "diagnostic-blob";
++
++            public override Task<Response<bool>> ExistsAsync(CancellationToken cancellationToken = default)
++            {
++                ExistsCalls++;
++                return Task.FromResult(Response.FromValue(true, Mock.Of<Response>()));
++            }
++
++            public override Task<Response<BlobDownloadResult>> DownloadContentAsync(CancellationToken cancellationToken = default)
++            {
++                DownloadCalls++;
++                if (DownloadCalls % 2 == 1)
++                {
++                    throw new RequestFailedException(404, "not found");
++                }
++
++                return Task.FromResult(DownloadResult("stale"));
++            }
++        }
++    }
++}

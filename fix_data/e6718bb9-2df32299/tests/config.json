@@ -1,0 +1,56 @@
+{
+  "schema_version": "compact-swebench-harborized-v1",
+  "execution": {
+    "commands": [
+      "/usr/local/go/bin/go test -race -json -run '^(TestSequentialConcurrencyPreservesTargetOrder|TestZeroConcurrencyRunsSequentially|TestNegativeConcurrencyRunsSequentially|TestParallelRunOverlapsAndHonorsWorkerBound|TestConcurrencyIsCappedAtTargetCount|TestParallelAPIOutputKeepsInputOrderAndIsolation|TestParallelRunMergesReportsAndLogsInInputOrder|TestParallelRunMergesScanLabelsAndLogSummary|TestParallelRunMergesFindingsInInputOrder|TestParallelConsoleOutputKeepsTargetLinesIntact|TestSequentialRunPreservesLiveConsoleOutput|TestParallelTargetErrorIsSurfaced|TestParallelBestEffortModuleErrorLogsAndContinues|TestParallelPanicBecomesError|TestParallelRunReportsStartedFailuresInInputOrderAndStopsQueuedTargets|TestOverlappingParallelRunsKeepConsoleSafeUntilBothFinish|TestConcurrencyFlagDefaultsToOne|TestConcurrencyFlagAcceptsExplicitValue|TestProgressZeroTotalNoPanic|TestSetSilentRoutesChromeToStderr)$' . ./internal/config ./internal/output"
+    ],
+    "selected_test_files_to_run": [
+      "sif_concurrency_behavior_test.go",
+      "internal/config/config_concurrency_test.go"
+    ],
+    "env": {
+      "GOPROXY": "off",
+      "GOTOOLCHAIN": "local"
+    },
+    "timeout_sec": 1800
+  },
+  "grading": {
+    "fail_to_pass": [
+      "github.com/vmfunc/sif::TestSequentialConcurrencyPreservesTargetOrder",
+      "github.com/vmfunc/sif::TestZeroConcurrencyRunsSequentially",
+      "github.com/vmfunc/sif::TestNegativeConcurrencyRunsSequentially",
+      "github.com/vmfunc/sif::TestParallelRunOverlapsAndHonorsWorkerBound",
+      "github.com/vmfunc/sif::TestConcurrencyIsCappedAtTargetCount",
+      "github.com/vmfunc/sif::TestParallelAPIOutputKeepsInputOrderAndIsolation",
+      "github.com/vmfunc/sif::TestParallelRunMergesReportsAndLogsInInputOrder",
+      "github.com/vmfunc/sif::TestParallelRunMergesScanLabelsAndLogSummary",
+      "github.com/vmfunc/sif::TestParallelRunMergesFindingsInInputOrder",
+      "github.com/vmfunc/sif::TestParallelConsoleOutputKeepsTargetLinesIntact",
+      "github.com/vmfunc/sif::TestSequentialRunPreservesLiveConsoleOutput",
+      "github.com/vmfunc/sif::TestParallelTargetErrorIsSurfaced",
+      "github.com/vmfunc/sif::TestParallelBestEffortModuleErrorLogsAndContinues",
+      "github.com/vmfunc/sif::TestParallelPanicBecomesError",
+      "github.com/vmfunc/sif::TestParallelRunReportsStartedFailuresInInputOrderAndStopsQueuedTargets",
+      "github.com/vmfunc/sif::TestOverlappingParallelRunsKeepConsoleSafeUntilBothFinish",
+      "github.com/vmfunc/sif/internal/config::TestConcurrencyFlagDefaultsToOne",
+      "github.com/vmfunc/sif/internal/config::TestConcurrencyFlagAcceptsExplicitValue"
+    ],
+    "pass_to_pass": [
+      "github.com/vmfunc/sif/internal/output::TestProgressZeroTotalNoPanic",
+      "github.com/vmfunc/sif/internal/output::TestSetSilentRoutesChromeToStderr"
+    ],
+    "required_pass": [],
+    "allow_extra_failures": false,
+    "parser": {
+      "framework": "go-test",
+      "result_source": "stdout_stderr"
+    }
+  },
+  "artifacts": {
+    "stdout_log": "/logs/verifier/test-stdout.txt",
+    "stderr_log": "/logs/verifier/test-stderr.txt",
+    "parsed_results": "/logs/verifier/output.json",
+    "report": "/logs/verifier/report.json",
+    "reward": "/logs/verifier/reward.txt"
+  }
+}

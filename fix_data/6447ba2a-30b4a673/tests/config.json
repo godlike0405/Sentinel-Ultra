@@ -1,0 +1,59 @@
+{
+  "schema_version": "compact-swebench-harborized-v1",
+  "execution": {
+    "commands": [
+      "dotnet test test/SeqCli.Tests/SeqCli.Tests.csproj -p:NuGetAudit=false --logger \"trx;LogFileName=results.trx\" --results-directory /tmp/testresults -- RunConfiguration.DisableParallelization=true; cat /tmp/testresults/results.trx"
+    ],
+    "selected_test_files_to_run": [
+      "test/SeqCli.Tests/Cli/Commands/IngestCommandTests.cs",
+      "test/SeqCli.Tests/Ingestion/IngestionTestServer.cs"
+    ],
+    "env": {
+      "DOTNET_ROLL_FORWARD": "LatestMajor",
+      "DOTNET_ThreadPool_ForceMinWorkerThreads": "40"
+    },
+    "timeout_sec": 1800
+  },
+  "grading": {
+    "fail_to_pass": [
+      "SeqCli.Tests.Cli.Commands.IngestCommandTests.PlainTextFlushesAPartialBatchDuringALull",
+      "SeqCli.Tests.Cli.Commands.IngestCommandTests.PlainTextShipsInputThatArrivesAfterALull",
+      "SeqCli.Tests.Cli.Commands.IngestCommandTests.PlainTextRepeatedIdlePeriodsDoNotPostEmptyBatches",
+      "SeqCli.Tests.Cli.Commands.IngestCommandTests.ClefFlushesAPartialBatchDuringALull",
+      "SeqCli.Tests.Cli.Commands.IngestCommandTests.ClefShipsInputThatArrivesAfterALull",
+      "SeqCli.Tests.Cli.Commands.IngestCommandTests.ClefRepeatedIdlePeriodsDoNotPostEmptyBatches",
+      "SeqCli.Tests.Cli.Commands.IngestCommandTests.OneHundredEventsAreSentWithoutWaitingForMoreInput",
+      "SeqCli.Tests.Cli.Commands.IngestCommandTests.OneHundredAndOneEventsUseTwoRequestsWithoutWaitingForEndOfInput",
+      "SeqCli.Tests.Cli.Commands.IngestCommandTests.TwoHundredEventsUseTwoFullRequestsWithoutWaitingForEndOfInput",
+      "SeqCli.Tests.Cli.Commands.IngestCommandTests.DefaultExtractionCreatesOneEventPerPhysicalLine",
+      "SeqCli.Tests.Cli.Commands.IngestCommandTests.DefaultExtractionExcludesLineTerminatorsFromMessages",
+      "SeqCli.Tests.Cli.Commands.IngestCommandTests.WhitespaceExtractionOptionUsesTheDefaultLineBehavior",
+      "SeqCli.Tests.Cli.Commands.IngestCommandTests.TrailingIndentExtractionGroupsContinuationLines",
+      "SeqCli.Tests.Cli.Commands.IngestCommandTests.OrphanedIndentedInputFailsAndIdentifiesTheContent",
+      "SeqCli.Tests.Cli.Commands.IngestCommandTests.IgnoredOrphanedInputDoesNotPreventLaterValidInput",
+      "SeqCli.Tests.Cli.Commands.IngestCommandTests.PlainTextEndOfInputFlushesTheFinalEvent"
+    ],
+    "pass_to_pass": [
+      "SeqCli.Tests.Cli.Commands.IngestCommandTests.PlainTextIngestionRemainsActiveDuringALull",
+      "SeqCli.Tests.Cli.Commands.IngestCommandTests.ClefIngestionRemainsActiveDuringALull",
+      "SeqCli.Tests.Cli.Commands.IngestCommandTests.EmptyInputCompletesWithoutPosting",
+      "SeqCli.Tests.Cli.Commands.IngestCommandTests.ClefEndOfInputFlushesTheFinalEvent",
+      "SeqCli.Tests.Cli.Commands.IngestCommandTests.FailedSendReturnsNonZeroAndReportsServerDetails"
+    ],
+    "required_pass": [],
+    "allow_extra_failures": false,
+    "parser": {
+      "framework": "custom",
+      "result_source": "stdout_stderr",
+      "pass_regex": "testName=\"(?P<name>[^\"]+)\"[^>]*?outcome=\"Passed\"",
+      "fail_regex": "testName=\"(?P<name>[^\"]+)\"[^>]*?outcome=\"(?:Failed|Error|Timeout|Aborted)\""
+    }
+  },
+  "artifacts": {
+    "stdout_log": "/logs/verifier/test-stdout.txt",
+    "stderr_log": "/logs/verifier/test-stderr.txt",
+    "parsed_results": "/logs/verifier/output.json",
+    "report": "/logs/verifier/report.json",
+    "reward": "/logs/verifier/reward.txt"
+  }
+}

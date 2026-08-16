@@ -1,0 +1,450 @@
+diff --git a/src/SeqCli/Cli/Commands/IngestCommand.cs b/src/SeqCli/Cli/Commands/IngestCommand.cs
+index 900cec5..9d2e3df 100644
+--- a/src/SeqCli/Cli/Commands/IngestCommand.cs
++++ b/src/SeqCli/Cli/Commands/IngestCommand.cs
+@@ -32,12 +32,14 @@ namespace SeqCli.Cli.Commands
+         Example = "seqcli ingest -i events.clef --json --filter=\"@Level <> 'Debug'\" -p Environment=Test")]
+     class IngestCommand : Command
+     {
++        const string DefaultPattern = "{@m:line}";
++
+         readonly SeqConnectionFactory _connectionFactory;
+         readonly InvalidDataHandlingFeature _invalidDataHandlingFeature;
+         readonly FileInputFeature _fileInputFeature;
+         readonly PropertiesFeature _properties;
+         readonly ConnectionFeature _connection;
+-        string _filter, _pattern;
++        string _filter, _pattern = DefaultPattern;
+         bool _json;
+ 
+         public IngestCommand(SeqConnectionFactory connectionFactory)
+@@ -49,7 +51,7 @@ namespace SeqCli.Cli.Commands
+ 
+             Options.Add("x=|extract=",
+                 "An extraction pattern to apply to plain-text logs (ignored when `--json` is specified)",
+-                v => _pattern = string.IsNullOrWhiteSpace(v) ? null : v.Trim());
++                v => _pattern = string.IsNullOrWhiteSpace(v) ? DefaultPattern : v.Trim());
+ 
+             Options.Add("json",
+                 "Read the events as JSON (the default assumes plain text)",
+@@ -88,15 +90,12 @@ namespace SeqCli.Cli.Commands
+                         (ILogEventReader)new ClefLogEventReader(input) :
+                         new PlainTextLogEventReader(input, _pattern);
+                     
+-                    using (reader as IDisposable)
+-                    {
+-                        return await LogShipper.ShipEvents(
+-                            _connectionFactory.Connect(_connection),
+-                            reader,
+-                            enrichers,
+-                            _invalidDataHandlingFeature.InvalidDataHandling,
+-                            filter);
+-                    }
++                    return await LogShipper.ShipEvents(
++                        _connectionFactory.Connect(_connection),
++                        reader,
++                        enrichers,
++                        _invalidDataHandlingFeature.InvalidDataHandling,
++                        filter);
+                 }
+             }
+             catch (Exception ex)
+diff --git a/src/SeqCli/Ingestion/BatchResult.cs b/src/SeqCli/Ingestion/BatchResult.cs
+new file mode 100644
+index 0000000..5774bf1
+--- /dev/null
++++ b/src/SeqCli/Ingestion/BatchResult.cs
+@@ -0,0 +1,16 @@
++﻿using Serilog.Events;
++
++namespace SeqCli.Ingestion
++{
++    struct BatchResult
++    {
++        public LogEvent[] LogEvents { get; }
++        public bool IsLast { get; }
++
++        public BatchResult(LogEvent[] logEvents, bool isLast)
++        {
++            LogEvents = logEvents;
++            IsLast = isLast;
++        }
++    }
++}
+\ No newline at end of file
+diff --git a/src/SeqCli/Ingestion/ClefLogEventReader.cs b/src/SeqCli/Ingestion/ClefLogEventReader.cs
+index d29c351..8f13956 100644
+--- a/src/SeqCli/Ingestion/ClefLogEventReader.cs
++++ b/src/SeqCli/Ingestion/ClefLogEventReader.cs
+@@ -15,31 +15,38 @@
+ using System;
+ using System.IO;
+ using System.Threading.Tasks;
+-using Serilog.Events;
++using SeqCli.PlainText;
+ using Serilog.Formatting.Compact.Reader;
++using Superpower;
++using Superpower.Parsers;
+ 
+ namespace SeqCli.Ingestion
+ {
+-    class ClefLogEventReader : ILogEventReader, IDisposable
++    class ClefLogEventReader : ILogEventReader
+     {
+-        readonly LogEventReader _reader;
++        static readonly TimeSpan TrailingLineArrivalDeadline = TimeSpan.FromMilliseconds(10);
++
++        readonly FrameReader _reader;
+ 
+         public ClefLogEventReader(TextReader input)
+         {
+-            _reader = new LogEventReader(input ?? throw new ArgumentNullException(nameof(input)));
++            _reader = new FrameReader(
++                input ?? throw new ArgumentNullException(nameof(input)),
++                Span.WithAll(ch => true),
++                TrailingLineArrivalDeadline);
+         }
+ 
+-        public Task<LogEvent> TryReadAsync()
++        public async Task<ReadResult> TryReadAsync()
+         {
+-            if (_reader.TryRead(out var evt))
+-                return Task.FromResult(evt);
++            var frame = await _reader.TryReadAsync();
++            if (!frame.HasValue)
++                return new ReadResult(null, frame.IsAtEnd);
+ 
+-            return Task.FromResult<LogEvent>(null);
+-        }
++            if (frame.IsOrphan)
++                throw new InvalidDataException($"A line arrived late or could not be parsed: `{frame.Value.Trim()}`.");
+ 
+-        public void Dispose()
+-        {
+-            _reader.Dispose();
++            var evt = LogEventReader.ReadFromString(frame.Value);
++            return new ReadResult(evt, frame.IsAtEnd);
+         }
+     }
+ }
+diff --git a/src/SeqCli/Ingestion/ILogEventReader.cs b/src/SeqCli/Ingestion/ILogEventReader.cs
+index a7fd95f..2690d2e 100644
+--- a/src/SeqCli/Ingestion/ILogEventReader.cs
++++ b/src/SeqCli/Ingestion/ILogEventReader.cs
+@@ -5,6 +5,6 @@ namespace SeqCli.Ingestion
+ {
+     interface ILogEventReader
+     {
+-        Task<LogEvent> TryReadAsync();
++        Task<ReadResult> TryReadAsync();
+     }
+ }
+diff --git a/src/SeqCli/Ingestion/LogShipper.cs b/src/SeqCli/Ingestion/LogShipper.cs
+index 969d955..6081985 100644
+--- a/src/SeqCli/Ingestion/LogShipper.cs
++++ b/src/SeqCli/Ingestion/LogShipper.cs
+@@ -31,7 +31,7 @@ namespace SeqCli.Ingestion
+     static class LogShipper
+     {
+         // Keep things simple with a fixed batch size.
+-        const int BatchSize = 500;
++        const int BatchSize = 100;
+ 
+         static readonly CompactJsonFormatter Formatter = new CompactJsonFormatter();
+ 
+@@ -47,67 +47,37 @@ namespace SeqCli.Ingestion
+             if (enrichers == null) throw new ArgumentNullException(nameof(enrichers));
+ 
+             var batch = await ReadBatchAsync(reader, filter, BatchSize, invalidDataHandling);
+-            while (batch.Length > 0)
++            while (true)
+             {
+-                StringContent content;
+-                using (var builder = new StringWriter())
+-                {
+-                    foreach (var evt in batch)
+-                    {
+-                        foreach (var enricher in enrichers)
+-                            enricher.Enrich(evt, null);
+-                        Formatter.Format(evt, builder);
+-                    }
+-
+-                    content = new StringContent(builder.ToString(), Encoding.UTF8, ApiConstants.ClefMediatType);
+-                }
++                if (!await SendBatchAsync(connection, batch.LogEvents, enrichers))
++                    return 1;
+ 
+-                var result = await connection.Client.HttpClient.PostAsync(ApiConstants.IngestionEndpoint, content);
++                if (batch.IsLast)
++                    break;
+ 
+-                if (result.IsSuccessStatusCode)
+-                {
+-                    batch = await ReadBatchAsync(reader, filter, BatchSize, invalidDataHandling);
+-                    continue;
+-                }
+-
+-                var resultJson = await result.Content.ReadAsStringAsync();
+-                if (!string.IsNullOrWhiteSpace(resultJson))
+-                {
+-                    try
+-                    {
+-                        var error = JsonConvert.DeserializeObject<dynamic>(resultJson);
+-
+-                        Log.Error("Failed with status code {StatusCode}: {ErrorMessage}",
+-                            result.StatusCode,
+-                            (string)error.Error);
+-                    }
+-                    catch
+-                    {
+-                        // ignored
+-                    }
+-                }
+-
+-                Log.Error("Failed with status code {StatusCode} ({ReasonPhrase})", result.StatusCode, result.ReasonPhrase);
+-                return 1;
++                batch = await ReadBatchAsync(reader, filter, BatchSize, invalidDataHandling);
+             }
+ 
+             return 0;
+         }
+ 
+-        static async Task<LogEvent[]> ReadBatchAsync(
++        static async Task<BatchResult> ReadBatchAsync(
+             ILogEventReader reader,
+             Func<LogEvent, bool> filter,
+             int count,
+             InvalidDataHandling invalidDataHandling)
+         {
+             var batch = new List<LogEvent>();
++            var isLast = false;
+             do
+             {
+                 try
+                 {
+                     while (batch.Count < count)
+                     {
+-                        var evt = await reader.TryReadAsync();
++                        var rr = await reader.TryReadAsync();
++                        isLast = rr.IsAtEnd;
++                        var evt = rr.LogEvent;
+                         if (evt == null)
+                             break;
+                         
+@@ -128,8 +98,55 @@ namespace SeqCli.Ingestion
+                     throw;
+                 }
+ 
+-                return batch.ToArray();
++                return new BatchResult(batch.ToArray(), isLast);
+             } while (true);
+         }
++
++        static async Task<bool> SendBatchAsync(
++            SeqConnection connection,
++            IReadOnlyCollection<LogEvent> batch,
++            IReadOnlyCollection<ILogEventEnricher> enrichers)
++        {
++            if (batch.Count == 0)
++                return true;
++
++            StringContent content;
++            using (var builder = new StringWriter())
++            {
++                foreach (var evt in batch)
++                {
++                    foreach (var enricher in enrichers)
++                        enricher.Enrich(evt, null);
++                    Formatter.Format(evt, builder);
++                }
++
++                content = new StringContent(builder.ToString(), Encoding.UTF8, ApiConstants.ClefMediatType);
++            }
++
++            var result = await connection.Client.HttpClient.PostAsync(ApiConstants.IngestionEndpoint, content);
++
++            if (result.IsSuccessStatusCode)
++                return true;
++
++            var resultJson = await result.Content.ReadAsStringAsync();
++            if (!string.IsNullOrWhiteSpace(resultJson))
++            {
++                try
++                {
++                    var error = JsonConvert.DeserializeObject<dynamic>(resultJson);
++
++                    Log.Error("Failed with status code {StatusCode}: {ErrorMessage}",
++                        result.StatusCode,
++                        (string)error.Error);
++                }
++                catch
++                {
++                    // ignored
++                }
++            }
++
++            Log.Error("Failed with status code {StatusCode} ({ReasonPhrase})", result.StatusCode, result.ReasonPhrase);
++            return false;
++        }
+     }
+ }
+diff --git a/src/SeqCli/Ingestion/ReadResult.cs b/src/SeqCli/Ingestion/ReadResult.cs
+new file mode 100644
+index 0000000..64b184d
+--- /dev/null
++++ b/src/SeqCli/Ingestion/ReadResult.cs
+@@ -0,0 +1,16 @@
++﻿using Serilog.Events;
++
++namespace SeqCli.Ingestion
++{
++    struct ReadResult
++    {
++        public LogEvent LogEvent { get; }
++        public bool IsAtEnd { get; }
++
++        public ReadResult(LogEvent logEvent, bool isAtEnd)
++        {
++            LogEvent = logEvent;
++            IsAtEnd = isAtEnd;
++        }
++    }
++}
+\ No newline at end of file
+diff --git a/src/SeqCli/PlainText/Extraction/Matchers.cs b/src/SeqCli/PlainText/Extraction/Matchers.cs
+index 1eb482a..8692046 100644
+--- a/src/SeqCli/PlainText/Extraction/Matchers.cs
++++ b/src/SeqCli/PlainText/Extraction/Matchers.cs
+@@ -61,7 +61,7 @@ namespace SeqCli.PlainText.Extraction
+         public static TextParser<object> Timestamp { get; } =
+             Iso8601DateTime.Try().Or(SerilogFileTimestamp);
+ 
+-        // Unclear whether we need to name this
++        [Matcher("trailingindent")]
+         public static TextParser<object> MultiLineMessage { get; } =
+             SpanEx.MatchedBy(
+                     Character.Matching(ch => !char.IsWhiteSpace(ch), "non whitespace character")
+diff --git a/src/SeqCli/PlainText/Framing/Frame.cs b/src/SeqCli/PlainText/Framing/Frame.cs
+index 8458dbc..fa16c95 100644
+--- a/src/SeqCli/PlainText/Framing/Frame.cs
++++ b/src/SeqCli/PlainText/Framing/Frame.cs
+@@ -19,5 +19,6 @@ namespace SeqCli.PlainText
+         public bool HasValue { get; set; }
+         public bool IsOrphan { get; set; }
+         public string Value { get; set; }
++        public bool IsAtEnd { get; set; }
+     }
+ }
+diff --git a/src/SeqCli/PlainText/Framing/FrameReader.cs b/src/SeqCli/PlainText/Framing/FrameReader.cs
+index 143025c..fecacdd 100644
+--- a/src/SeqCli/PlainText/Framing/FrameReader.cs
++++ b/src/SeqCli/PlainText/Framing/FrameReader.cs
+@@ -21,7 +21,7 @@ using Superpower.Model;
+ 
+ namespace SeqCli.PlainText
+ {
+-    class FrameReader : IDisposable
++    class FrameReader
+     {
+         readonly TextReader _source;
+         readonly TimeSpan _trailingLineArrivalDeadline;
+@@ -50,10 +50,14 @@ namespace SeqCli.PlainText
+             }
+             else if (_unawaitedNextLine != null)
+             {
++                var index = Task.WaitAny(new Task[] {_unawaitedNextLine}, _trailingLineArrivalDeadline);
++                if (index == -1)
++                    return new Frame();
++
+                 var line = await _unawaitedNextLine;
+                 _unawaitedNextLine = null;
+                 if (line == null)
+-                    return new Frame();
++                    return new Frame {IsAtEnd = true};
+ 
+                 valueBuilder.AppendLine(line);
+                 hasValue = true;
+@@ -67,7 +71,7 @@ namespace SeqCli.PlainText
+             {
+                 readLine = readLine ?? Task.Run(_source.ReadLineAsync);                
+                 var index = Task.WaitAny(new Task[] {readLine}, _trailingLineArrivalDeadline);
+-                if (index == -1) // Timeout
++                if (index == -1)
+                 {
+                     if (hasValue)
+                     {
+@@ -85,10 +89,10 @@ namespace SeqCli.PlainText
+                     {
+                         if (hasValue)
+                         {
+-                            return new Frame {HasValue = true, Value = valueBuilder.ToString()};
++                            return new Frame {HasValue = true, Value = valueBuilder.ToString(), IsAtEnd = true};
+                         }
+ 
+-                        return new Frame();
++                        return new Frame {IsAtEnd = true};
+                     }
+ 
+                     if (IsFrameStart(line))
+@@ -122,10 +126,5 @@ namespace SeqCli.PlainText
+                 return result.HasValue && result.Value.Length > 0;
+             }
+         }
+-
+-        public void Dispose()
+-        {
+-            _unawaitedNextLine?.Dispose();
+-        }
+     }
+ }
+diff --git a/src/SeqCli/PlainText/PlainTextLogEventReader.cs b/src/SeqCli/PlainText/PlainTextLogEventReader.cs
+index af1cac3..ca083d6 100644
+--- a/src/SeqCli/PlainText/PlainTextLogEventReader.cs
++++ b/src/SeqCli/PlainText/PlainTextLogEventReader.cs
+@@ -9,7 +9,7 @@ using Serilog.Events;
+ 
+ namespace SeqCli.PlainText
+ {
+-    class PlainTextLogEventReader : ILogEventReader, IDisposable
++    class PlainTextLogEventReader : ILogEventReader
+     {
+         static readonly TimeSpan TrailingLineArrivalDeadline = TimeSpan.FromMilliseconds(10);
+ 
+@@ -18,29 +18,24 @@ namespace SeqCli.PlainText
+ 
+         public PlainTextLogEventReader(TextReader input, string extractionPattern)
+         {
+-            _nameValueExtractor = string.IsNullOrEmpty(extractionPattern) ?
+-                ExtractionPatternInterpreter.MultilineMessageExtractor :
+-                ExtractionPatternInterpreter.CreateNameValueExtractor(ExtractionPatternParser.Parse(extractionPattern));
++            if (extractionPattern == null) throw new ArgumentNullException(nameof(extractionPattern));
++            _nameValueExtractor = ExtractionPatternInterpreter.CreateNameValueExtractor(ExtractionPatternParser.Parse(extractionPattern));
+             
+             _reader = new FrameReader(input, SpanEx.MatchedBy(_nameValueExtractor.StartMarker), TrailingLineArrivalDeadline);
+         }
+ 
+-        public async Task<LogEvent> TryReadAsync()
++        public async Task<ReadResult> TryReadAsync()
+         {
+             var frame = await _reader.TryReadAsync();
+             if (!frame.HasValue)
+-                return null;
++                return new ReadResult(null, frame.IsAtEnd);
+ 
+             if (frame.IsOrphan)
+                 throw new InvalidDataException($"A line arrived late or could not be parsed: `{frame.Value.Trim()}`.");
+ 
+             var (properties, remainder) = _nameValueExtractor.ExtractValues(frame.Value);
+-            return LogEventBuilder.FromProperties(properties, remainder);
+-        }
+-
+-        public void Dispose()
+-        {
+-            _reader.Dispose();
++            var evt = LogEventBuilder.FromProperties(properties, remainder);
++            return new ReadResult(evt, frame.IsAtEnd);
+         }
+     }
+-}
+\ No newline at end of file
++}

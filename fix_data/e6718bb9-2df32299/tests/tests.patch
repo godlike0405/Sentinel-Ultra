@@ -1,0 +1,871 @@
+diff --git a/internal/config/config_concurrency_test.go b/internal/config/config_concurrency_test.go
+new file mode 100644
+index 0000000..d98288a
+--- /dev/null
++++ b/internal/config/config_concurrency_test.go
+@@ -0,0 +1,32 @@
++package config
++
++import (
++	"testing"
++
++	"github.com/projectdiscovery/goflags"
++)
++
++func parseConcurrencyFlag(t *testing.T, args ...string) int {
++	t.Helper()
++	goflags.DisableAutoConfigMigration = true
++	settings := &Settings{}
++	flags := registerFlags(settings)
++	if err := flags.Parse(args...); err != nil {
++		t.Fatalf("parse flags: %v", err)
++	}
++	return settings.Concurrency
++}
++
++func TestConcurrencyFlagDefaultsToOne(t *testing.T) {
++	settings := &Settings{}
++	registerFlags(settings)
++	if got := settings.Concurrency; got != 1 {
++		t.Fatalf("default concurrency = %d, want 1", got)
++	}
++}
++
++func TestConcurrencyFlagAcceptsExplicitValue(t *testing.T) {
++	if got := parseConcurrencyFlag(t, "-concurrency", "7"); got != 7 {
++		t.Fatalf("explicit concurrency = %d, want 7", got)
++	}
++}
+diff --git a/sif_concurrency_behavior_test.go b/sif_concurrency_behavior_test.go
+new file mode 100644
+index 0000000..aba21b2
+--- /dev/null
++++ b/sif_concurrency_behavior_test.go
+@@ -0,0 +1,827 @@
++package sif
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"path/filepath"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/vmfunc/sif/internal/config"
++	"github.com/vmfunc/sif/internal/modules"
++	"github.com/vmfunc/sif/internal/output"
++)
++
++func prepareConcurrentRunTest(t *testing.T) {
++	t.Helper()
++	output.SetAPIMode(false)
++	output.SetSilent(false)
++	t.Cleanup(func() {
++		output.SetAPIMode(false)
++		output.SetSilent(false)
++	})
++}
++
++func headersApp(targets []string, concurrency int) *App {
++	return &App{
++		targets: targets,
++		settings: &config.Settings{
++			Concurrency: concurrency,
++			Headers:     true,
++			NoScan:      true,
++			Dirlist:     "none",
++			Dnslist:     "none",
++			Ports:       "none",
++			Threads:     1,
++			Timeout:     2 * time.Second,
++		},
++	}
++}
++
++func idleApp(targets []string, concurrency int) *App {
++	app := headersApp(targets, concurrency)
++	app.settings.Headers = false
++	return app
++}
++
++func updateMaximum(maximum *atomic.Int32, value int32) {
++	for {
++		old := maximum.Load()
++		if value <= old || maximum.CompareAndSwap(old, value) {
++			return
++		}
++	}
++}
++
++func waitSignal(t *testing.T, ch <-chan struct{}, description string) bool {
++	t.Helper()
++	select {
++	case <-ch:
++		return true
++	case <-time.After(2 * time.Second):
++		t.Errorf("timed out waiting for %s", description)
++		return false
++	}
++}
++
++func captureRunOutput(t *testing.T, run func() error) (string, error) {
++	t.Helper()
++	reader, writer, err := os.Pipe()
++	if err != nil {
++		t.Fatalf("pipe: %v", err)
++	}
++	oldStdout := os.Stdout
++	os.Stdout = writer
++	output.SetSilent(false)
++
++	type readResult struct {
++		data []byte
++		err  error
++	}
++	readDone := make(chan readResult, 1)
++	go func() {
++		data, readErr := io.ReadAll(reader)
++		readDone <- readResult{data: data, err: readErr}
++	}()
++
++	runErr := run()
++	_ = writer.Close()
++	os.Stdout = oldStdout
++	output.SetSilent(false)
++	result := <-readDone
++	_ = reader.Close()
++	if result.err != nil {
++		t.Fatalf("read stdout: %v", result.err)
++	}
++	return string(result.data), runErr
++}
++
++func TestSequentialConcurrencyPreservesTargetOrder(t *testing.T) {
++	prepareConcurrentRunTest(t)
++	var mu sync.Mutex
++	var visits []string
++
++	server := func(id string) *httptest.Server {
++		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++			mu.Lock()
++			visits = append(visits, id)
++			mu.Unlock()
++			w.WriteHeader(http.StatusOK)
++		}))
++	}
++	first, second := server("first"), server("second")
++	defer first.Close()
++	defer second.Close()
++
++	app := headersApp([]string{first.URL, second.URL}, 1)
++	if err := app.Run(); err != nil {
++		t.Fatalf("Run: %v", err)
++	}
++	mu.Lock()
++	got := append([]string(nil), visits...)
++	mu.Unlock()
++	if strings.Join(got, ",") != "first,second" {
++		t.Fatalf("visit order = %v, want [first second]", got)
++	}
++	if len(app.logFiles) != 0 {
++		t.Fatalf("log files = %v without a log directory", app.logFiles)
++	}
++}
++
++func assertNonPositiveConcurrencyIsSequential(t *testing.T, concurrency int) {
++	t.Helper()
++	prepareConcurrentRunTest(t)
++	var active, maximum atomic.Int32
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++		current := active.Add(1)
++		updateMaximum(&maximum, current)
++		time.Sleep(15 * time.Millisecond)
++		active.Add(-1)
++		w.WriteHeader(http.StatusOK)
++	}))
++	defer server.Close()
++
++	app := headersApp([]string{server.URL, server.URL, server.URL}, concurrency)
++	if err := app.Run(); err != nil {
++		t.Fatalf("Run: %v", err)
++	}
++	if got := maximum.Load(); got != 1 {
++		t.Fatalf("maximum active scans = %d, want sequential execution", got)
++	}
++}
++
++func TestZeroConcurrencyRunsSequentially(t *testing.T) {
++	assertNonPositiveConcurrencyIsSequential(t, 0)
++}
++
++func TestNegativeConcurrencyRunsSequentially(t *testing.T) {
++	assertNonPositiveConcurrencyIsSequential(t, -8)
++}
++
++func TestParallelRunOverlapsAndHonorsWorkerBound(t *testing.T) {
++	prepareConcurrentRunTest(t)
++	const targetCount = 6
++	entered := make(chan struct{}, targetCount)
++	release := make(chan struct{})
++	var active, maximum atomic.Int32
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++		current := active.Add(1)
++		updateMaximum(&maximum, current)
++		entered <- struct{}{}
++		<-release
++		active.Add(-1)
++		w.WriteHeader(http.StatusOK)
++	}))
++	defer server.Close()
++
++	app := headersApp([]string{server.URL, server.URL, server.URL, server.URL, server.URL, server.URL}, 2)
++	done := make(chan error, 1)
++	go func() { done <- app.Run() }()
++
++	first := waitSignal(t, entered, "first worker")
++	second := waitSignal(t, entered, "second worker")
++	thirdStarted := false
++	if first && second {
++		select {
++		case <-entered:
++			thirdStarted = true
++		case <-time.After(75 * time.Millisecond):
++		}
++	}
++	close(release)
++	if err := <-done; err != nil {
++		t.Fatalf("Run: %v", err)
++	}
++	if !first || !second {
++		t.Fatal("two targets did not overlap")
++	}
++	if thirdStarted || maximum.Load() > 2 {
++		t.Fatalf("worker bound exceeded: thirdStarted=%v maximum=%d", thirdStarted, maximum.Load())
++	}
++}
++
++func TestConcurrencyIsCappedAtTargetCount(t *testing.T) {
++	prepareConcurrentRunTest(t)
++	entered := make(chan struct{}, 2)
++	release := make(chan struct{})
++	var active, maximum atomic.Int32
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++		current := active.Add(1)
++		updateMaximum(&maximum, current)
++		entered <- struct{}{}
++		<-release
++		active.Add(-1)
++		w.WriteHeader(http.StatusOK)
++	}))
++	defer server.Close()
++
++	app := headersApp([]string{server.URL, server.URL}, 100)
++	done := make(chan error, 1)
++	go func() { done <- app.Run() }()
++	first := waitSignal(t, entered, "first target")
++	second := waitSignal(t, entered, "second target")
++	close(release)
++	if err := <-done; err != nil {
++		t.Fatalf("Run: %v", err)
++	}
++	if !first || !second || maximum.Load() != 2 {
++		t.Fatalf("maximum active scans = %d, want exactly two targets active", maximum.Load())
++	}
++}
++
++func TestParallelAPIOutputKeepsInputOrderAndIsolation(t *testing.T) {
++	prepareConcurrentRunTest(t)
++	slowEntered := make(chan struct{})
++	slowRelease := make(chan struct{})
++	fastServed := make(chan struct{})
++
++	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++		close(slowEntered)
++		<-slowRelease
++		w.Header().Set("X-Target", "slow")
++		w.WriteHeader(http.StatusOK)
++	}))
++	defer slow.Close()
++	fast := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++		w.Header().Set("X-Target", "fast")
++		w.WriteHeader(http.StatusOK)
++		close(fastServed)
++	}))
++	defer fast.Close()
++
++	settings := &config.Settings{
++		URLs:        []string{slow.URL, fast.URL},
++		ApiMode:     true,
++		Concurrency: 2,
++		Headers:     true,
++		NoScan:      true,
++		Dirlist:     "none",
++		Dnslist:     "none",
++		Ports:       "none",
++		Threads:     1,
++		Timeout:     2 * time.Second,
++	}
++	app, err := New(settings)
++	if err != nil {
++		t.Fatalf("New: %v", err)
++	}
++
++	reader, writer, err := os.Pipe()
++	if err != nil {
++		t.Fatalf("pipe: %v", err)
++	}
++	oldStdout := os.Stdout
++	os.Stdout = writer
++	done := make(chan error, 1)
++	go func() { done <- app.Run() }()
++
++	waitSignal(t, slowEntered, "slow target")
++	waitSignal(t, fastServed, "fast target")
++	time.Sleep(50 * time.Millisecond)
++	close(slowRelease)
++	runErr := <-done
++	_ = writer.Close()
++	os.Stdout = oldStdout
++	data, readErr := io.ReadAll(reader)
++	_ = reader.Close()
++	if runErr != nil {
++		t.Fatalf("Run: %v", runErr)
++	}
++	if readErr != nil {
++		t.Fatalf("read stdout: %v", readErr)
++	}
++
++	lines := strings.FieldsFunc(strings.TrimSpace(string(data)), func(r rune) bool { return r == '\n' })
++	if len(lines) != 2 {
++		t.Fatalf("API lines = %d, want 2; output=%q", len(lines), data)
++	}
++	wantURLs := []string{slow.URL, fast.URL}
++	for i, line := range lines {
++		var result UrlResult
++		if err := json.Unmarshal([]byte(line), &result); err != nil {
++			t.Fatalf("line %d is not JSON: %v; line=%q", i, err, line)
++		}
++		if result.Url != wantURLs[i] {
++			t.Fatalf("line %d target = %q, want %q", i, result.Url, wantURLs[i])
++		}
++		if len(result.Results) != 1 || result.Results[0].Id != "headers" {
++			t.Fatalf("line %d results = %+v, want one isolated headers result", i, result.Results)
++		}
++	}
++}
++
++func TestParallelRunMergesReportsAndLogsInInputOrder(t *testing.T) {
++	prepareConcurrentRunTest(t)
++	delays := []time.Duration{60 * time.Millisecond, 30 * time.Millisecond, 0}
++	servers := make([]*httptest.Server, len(delays))
++	targets := make([]string, len(delays))
++	for i, delay := range delays {
++		delay := delay
++		servers[i] = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++			time.Sleep(delay)
++			w.WriteHeader(http.StatusOK)
++		}))
++		targets[i] = servers[i].URL
++		defer servers[i].Close()
++	}
++
++	dir := t.TempDir()
++	app := headersApp(targets, 3)
++	app.settings.LogDir = dir
++	app.settings.Markdown = filepath.Join(dir, "report.md")
++	if err := app.Run(); err != nil {
++		t.Fatalf("Run: %v", err)
++	}
++
++	reportData, err := os.ReadFile(app.settings.Markdown)
++	if err != nil {
++		t.Fatalf("read report: %v", err)
++	}
++	reportText := string(reportData)
++	last := -1
++	for _, target := range targets {
++		header := "## " + target + "\n"
++		if count := strings.Count(reportText, header); count != 1 {
++			t.Fatalf("report section count for %q = %d, want 1\n%s", target, count, reportText)
++		}
++		index := strings.Index(reportText, header)
++		if index <= last {
++			t.Fatalf("report targets are not in input order; target=%q index=%d last=%d\n%s", target, index, last, reportText)
++		}
++		last = index
++	}
++	if count := strings.Count(reportText, "### headers\n"); count != len(targets) {
++		t.Fatalf("headers report section count = %d, want %d\n%s", count, len(targets), reportText)
++	}
++	if len(app.logFiles) != len(targets) {
++		t.Fatalf("log files = %v, want one per target", app.logFiles)
++	}
++	seenPaths := make(map[string]bool, len(app.logFiles))
++	for i, target := range targets {
++		path := app.logFiles[i]
++		if seenPaths[path] {
++			t.Fatalf("log file %q was merged more than once", path)
++		}
++		seenPaths[path] = true
++		logData, err := os.ReadFile(path)
++		if err != nil {
++			t.Fatalf("read log file %d: %v", i, err)
++		}
++		marker := "sif log file for " + target
++		if count := strings.Count(string(logData), marker); count != 1 {
++			t.Fatalf("log file %d marker count for %q = %d, want 1", i, target, count)
++		}
++	}
++}
++
++func TestParallelRunMergesScanLabelsAndLogSummary(t *testing.T) {
++	prepareConcurrentRunTest(t)
++	servers := make([]*httptest.Server, 3)
++	targets := make([]string, len(servers))
++	for i := range servers {
++		delay := time.Duration(len(servers)-i-1) * 20 * time.Millisecond
++		servers[i] = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++			time.Sleep(delay)
++			w.WriteHeader(http.StatusOK)
++		}))
++		targets[i] = servers[i].URL
++		defer servers[i].Close()
++	}
++
++	reader, writer, err := os.Pipe()
++	if err != nil {
++		t.Fatalf("pipe: %v", err)
++	}
++	oldStderr := os.Stderr
++	os.Stderr = writer
++	output.SetSilent(true)
++	app := headersApp(targets, len(targets))
++	app.settings.LogDir = t.TempDir()
++	runErr := app.Run()
++	_ = writer.Close()
++	os.Stderr = oldStderr
++	data, readErr := io.ReadAll(reader)
++	_ = reader.Close()
++	if runErr != nil {
++		t.Fatalf("Run: %v", runErr)
++	}
++	if readErr != nil {
++		t.Fatalf("read stderr: %v", readErr)
++	}
++
++	var scansLine, outputLine string
++	for _, line := range strings.Split(string(data), "\n") {
++		switch {
++		case strings.Contains(line, "Scans:"):
++			scansLine = line
++		case strings.Contains(line, "Output:"):
++			outputLine = line
++		}
++	}
++	if count := strings.Count(scansLine, "HTTP Headers"); count != len(targets) {
++		t.Fatalf("scan-label count = %d, want %d; summary=%q", count, len(targets), scansLine)
++	}
++	last := -1
++	for _, path := range app.logFiles {
++		if count := strings.Count(outputLine, path); count != 1 {
++			t.Fatalf("log path %q occurs %d times in summary, want 1; summary=%q", path, count, outputLine)
++		}
++		index := strings.Index(outputLine, path)
++		if index <= last {
++			t.Fatalf("log summary is not in target order: %q", outputLine)
++		}
++		last = index
++	}
++}
++
++func TestParallelRunMergesFindingsInInputOrder(t *testing.T) {
++	prepareConcurrentRunTest(t)
++	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++		time.Sleep(40 * time.Millisecond)
++		w.Header().Set("X-Merge-Probe", "first")
++		w.WriteHeader(http.StatusOK)
++	}))
++	defer first.Close()
++	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++		w.Header().Set("X-Merge-Probe", "second")
++		w.WriteHeader(http.StatusOK)
++	}))
++	defer second.Close()
++
++	reader, writer, err := os.Pipe()
++	if err != nil {
++		t.Fatalf("pipe: %v", err)
++	}
++	oldStdout := os.Stdout
++	os.Stdout = writer
++	output.SetSilent(true)
++	app := headersApp([]string{first.URL, second.URL}, 2)
++	app.settings.Silent = true
++	runErr := app.Run()
++	_ = writer.Close()
++	os.Stdout = oldStdout
++	data, readErr := io.ReadAll(reader)
++	_ = reader.Close()
++	if runErr != nil {
++		t.Fatalf("Run: %v", runErr)
++	}
++	if readErr != nil {
++		t.Fatalf("read stdout: %v", readErr)
++	}
++
++	var findingTargets []string
++	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
++		if !strings.Contains(line, " headers X-Merge-Probe") {
++			continue
++		}
++		switch {
++		case strings.Contains(line, first.URL):
++			findingTargets = append(findingTargets, first.URL)
++		case strings.Contains(line, second.URL):
++			findingTargets = append(findingTargets, second.URL)
++		}
++	}
++	want := []string{first.URL, second.URL}
++	if strings.Join(findingTargets, "\n") != strings.Join(want, "\n") {
++		t.Fatalf("probe findings = %v, want each target exactly once in input order; output=%q", findingTargets, data)
++	}
++}
++
++type behaviorModule struct {
++	id      string
++	execute func(string) (*modules.Result, error)
++}
++
++func (m behaviorModule) Info() modules.Info {
++	return modules.Info{ID: m.id, Name: m.id}
++}
++
++func (m behaviorModule) Type() modules.ModuleType { return modules.TypeHTTP }
++
++func (m behaviorModule) Execute(_ context.Context, target string, _ modules.Options) (*modules.Result, error) {
++	return m.execute(target)
++}
++
++func installBehaviorModule(t *testing.T, module behaviorModule) {
++	t.Helper()
++	modules.Clear()
++	modules.Register(module)
++	t.Cleanup(modules.Clear)
++}
++
++func TestParallelConsoleOutputKeepsTargetLinesIntact(t *testing.T) {
++	prepareConcurrentRunTest(t)
++	targets := []string{"http://one", "http://two", "http://three", "http://four"}
++	release := make(chan struct{})
++	var entered atomic.Int32
++	expected := make(map[string]string, len(targets))
++	for _, target := range targets {
++		label := strings.TrimPrefix(target, "http://")
++		expected[target] = "console-probe|" + target + "|" + strings.Repeat(label+"-", 2048) + "|console-probe-end"
++	}
++	installBehaviorModule(t, behaviorModule{
++		id: "console-integrity",
++		execute: func(target string) (*modules.Result, error) {
++			if entered.Add(1) == int32(len(targets)) {
++				close(release)
++			}
++			select {
++			case <-release:
++			case <-time.After(2 * time.Second):
++				return nil, context.DeadlineExceeded
++			}
++			output.Info("%s", expected[target])
++			return &modules.Result{ModuleID: "console-integrity", Target: target}, nil
++		},
++	})
++
++	app := idleApp(targets, len(targets))
++	app.settings.Modules = "console-integrity"
++	got, runErr := captureRunOutput(t, app.Run)
++	if runErr != nil {
++		t.Fatalf("Run: %v", runErr)
++	}
++	var probeLines []string
++	for _, line := range strings.Split(got, "\n") {
++		if strings.Contains(line, "console-probe|") {
++			probeLines = append(probeLines, line)
++		}
++	}
++	if len(probeLines) != len(targets) {
++		t.Fatalf("probe lines = %d, want %d complete target lines", len(probeLines), len(targets))
++	}
++	for _, target := range targets {
++		want := expected[target]
++		if count := strings.Count(got, want); count != 1 {
++			t.Fatalf("complete output record for %q occurs %d times, want 1", target, count)
++		}
++	}
++	for _, line := range probeLines {
++		if strings.Count(line, "console-probe|") != 1 || strings.Count(line, "|console-probe-end") != 1 {
++			t.Fatalf("target output records were combined or corrupted: %q", line)
++		}
++	}
++}
++
++func TestSequentialRunPreservesLiveConsoleOutput(t *testing.T) {
++	prepareConcurrentRunTest(t)
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++		w.Header().Set("X-Live-Probe", "present")
++		w.WriteHeader(http.StatusOK)
++	}))
++	defer server.Close()
++
++	app := headersApp([]string{server.URL}, 1)
++	got, runErr := captureRunOutput(t, app.Run)
++	if runErr != nil {
++		t.Fatalf("Run: %v", runErr)
++	}
++	for _, want := range []string{"Starting scan on", "HEADERS", "X-Live-Probe", "SCAN COMPLETE"} {
++		if !strings.Contains(got, want) {
++			t.Fatalf("sequential live output missing %q: %q", want, got)
++		}
++	}
++}
++
++func TestParallelTargetErrorIsSurfaced(t *testing.T) {
++	prepareConcurrentRunTest(t)
++	installBehaviorModule(t, behaviorModule{
++		id: "concurrency-error",
++		execute: func(target string) (*modules.Result, error) {
++			return &modules.Result{ModuleID: "concurrency-error", Target: target}, nil
++		},
++	})
++
++	targets := []string{"http://bad/nested", "http://safe"}
++	dir := t.TempDir()
++	app := idleApp(targets, 2)
++	app.settings.LogDir = dir
++	app.settings.Modules = "concurrency-error"
++	err := app.Run()
++	if err == nil {
++		t.Fatal("Run returned nil after a target log-file error")
++	}
++}
++
++func TestParallelBestEffortModuleErrorLogsAndContinues(t *testing.T) {
++	prepareConcurrentRunTest(t)
++	targets := []string{"http://first", "http://stage-fails", "http://last"}
++	processed := make(map[string]int, len(targets))
++	var processedMu sync.Mutex
++	installBehaviorModule(t, behaviorModule{
++		id: "best-effort-stage",
++		execute: func(target string) (*modules.Result, error) {
++			processedMu.Lock()
++			processed[target]++
++			processedMu.Unlock()
++			if strings.Contains(target, "fails") {
++				return nil, errors.New("expected stage failure")
++			}
++			return &modules.Result{ModuleID: "best-effort-stage", Target: target}, nil
++		},
++	})
++
++	app := idleApp(targets, len(targets))
++	app.settings.Modules = "best-effort-stage"
++	got, runErr := captureRunOutput(t, app.Run)
++	if runErr != nil {
++		t.Fatalf("best-effort module error aborted Run: %v", runErr)
++	}
++	processedMu.Lock()
++	defer processedMu.Unlock()
++	for _, target := range targets {
++		if processed[target] != 1 {
++			t.Fatalf("target %q processed %d times, want 1", target, processed[target])
++		}
++	}
++	if !strings.Contains(got, "best-effort-stage") || !strings.Contains(got, "expected stage failure") {
++		t.Fatalf("best-effort module failure was not logged: %q", got)
++	}
++}
++
++func TestParallelPanicBecomesError(t *testing.T) {
++	prepareConcurrentRunTest(t)
++	installBehaviorModule(t, behaviorModule{
++		id: "concurrency-panicker",
++		execute: func(target string) (*modules.Result, error) {
++			if strings.Contains(target, "panic") {
++				panic("module exploded")
++			}
++			return &modules.Result{ModuleID: "concurrency-panicker", Target: target}, nil
++		},
++	})
++
++	app := idleApp([]string{"http://panic", "http://safe"}, 2)
++	app.settings.Modules = "concurrency-panicker"
++	err := app.Run()
++	if err == nil {
++		t.Fatal("Run returned nil after a target panic")
++	}
++}
++
++func TestParallelRunReportsStartedFailuresInInputOrderAndStopsQueuedTargets(t *testing.T) {
++	prepareConcurrentRunTest(t)
++	targets := []string{"http://first-failure", "http://second-failure", "http://queued-third", "http://queued-fourth"}
++	bothStarted := make(chan struct{})
++	secondFailed := make(chan struct{})
++	var started atomic.Int32
++	var visitsMu sync.Mutex
++	visits := make(map[string]int, len(targets))
++
++	installBehaviorModule(t, behaviorModule{
++		id: "ordered-failures",
++		execute: func(target string) (*modules.Result, error) {
++			visitsMu.Lock()
++			visits[target]++
++			visitsMu.Unlock()
++			if started.Add(1) == 2 {
++				close(bothStarted)
++			}
++			select {
++			case <-bothStarted:
++			case <-time.After(2 * time.Second):
++				return nil, errors.New("workers did not overlap")
++			}
++
++			switch target {
++			case targets[0]:
++				<-secondFailed
++				time.Sleep(20 * time.Millisecond)
++				panic("first underlying failure")
++			case targets[1]:
++				close(secondFailed)
++				panic("second underlying failure")
++			default:
++				return &modules.Result{ModuleID: "ordered-failures", Target: target}, nil
++			}
++		},
++	})
++
++	app := idleApp(targets, 2)
++	app.settings.Modules = "ordered-failures"
++	err := app.Run()
++	if err == nil {
++		t.Fatal("Run returned nil after two started targets failed")
++	}
++	message := err.Error()
++	firstTarget := strings.Index(message, targets[0])
++	firstCause := strings.Index(message, "first underlying failure")
++	secondTarget := strings.Index(message, targets[1])
++	secondCause := strings.Index(message, "second underlying failure")
++	if firstTarget < 0 || firstCause < 0 || secondTarget < 0 || secondCause < 0 {
++		t.Fatalf("run-level error does not identify both targets and causes: %q", message)
++	}
++	if !(firstTarget < firstCause && firstCause < secondTarget && secondTarget < secondCause) {
++		t.Fatalf("failures are not reported in target input order: %q", message)
++	}
++	for _, marker := range []string{targets[0], "first underlying failure", targets[1], "second underlying failure"} {
++		if count := strings.Count(message, marker); count != 1 {
++			t.Fatalf("error marker %q occurs %d times, want exactly once: %q", marker, count, message)
++		}
++	}
++
++	visitsMu.Lock()
++	defer visitsMu.Unlock()
++	if visits[targets[0]] != 1 || visits[targets[1]] != 1 {
++		t.Fatalf("started-target visits = %v, want first two exactly once", visits)
++	}
++	if visits[targets[2]] != 0 || visits[targets[3]] != 0 {
++		t.Fatalf("queued targets began after a fatal failure: %v", visits)
++	}
++}
++
++func TestOverlappingParallelRunsKeepConsoleSafeUntilBothFinish(t *testing.T) {
++	prepareConcurrentRunTest(t)
++	savedTTY := output.IsTTY
++	output.IsTTY = true
++	t.Cleanup(func() { output.IsTTY = savedTTY })
++
++	longEntered := make(chan struct{}, 2)
++	releaseLong := make(chan struct{})
++	installBehaviorModule(t, behaviorModule{
++		id: "overlap-console",
++		execute: func(target string) (*modules.Result, error) {
++			if strings.Contains(target, "long-") {
++				longEntered <- struct{}{}
++				<-releaseLong
++			}
++			if target == "http://short-failure" {
++				panic("overlapping run failed")
++			}
++			if strings.Contains(target, "progress") {
++				output.Info("OVERLAP-PROGRESS-BEGIN")
++				progress := output.NewProgress(2, "overlap progress")
++				progress.Increment("first")
++				progress.Done()
++				output.Info("OVERLAP-PROGRESS-END")
++			}
++			return &modules.Result{ModuleID: "overlap-console", Target: target}, nil
++		},
++	})
++
++	got, runErr := captureRunOutput(t, func() error {
++		longRun := idleApp([]string{"http://long-progress", "http://long-helper"}, 2)
++		longRun.settings.Modules = "overlap-console"
++		longDone := make(chan error, 1)
++		go func() { longDone <- longRun.Run() }()
++		if !waitSignal(t, longEntered, "first long-running target") || !waitSignal(t, longEntered, "second long-running target") {
++			close(releaseLong)
++			return <-longDone
++		}
++
++		shortRun := idleApp([]string{"http://short-one", "http://short-two"}, 2)
++		shortRun.settings.Modules = "overlap-console"
++		if err := shortRun.Run(); err != nil {
++			close(releaseLong)
++			<-longDone
++			return err
++		}
++
++		failingRun := idleApp([]string{"http://short-failure", "http://short-failure-helper"}, 2)
++		failingRun.settings.Modules = "overlap-console"
++		if err := failingRun.Run(); err == nil {
++			close(releaseLong)
++			<-longDone
++			return errors.New("overlapping failing run returned nil")
++		}
++		close(releaseLong)
++		if err := <-longDone; err != nil {
++			return err
++		}
++
++		sequential := idleApp([]string{"http://sequential-progress"}, 1)
++		sequential.settings.Modules = "overlap-console"
++		return sequential.Run()
++	})
++	if runErr != nil {
++		t.Fatalf("Run: %v", runErr)
++	}
++
++	overlapStart := strings.Index(got, "OVERLAP-PROGRESS-BEGIN")
++	overlapEnd := strings.Index(got, "OVERLAP-PROGRESS-END")
++	if overlapStart < 0 || overlapEnd <= overlapStart {
++		t.Fatalf("missing overlap progress markers: %q", got)
++	}
++	overlapOutput := got[overlapStart:overlapEnd]
++	if strings.Contains(overlapOutput, "\033[2K") || strings.Contains(overlapOutput, "\r") {
++		t.Fatalf("one completed run re-enabled shared cursor updates during another parallel run: %q", overlapOutput)
++	}
++
++	sequentialStart := strings.LastIndex(got, "OVERLAP-PROGRESS-BEGIN")
++	sequentialEnd := strings.LastIndex(got, "OVERLAP-PROGRESS-END")
++	if sequentialStart <= overlapStart || sequentialEnd <= sequentialStart {
++		t.Fatalf("missing later sequential progress output: %q", got)
++	}
++	sequentialOutput := got[sequentialStart:sequentialEnd]
++	if !strings.Contains(sequentialOutput, "\033[2K") || !strings.Contains(sequentialOutput, "\r") {
++		t.Fatalf("normal live output was not restored after parallel runs ended: %q", sequentialOutput)
++	}
++}

@@ -1,0 +1,429 @@
+diff --git a/test/Pester/SchemaMigration.Tests.ps1 b/test/Pester/SchemaMigration.Tests.ps1
+new file mode 100644
+index 0000000..9ea327c
+--- /dev/null
++++ b/test/Pester/SchemaMigration.Tests.ps1
+@@ -0,0 +1,423 @@
++# Copyright (c) Microsoft Corporation.
++# Licensed under the MIT License.
++
++function global:Test-PlatyTextRoundTrip {
++    <#
++    .SYNOPSIS
++    Adds a file name extension to a supplied name.
++    .DESCRIPTION
++    Adds a file name extension to a supplied name.
++    Takes any strings for the file name or extension.
++    .PARAMETER Second
++    Second parameter help description
++    .OUTPUTS
++    System.String. Test-PlatyTextRoundTrip returns a string.
++    .EXAMPLE
++    PS C:\> Test-PlatyTextRoundTrip -First doc
++    File.doc
++    #>
++    param(
++        [switch] $Common,
++
++        [Parameter(ParameterSetName = 'First', HelpMessage = 'First parameter help description')]
++        [string] $First,
++
++        [Parameter(ParameterSetName = 'Second')]
++        [string] $Second
++    )
++}
++
++function global:Test-PlatySetSchema {
++    param(
++        [Parameter()]
++        [switch] $Common,
++
++        [Parameter(
++            ParameterSetName = 'First',
++            Mandatory = $true,
++            Position = 0,
++            ValueFromPipeline = $true,
++            HelpMessage = 'First parameter help description')]
++        [Alias('Alpha', 'A')]
++        [SupportsWildcards()]
++        [string] $First,
++
++        [Parameter(
++            ParameterSetName = 'Second',
++            Position = 1,
++            ValueFromPipelineByPropertyName = $true,
++            ValueFromRemainingArguments = $true)]
++        [string] $Second
++    )
++}
++
++function global:Test-PlatyMultiSetSchema {
++    [CmdletBinding(DefaultParameterSetName = 'First')]
++    param(
++        [Parameter(
++            ParameterSetName = 'First',
++            Mandatory = $true,
++            Position = 0,
++            ValueFromPipeline = $true)]
++        [Parameter(
++            ParameterSetName = 'Second',
++            Position = 1,
++            ValueFromPipelineByPropertyName = $true,
++            ValueFromRemainingArguments = $true)]
++        [Parameter(
++            ParameterSetName = 'Third',
++            Mandatory = $true,
++            ValueFromPipeline = $true,
++            ValueFromPipelineByPropertyName = $true)]
++        [Alias('S')]
++        [string] $Shared,
++
++        [Parameter(ParameterSetName = 'First')]
++        [switch] $FirstOnly,
++
++        [Parameter(ParameterSetName = 'Second')]
++        [switch] $SecondOnly,
++
++        [Parameter(ParameterSetName = 'Third')]
++        [switch] $ThirdOnly
++    )
++}
++
++function New-PlatyTestMetadata {
++    param([Parameter(Mandatory)][string] $Title)
++
++    @{
++        title = $Title
++        'Module Name' = ''
++        Locale = 'en-US'
++        schema = '3.0.0'
++        'online version' = ''
++        'external help file' = ''
++    }
++}
++
++Describe 'Parameter schema migration' {
++    Context 'Generated command round trip' {
++        BeforeAll {
++            $getDateCommand = Get-Command Get-Date
++            $getDateFolder = Join-Path $TestDrive 'get-date'
++            $getDateFile = New-MarkdownHelp -Command Get-Date -OutputFolder $getDateFolder -Force
++            $getDateHelp = Import-MarkdownCommandHelp -LiteralPath $getDateFile.FullName
++        }
++
++        It 'reconstructs every syntax entry' {
++            $getDateHelp.Syntax.Count | Should -Be $getDateCommand.ParameterSets.Count
++        }
++
++        It 'preserves the source module name' {
++            $getDateHelp.ModuleName | Should -Be $getDateCommand.Source
++        }
++
++        It 'preserves exactly one default parameter set' {
++            $defaultSyntax = @($getDateHelp.Syntax | Where-Object IsDefaultParameterSet)
++            $defaultSyntax | Should -HaveCount 1
++            $defaultSyntax[0].ParameterSetName | Should -Be $getDateCommand.DefaultParameterSet
++        }
++
++        It 'preserves parameter aliases' {
++            $dateParameter = $getDateHelp.Parameters | Where-Object Name -eq 'Date'
++            $dateParameter.Aliases | Should -Be ($getDateCommand.Parameters['Date'].Aliases -join ',')
++        }
++    }
++
++    Context 'Batch generation metadata isolation' {
++        BeforeAll {
++            $implicitBatchFolder = Join-Path $TestDrive 'implicit-batch-metadata'
++            $customBatchFolder = Join-Path $TestDrive 'custom-batch-metadata'
++            $customBatchMetadata = @{ customKey = 'customValue' }
++
++            New-MarkdownHelp -Command @('Get-Date', 'Get-Item') -OutputFolder $implicitBatchFolder -Force | Out-Null
++            New-MarkdownHelp -Command @('Get-Date', 'Get-Item') -OutputFolder $customBatchFolder -Metadata $customBatchMetadata -Force | Out-Null
++
++            $implicitDate = Import-MarkdownCommandHelp -LiteralPath (Join-Path $implicitBatchFolder 'Get-Date.md')
++            $implicitItem = Import-MarkdownCommandHelp -LiteralPath (Join-Path $implicitBatchFolder 'Get-Item.md')
++            $customDate = Import-MarkdownCommandHelp -LiteralPath (Join-Path $customBatchFolder 'Get-Date.md')
++            $customItem = Import-MarkdownCommandHelp -LiteralPath (Join-Path $customBatchFolder 'Get-Item.md')
++        }
++
++        It 'scopes generated identity metadata to each command' {
++            $implicitDate.Metadata['title'] | Should -Be 'Get-Date'
++            $implicitDate.ModuleName | Should -Be 'Microsoft.PowerShell.Utility'
++            $implicitItem.Metadata['title'] | Should -Be 'Get-Item'
++            $implicitItem.ModuleName | Should -Be 'Microsoft.PowerShell.Management'
++        }
++
++        It 'merges caller metadata without mutating or leaking through the batch' {
++            $customBatchMetadata.Keys | Should -HaveCount 1
++            $customBatchMetadata['customKey'] | Should -Be 'customValue'
++            $customBatchMetadata.ContainsKey('title') | Should -BeFalse
++            $customDate.Metadata['title'] | Should -Be 'Get-Date'
++            $customItem.Metadata['title'] | Should -Be 'Get-Item'
++            $customDate.Metadata['customKey'] | Should -Be 'customValue'
++            $customItem.Metadata['customKey'] | Should -Be 'customValue'
++        }
++    }
++
++    Context 'Descriptions and all-sets display name' {
++        BeforeAll {
++            $textFolder = Join-Path $TestDrive 'text-round-trip'
++            $textFile = New-MarkdownHelp -Command Test-PlatyTextRoundTrip -OutputFolder $textFolder -Force
++            $textHelp = Import-MarkdownCommandHelp -LiteralPath $textFile.FullName
++        }
++
++        It 'uses the display names for all and named parameter sets' {
++            @($textHelp.Parameters | ForEach-Object { $_.ParameterSets[0].Name }) | Should -Be @('(All)', 'First', 'Second')
++        }
++
++        It 'round trips the command synopsis' {
++            $textHelp.Synopsis | Should -Be 'Adds a file name extension to a supplied name.'
++        }
++
++        It 'preserves parameter descriptions and placeholders' {
++            ($textHelp.Parameters | Where-Object Name -eq 'First').Description | Should -Be 'First parameter help description'
++            ($textHelp.Parameters | Where-Object Name -eq 'Second').Description | Should -Be 'Second parameter help description'
++            ($textHelp.Parameters | Where-Object Name -eq 'Common').Description | Should -Be '{{ Fill Common Description }}'
++        }
++    }
++
++    Context 'Per-set parameter metadata' {
++        BeforeAll {
++            $schemaFolder = Join-Path $TestDrive 'schema'
++            $schemaMetadata = New-PlatyTestMetadata -Title 'Test-PlatySetSchema'
++            $schemaFile = New-MarkdownHelp -Command Test-PlatySetSchema -OutputFolder $schemaFolder -Metadata $schemaMetadata -Force
++            $schemaMarkdown = Get-Content -Raw $schemaFile.FullName
++            $schemaHelp = Import-MarkdownCommandHelp -LiteralPath $schemaFile.FullName
++            $commonParameter = $schemaHelp.Parameters | Where-Object Name -eq 'Common'
++            $firstParameter = $schemaHelp.Parameters | Where-Object Name -eq 'First'
++            $secondParameter = $schemaHelp.Parameters | Where-Object Name -eq 'Second'
++        }
++
++        It 'exposes structured entries in ParameterSets' {
++            $firstParameter.Name | Should -Be 'First'
++            $firstParameter.Type | Should -Be 'String'
++            $firstParameter.Description | Should -Be 'First parameter help description'
++            $firstParameter.Aliases | Should -Be 'Alpha,A'
++            $firstParameter.Globbing | Should -BeTrue
++            $propertyNames = $firstParameter.ParameterSets[0].PSObject.Properties.Name
++            $propertyNames | Should -Contain 'Name'
++            $propertyNames | Should -Contain 'Position'
++            $propertyNames | Should -Contain 'IsRequired'
++            $propertyNames | Should -Contain 'ValueByPipeline'
++            $propertyNames | Should -Contain 'ValueByPipelineByPropertyName'
++            $propertyNames | Should -Contain 'ValueFromRemainingArguments'
++        }
++
++        It 'normalizes the all-parameter-sets sentinel' {
++            $commonParameter.ParameterSets[0].Name | Should -Be '(All)'
++        }
++
++        It 'preserves position and requiredness per set' {
++            $firstParameter.ParameterSets[0].Name | Should -Be 'First'
++            $firstParameter.ParameterSets[0].Position | Should -Be '0'
++            $firstParameter.ParameterSets[0].IsRequired | Should -BeTrue
++        }
++
++        It 'preserves all pipeline input modes per set' {
++            $firstParameter.ParameterSets[0].ValueByPipeline | Should -BeTrue
++            $firstParameter.ParameterSets[0].ValueByPipelineByPropertyName | Should -BeFalse
++            $secondParameter.ParameterSets[0].Name | Should -Be 'Second'
++            $secondParameter.ParameterSets[0].ValueByPipeline | Should -BeFalse
++            $secondParameter.ParameterSets[0].ValueByPipelineByPropertyName | Should -BeTrue
++            $secondParameter.ParameterSets[0].ValueFromRemainingArguments | Should -BeTrue
++        }
++
++        It 'writes the new globbing field name' {
++            $schemaMarkdown | Should -Match '(?m)^Globbing: true$'
++            $schemaMarkdown | Should -Not -Match '(?m)^Accept wildcard characters:'
++        }
++    }
++
++    Context 'One parameter in multiple parameter sets' {
++        BeforeAll {
++            $multiMarkdownFolder = Join-Path $TestDrive 'multi-set-markdown'
++            $multiSecondMarkdownFolder = Join-Path $TestDrive 'multi-set-second-markdown'
++            $multiYamlFolder = Join-Path $TestDrive 'multi-set-yaml'
++            $multiMetadata = New-PlatyTestMetadata -Title 'Test-PlatyMultiSetSchema'
++            $multiMarkdownFile = New-MarkdownHelp -Command Test-PlatyMultiSetSchema -OutputFolder $multiMarkdownFolder -Metadata $multiMetadata -Force
++            $multiHelp = Import-MarkdownCommandHelp -LiteralPath $multiMarkdownFile.FullName
++            $multiShared = $multiHelp.Parameters | Where-Object Name -eq 'Shared'
++            $multiYamlFile = $multiHelp | Export-YamlCommandHelp -OutputFolder $multiYamlFolder -Force
++            $multiYamlObject = Import-YamlCommandHelp -Path $multiYamlFile.FullName
++            $multiYamlShared = $multiYamlObject['parameters'] | Where-Object { $_['name'] -eq 'Shared' }
++        }
++
++        It 'preserves distinct metadata entries for every set' {
++            $multiShared.ParameterSets | Should -HaveCount 3
++            $firstSet = $multiShared.ParameterSets | Where-Object Name -eq 'First'
++            $secondSet = $multiShared.ParameterSets | Where-Object Name -eq 'Second'
++            $thirdSet = $multiShared.ParameterSets | Where-Object Name -eq 'Third'
++            $firstSet.Position | Should -Be '0'
++            $firstSet.IsRequired | Should -BeTrue
++            $firstSet.ValueByPipeline | Should -BeTrue
++            $firstSet.ValueByPipelineByPropertyName | Should -BeFalse
++            $firstSet.ValueFromRemainingArguments | Should -BeFalse
++            $secondSet.Position | Should -Be '1'
++            $secondSet.IsRequired | Should -BeFalse
++            $secondSet.ValueByPipeline | Should -BeFalse
++            $secondSet.ValueByPipelineByPropertyName | Should -BeTrue
++            $secondSet.ValueFromRemainingArguments | Should -BeTrue
++            $thirdSet.Position | Should -Be 'Named'
++            $thirdSet.IsRequired | Should -BeTrue
++            $thirdSet.ValueByPipeline | Should -BeTrue
++            $thirdSet.ValueByPipelineByPropertyName | Should -BeTrue
++            $thirdSet.ValueFromRemainingArguments | Should -BeFalse
++
++            $multiYamlShared['parameterSets'] | Should -HaveCount 3
++            $yamlFirstSet = $multiYamlShared['parameterSets'] | Where-Object { $_['name'] -eq 'First' }
++            $yamlSecondSet = $multiYamlShared['parameterSets'] | Where-Object { $_['name'] -eq 'Second' }
++            $yamlThirdSet = $multiYamlShared['parameterSets'] | Where-Object { $_['name'] -eq 'Third' }
++            $yamlFirstSet['position'].ToString() | Should -Be '0'
++            $yamlFirstSet['isRequired'].ToString().ToLowerInvariant() | Should -Be 'true'
++            $yamlFirstSet['valueByPipeline'].ToString().ToLowerInvariant() | Should -Be 'true'
++            $yamlFirstSet['valueByPipelineByPropertyName'].ToString().ToLowerInvariant() | Should -Be 'false'
++            $yamlFirstSet['valueFromRemainingArguments'].ToString().ToLowerInvariant() | Should -Be 'false'
++            $yamlSecondSet['position'].ToString() | Should -Be '1'
++            $yamlSecondSet['isRequired'].ToString().ToLowerInvariant() | Should -Be 'false'
++            $yamlSecondSet['valueByPipeline'].ToString().ToLowerInvariant() | Should -Be 'false'
++            $yamlSecondSet['valueByPipelineByPropertyName'].ToString().ToLowerInvariant() | Should -Be 'true'
++            $yamlSecondSet['valueFromRemainingArguments'].ToString().ToLowerInvariant() | Should -Be 'true'
++            $yamlThirdSet['position'].ToString() | Should -Be 'Named'
++            $yamlThirdSet['isRequired'].ToString().ToLowerInvariant() | Should -Be 'true'
++            $yamlThirdSet['valueByPipeline'].ToString().ToLowerInvariant() | Should -Be 'true'
++            $yamlThirdSet['valueByPipelineByPropertyName'].ToString().ToLowerInvariant() | Should -Be 'true'
++            $yamlThirdSet['valueFromRemainingArguments'].ToString().ToLowerInvariant() | Should -Be 'false'
++        }
++
++        It 'keeps each set association stable through a second markdown round trip' {
++            $multiSecondMarkdownFile = Export-MarkdownCommandHelp -Command $multiHelp -OutputFolder $multiSecondMarkdownFolder -Force
++            $multiSecondHelp = Import-MarkdownCommandHelp -LiteralPath $multiSecondMarkdownFile.FullName
++            $multiSecondShared = $multiSecondHelp.Parameters | Where-Object Name -eq 'Shared'
++            $multiSecondShared.ParameterSets | Should -HaveCount 3
++            foreach ($setName in 'First', 'Second', 'Third') {
++                $expected = $multiShared.ParameterSets | Where-Object Name -eq $setName
++                $actual = $multiSecondShared.ParameterSets | Where-Object Name -eq $setName
++                foreach ($property in 'Position', 'IsRequired', 'ValueByPipeline', 'ValueByPipelineByPropertyName', 'ValueFromRemainingArguments') {
++                    $actual.$property | Should -Be $expected.$property
++                }
++            }
++        }
++    }
++
++    Context 'Yaml export' {
++        BeforeAll {
++            $yamlMarkdownFolder = Join-Path $TestDrive 'yaml-markdown'
++            $yamlOutputFolder = Join-Path $TestDrive 'yaml-output'
++            $yamlMetadata = New-PlatyTestMetadata -Title 'Test-PlatySetSchema'
++            $yamlMarkdownFile = New-MarkdownHelp -Command Test-PlatySetSchema -OutputFolder $yamlMarkdownFolder -Metadata $yamlMetadata -Force
++            $yamlHelp = Import-MarkdownCommandHelp -LiteralPath $yamlMarkdownFile.FullName
++            $yamlFile = $yamlHelp | Export-YamlCommandHelp -OutputFolder $yamlOutputFolder -Force
++            $yamlObject = Import-YamlCommandHelp -Path $yamlFile.FullName
++            $yamlParameters = @($yamlObject['parameters'] | Where-Object { $_['name'] -ne 'CommonParameters' })
++            $yamlFirst = $yamlParameters | Where-Object { $_['name'] -eq 'First' }
++            $yamlSecond = $yamlParameters | Where-Object { $_['name'] -eq 'Second' }
++        }
++
++        It 'uses the nested parameter-set schema instead of flat pipeline fields' {
++            foreach ($field in 'name', 'type', 'description', 'aliases', 'globbing', 'parameterSets') {
++                $yamlFirst.ContainsKey($field) | Should -BeTrue
++            }
++            foreach ($field in 'name', 'position', 'isRequired', 'valueByPipeline', 'valueByPipelineByPropertyName', 'valueFromRemainingArguments') {
++                $yamlFirst['parameterSets'][0].ContainsKey($field) | Should -BeTrue
++            }
++            $yamlFirst.ContainsKey('pipelineInput') | Should -BeFalse
++            $yamlFirst.ContainsKey('position') | Should -BeFalse
++        }
++
++        It 'round trips flags through the public yaml importer' {
++            $yamlFirst['globbing'] | Should -Be 'true'
++            $yamlFirst['parameterSets'][0]['name'] | Should -Be 'First'
++            $yamlFirst['parameterSets'][0]['position'] | Should -Be '0'
++            $yamlFirst['parameterSets'][0]['isRequired'] | Should -Be 'true'
++            $yamlFirst['parameterSets'][0]['valueByPipeline'] | Should -Be 'true'
++            $yamlFirst['parameterSets'][0]['valueByPipelineByPropertyName'] | Should -Be 'false'
++            $yamlFirst['parameterSets'][0]['valueFromRemainingArguments'] | Should -Be 'false'
++            $yamlSecond['parameterSets'][0]['name'] | Should -Be 'Second'
++            $yamlSecond['parameterSets'][0]['position'] | Should -Be '1'
++            $yamlSecond['parameterSets'][0]['isRequired'] | Should -Be 'false'
++            $yamlSecond['parameterSets'][0]['valueByPipeline'] | Should -Be 'false'
++            $yamlSecond['parameterSets'][0]['valueByPipelineByPropertyName'] | Should -Be 'true'
++            $yamlSecond['parameterSets'][0]['valueFromRemainingArguments'] | Should -Be 'true'
++        }
++    }
++
++    Context 'Legacy flat parameter metadata' {
++        It 'preserves flat position and pipeline values in structured entries' {
++            $legacyHelp = Import-MarkdownCommandHelp -LiteralPath (Join-Path $PSScriptRoot 'assets/get-date.md')
++            $legacyDate = $legacyHelp.Parameters | Where-Object Name -eq 'Date'
++            $legacyDate.ParameterSets | Should -HaveCount 2
++            @($legacyDate.ParameterSets.Name) | Should -Be @('DateAndFormat', 'DateAndUFormat')
++            foreach ($parameterSet in $legacyDate.ParameterSets) {
++                $parameterSet.Position | Should -Be '0'
++                $parameterSet.IsRequired | Should -BeFalse
++                $parameterSet.ValueByPipeline | Should -BeTrue
++                $parameterSet.ValueByPipelineByPropertyName | Should -BeTrue
++                $parameterSet.ValueFromRemainingArguments | Should -BeFalse
++            }
++        }
++
++        It 'keeps mixed requiredness through migration to the structured format' {
++            $legacySource = Get-Content -Raw (Join-Path $PSScriptRoot 'assets/get-date.md')
++            $dateRequiredPattern = [regex]::new('(?s)(### -Date.*?```yaml.*?Required: )False')
++            $legacySource = $dateRequiredPattern.Replace($legacySource, '${1}True (DateAndFormat)', 1)
++            $legacyPath = Join-Path $TestDrive 'legacy-required.md'
++            Set-Content -LiteralPath $legacyPath -Value $legacySource -NoNewline
++
++            $legacyFirstHelp = Import-MarkdownCommandHelp -LiteralPath $legacyPath
++            $legacyFirstDate = $legacyFirstHelp.Parameters | Where-Object Name -eq 'Date'
++            ($legacyFirstDate.ParameterSets | Where-Object Name -eq 'DateAndFormat').IsRequired | Should -BeTrue
++            ($legacyFirstDate.ParameterSets | Where-Object Name -eq 'DateAndUFormat').IsRequired | Should -BeFalse
++
++            $migratedFolder = Join-Path $TestDrive 'legacy-migrated'
++            $migratedFile = Export-MarkdownCommandHelp -Command $legacyFirstHelp -OutputFolder $migratedFolder -Force
++            $migratedHelp = Import-MarkdownCommandHelp -LiteralPath $migratedFile.FullName
++            $migratedDate = $migratedHelp.Parameters | Where-Object Name -eq 'Date'
++            ($migratedDate.ParameterSets | Where-Object Name -eq 'DateAndFormat').IsRequired | Should -BeTrue
++            ($migratedDate.ParameterSets | Where-Object Name -eq 'DateAndUFormat').IsRequired | Should -BeFalse
++            ($migratedDate.ParameterSets | Where-Object Name -eq 'DateAndFormat').ValueByPipeline | Should -BeTrue
++            ($migratedDate.ParameterSets | Where-Object Name -eq 'DateAndUFormat').ValueByPipelineByPropertyName | Should -BeTrue
++
++            $migratedText = Get-Content -Raw $migratedFile.FullName
++            $migratedText | Should -Not -Match '(?m)^Accept wildcard characters:'
++            $migratedText | Should -Not -Match '(?m)^Accept pipeline input:'
++        }
++    }
++
++    Context 'Existing behavior' {
++        It 'rejects an unknown command' {
++            { New-MarkdownHelp -Command 'No-Such-PlatyCommand' -OutputFolder $TestDrive -ErrorAction Stop } | Should -Throw
++        }
++
++        It 'writes caller-provided metadata' {
++            $folder = Join-Path $TestDrive 'custom-metadata'
++            $file = New-MarkdownHelp -Command Get-Date -OutputFolder $folder -Metadata @{ customKey = 'customValue' } -Force
++            Get-Content -Raw $file.FullName | Should -Match '(?m)^customKey: customValue$'
++        }
++
++        It 'honors NoMetadata' {
++            $folder = Join-Path $TestDrive 'no-metadata'
++            $file = New-MarkdownHelp -Command Get-Date -OutputFolder $folder -NoMetadata -Force
++            Get-MarkdownMetadata -Path $file.FullName | Should -BeNullOrEmpty
++        }
++
++        It 'retains the standard markdown sections' {
++            $folder = Join-Path $TestDrive 'standard-sections'
++            $metadata = New-PlatyTestMetadata -Title 'Get-Date'
++            $file = New-MarkdownHelp -Command Get-Date -OutputFolder $folder -Metadata $metadata -Force
++            $content = Get-Content -Raw $file.FullName
++            foreach ($heading in 'SYNOPSIS', 'SYNTAX', 'ALIASES', 'DESCRIPTION', 'EXAMPLES', 'PARAMETERS', 'INPUTS', 'OUTPUTS', 'NOTES', 'RELATED LINKS') {
++                $content | Should -Match ('(?m)^## ' + $heading + '$')
++            }
++        }
++
++        It 'continues to import version-one parameter metadata' {
++            $legacyHelp = Import-MarkdownCommandHelp -LiteralPath (Join-Path $PSScriptRoot 'assets/get-date.md')
++            $legacyHelp.Title | Should -Be 'Get-Date'
++            $legacyHelp.Parameters.Count | Should -BeGreaterThan 0
++        }
++    }
++}

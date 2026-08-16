@@ -1,0 +1,43 @@
+{
+  "schema_version": "compact-swebench-harborized-v1",
+  "execution": {
+    "timeout_sec": 1500,
+    "env": {}
+  },
+  "grading": {
+    "fail_to_pass": [
+      "sentinel::target_tester3purec_scalar",
+      "sentinel::target_tester3purecfma_scalar",
+      "sentinel::target_tester3sse2",
+      "sentinel::target_tester3sse4",
+      "sentinel::target_tester3avx",
+      "sentinel::target_tester3avx2128",
+      "sentinel::target_tester3avx2",
+      "sentinel::target_tester3avx512f",
+      "sentinel::target_tester3avx512fnofma",
+      "sentinel::deterministic_acos_abi",
+      "sentinel::tester3_family_rejects_drift",
+      "sentinel::tester3_is_mpfr_free",
+      "sentinel::arm32_target_matrix",
+      "sentinel::aarch64_target_matrix",
+      "sentinel::ppc64_target_matrix"
+    ],
+    "pass_to_pass": [
+      "sentinel::existing_gnuabi_sse2",
+      "sentinel::existing_gnuabi_avx2"
+    ],
+    "allow_extra_failures": false,
+    "parser": {
+      "framework": "structured-json",
+      "result_source": "/logs/verifier/results.json"
+    }
+  },
+  "artifacts": {
+    "stdout_log": "/logs/verifier/test-stdout.txt",
+    "stderr_log": "/logs/verifier/test-stderr.txt",
+    "parsed_results": "/logs/verifier/output.json",
+    "structured_results": "/logs/verifier/results.json",
+    "report": "/logs/verifier/report.json",
+    "reward": "/logs/verifier/reward.txt"
+  }
+}

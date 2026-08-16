@@ -1,0 +1,52 @@
+{
+  "execution": {
+    "commands": [
+      "git apply /tests/tests.patch",
+      "./node_modules/.bin/vitest run tests/unit/modules/default/weather/providers/buienradar_spec.js tests/unit/modules/default/weather/providers/openmeteo_spec.js --project unit --reporter=json --outputFile=/logs/verifier/vitest-results.json"
+    ],
+    "timeout_sec": 300
+  },
+  "grading": {
+    "fail_to_pass": [
+      "tests/unit/modules/default/weather/providers/buienradar_spec.js::should apply defaults while allowing configuration overrides",
+      "tests/unit/modules/default/weather/providers/buienradar_spec.js::should use the configured endpoint and location when started",
+      "tests/unit/modules/default/weather/providers/buienradar_spec.js::should fetch repeatedly after start and stop future fetches",
+      "tests/unit/modules/default/weather/providers/buienradar_spec.js::should call error callback when locationId is missing",
+      "tests/unit/modules/default/weather/providers/buienradar_spec.js::should parse current weather, set locationName, and merge day metadata",
+      "tests/unit/modules/default/weather/providers/buienradar_spec.js::should ignore invalid current candidates and emit valid dates",
+      "tests/unit/modules/default/weather/providers/buienradar_spec.js::should report an error when no usable current record remains",
+      "tests/unit/modules/default/weather/providers/buienradar_spec.js::should strictly parse numeric strings while preserving zero and negatives",
+      "tests/unit/modules/default/weather/providers/buienradar_spec.js::should parse daily forecast data",
+      "tests/unit/modules/default/weather/providers/buienradar_spec.js::should treat daily type the same as forecast",
+      "tests/unit/modules/default/weather/providers/buienradar_spec.js::should filter invalid daily records before applying maxEntries",
+      "tests/unit/modules/default/weather/providers/buienradar_spec.js::should handle unknown, missing, and case-insensitive icon codes",
+      "tests/unit/modules/default/weather/providers/buienradar_spec.js::should parse hourly forecast data",
+      "tests/unit/modules/default/weather/providers/buienradar_spec.js::should prevent cached responses when requesting the configured location",
+      "tests/unit/modules/default/weather/providers/buienradar_spec.js::should flatten hours across days before applying maxEntries",
+      "tests/unit/modules/default/weather/providers/buienradar_spec.js::should reject missing, empty, and non-array days without emitting data",
+      "tests/unit/modules/default/weather/providers/buienradar_spec.js::should report an error when a list mode has no usable entries",
+      "tests/unit/modules/default/weather/providers/buienradar_spec.js::should reject unsupported weather types without emitting data",
+      "tests/unit/modules/default/weather/providers/buienradar_spec.js::should report malformed JSON as a processing error",
+      "tests/unit/modules/default/weather/providers/buienradar_spec.js::should pass standardized HTTP errors to the error callback"
+    ],
+    "pass_to_pass": [
+      "tests/unit/modules/default/weather/providers/openmeteo_spec.js::should set config values from params",
+      "tests/unit/modules/default/weather/providers/openmeteo_spec.js::should have default values",
+      "tests/unit/modules/default/weather/providers/openmeteo_spec.js::should initialize without callbacks",
+      "tests/unit/modules/default/weather/providers/openmeteo_spec.js::should resolve location name via geocoding",
+      "tests/unit/modules/default/weather/providers/openmeteo_spec.js::should use forecast_days instead of static start_date/end_date",
+      "tests/unit/modules/default/weather/providers/openmeteo_spec.js::should set forecast_days based on maxNumberOfDays for forecast type",
+      "tests/unit/modules/default/weather/providers/openmeteo_spec.js::should parse current weather data correctly",
+      "tests/unit/modules/default/weather/providers/openmeteo_spec.js::should include sunrise and sunset from daily data",
+      "tests/unit/modules/default/weather/providers/openmeteo_spec.js::should parse daily forecast data correctly",
+      "tests/unit/modules/default/weather/providers/openmeteo_spec.js::should include precipitation data in forecast",
+      "tests/unit/modules/default/weather/providers/openmeteo_spec.js::should call error callback on invalid API response",
+      "tests/unit/modules/default/weather/providers/openmeteo_spec.js::should call error callback on network failure",
+      "tests/unit/modules/default/weather/providers/openmeteo_spec.js::should store callbacks via setCallbacks",
+      "tests/unit/modules/default/weather/providers/openmeteo_spec.js::should have start/stop methods",
+      "tests/unit/modules/default/weather/providers/openmeteo_spec.js::should clear timer on stop"
+    ],
+    "parser": { "framework": "vitest", "result_source": "json" }
+  },
+  "artifacts": { "reward": "/logs/verifier/reward.txt" }
+}

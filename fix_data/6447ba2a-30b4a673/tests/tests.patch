@@ -1,0 +1,618 @@
+diff --git a/test/SeqCli.Tests/Cli/Commands/IngestCommandTests.cs b/test/SeqCli.Tests/Cli/Commands/IngestCommandTests.cs
+new file mode 100644
+index 0000000..f4384dc
+--- /dev/null
++++ b/test/SeqCli.Tests/Cli/Commands/IngestCommandTests.cs
+@@ -0,0 +1,452 @@
++using System;
++using System.Collections.Generic;
++using System.IO;
++using System.Linq;
++using System.Threading.Tasks;
++using SeqCli.Cli.Commands;
++using SeqCli.Config;
++using SeqCli.Connection;
++using SeqCli.Tests.Ingestion;
++using Serilog;
++using Serilog.Core;
++using Serilog.Events;
++using Serilog.Formatting.Compact.Reader;
++using Xunit;
++
++namespace SeqCli.Tests.Cli.Commands
++{
++    public class IngestCommandTests
++    {
++        const string FirstPlain = "first";
++        const string SecondPlain = "second";
++        const string FirstClef = "{\"@t\":\"2018-03-06T00:00:00.0000000Z\",\"@mt\":\"first\"}";
++        const string SecondClef = "{\"@t\":\"2018-03-06T00:00:01.0000000Z\",\"@mt\":\"second\"}";
++
++        [Fact]
++        public async Task PlainTextFlushesAPartialBatchDuringALull()
++        {
++            var outcome = await RunAcrossLull(false);
++            Assert.True(outcome.FirstRequestObserved);
++        }
++
++        [Fact]
++        public async Task PlainTextIngestionRemainsActiveDuringALull()
++        {
++            var outcome = await RunAcrossLull(false);
++            Assert.True(outcome.WasRunningAfterFirstRequest);
++        }
++
++        [Fact]
++        public async Task PlainTextShipsInputThatArrivesAfterALull()
++        {
++            var outcome = await RunAcrossLull(false);
++            Assert.Equal(0, outcome.ExitCode);
++            Assert.Equal(new[] {1, 1}, outcome.EventCounts);
++        }
++
++        [Fact]
++        public async Task PlainTextRepeatedIdlePeriodsDoNotPostEmptyBatches()
++        {
++            var outcome = await RunAcrossLull(false);
++            Assert.Equal(1, outcome.RequestsBeforeSecondLine);
++        }
++
++        [Fact]
++        public async Task ClefFlushesAPartialBatchDuringALull()
++        {
++            var outcome = await RunAcrossLull(true);
++            Assert.True(outcome.FirstRequestObserved);
++        }
++
++        [Fact]
++        public async Task ClefIngestionRemainsActiveDuringALull()
++        {
++            var outcome = await RunAcrossLull(true);
++            Assert.True(outcome.WasRunningAfterFirstRequest);
++        }
++
++        [Fact]
++        public async Task ClefShipsInputThatArrivesAfterALull()
++        {
++            var outcome = await RunAcrossLull(true);
++            Assert.Equal(0, outcome.ExitCode);
++            Assert.Equal(new[] {1, 1}, outcome.EventCounts);
++        }
++
++        [Fact]
++        public async Task ClefRepeatedIdlePeriodsDoNotPostEmptyBatches()
++        {
++            var outcome = await RunAcrossLull(true);
++            Assert.Equal(1, outcome.RequestsBeforeSecondLine);
++        }
++
++        [Fact]
++        public async Task OneHundredEventsAreSentWithoutWaitingForMoreInput()
++        {
++            var outcome = await RunOpenBatch(100, 1);
++            Assert.Equal(new[] {100}, outcome.EventCounts);
++        }
++
++        [Fact]
++        public async Task OneHundredAndOneEventsUseTwoRequestsWithoutWaitingForEndOfInput()
++        {
++            var outcome = await RunOpenBatch(101, 2);
++            Assert.Equal(new[] {100, 1}, outcome.EventCounts);
++        }
++
++        [Fact]
++        public async Task TwoHundredEventsUseTwoFullRequestsWithoutWaitingForEndOfInput()
++        {
++            var outcome = await RunOpenBatch(200, 2);
++            Assert.Equal(new[] {100, 100}, outcome.EventCounts);
++        }
++
++        [Fact]
++        public async Task DefaultExtractionCreatesOneEventPerPhysicalLine()
++        {
++            using (var server = new IngestionTestServer())
++            {
++                var result = await Run(server, new StringReader("Hello,\n world!"), new string[0]);
++                Assert.Equal(0, result);
++                Assert.Equal(2, CountEvents(server.RequestBodies));
++            }
++        }
++
++        [Fact]
++        public async Task DefaultExtractionExcludesLineTerminatorsFromMessages()
++        {
++            using (var server = new IngestionTestServer())
++            {
++                var result = await Run(server, new StringReader("Hello,\r\n world!\n"), new string[0]);
++                Assert.Equal(0, result);
++                Assert.Equal(new[] {"Hello,", " world!"}, ReadMessages(server.RequestBodies));
++            }
++        }
++
++        [Fact]
++        public async Task WhitespaceExtractionOptionUsesTheDefaultLineBehavior()
++        {
++            using (var server = new IngestionTestServer())
++            {
++                var result = await Run(server, new StringReader("Hello,\n world!"), new[] {"--extract=   "});
++                Assert.Equal(0, result);
++                Assert.Equal(new[] {"Hello,", " world!"}, ReadMessages(server.RequestBodies));
++            }
++        }
++
++        [Fact]
++        public async Task TrailingIndentExtractionGroupsContinuationLines()
++        {
++            using (var server = new IngestionTestServer())
++            {
++                var result = await Run(server, new StringReader("Hello,\n world!"),
++                    new[] {"--extract={@m:trailingindent}"});
++                Assert.Equal(0, result);
++                Assert.Equal(new[] {"Hello,\n world!\n"}, ReadMessages(server.RequestBodies));
++            }
++        }
++
++        [Fact]
++        public async Task OrphanedIndentedInputFailsAndIdentifiesTheContent()
++        {
++            using (var server = new IngestionTestServer())
++            {
++                var captured = new CollectingSink();
++                var result = await RunWithLogger(server, new StringReader(" orphaned"),
++                    new[] {"--extract={@m:trailingindent}"}, captured);
++                var diagnostic = string.Join(Environment.NewLine, captured.Events.Select(e => e.RenderMessage()));
++
++                Assert.NotEqual(0, result);
++                Assert.Contains("orphaned", diagnostic);
++                Assert.Empty(server.RequestBodies);
++            }
++        }
++
++        [Fact]
++        public async Task IgnoredOrphanedInputDoesNotPreventLaterValidInput()
++        {
++            using (var server = new IngestionTestServer())
++            {
++                var result = await Run(server, new StringReader(" orphaned\nvalid"),
++                    new[] {"--extract={@m:trailingindent}", "--invalid-data=ignore"});
++                Assert.Equal(0, result);
++                Assert.Equal(new[] {"valid\n"}, ReadMessages(server.RequestBodies));
++            }
++        }
++
++        [Fact]
++        public async Task EmptyInputCompletesWithoutPosting()
++        {
++            using (var server = new IngestionTestServer())
++            {
++                var result = await Run(server, new StringReader(""), new string[0]);
++                Assert.Equal(0, result);
++                Assert.Empty(server.RequestBodies);
++            }
++        }
++
++        [Fact]
++        public async Task PlainTextEndOfInputFlushesTheFinalEvent()
++        {
++            using (var server = new IngestionTestServer())
++            {
++                var result = await Run(server, new StringReader("final"), new string[0]);
++                Assert.Equal(0, result);
++                Assert.Equal(new[] {"final"}, ReadMessages(server.RequestBodies));
++            }
++        }
++
++        [Fact]
++        public async Task ClefEndOfInputFlushesTheFinalEvent()
++        {
++            using (var server = new IngestionTestServer())
++            {
++                var result = await Run(server, new StringReader(FirstClef), new[] {"--json"});
++                Assert.Equal(0, result);
++                Assert.Equal(new[] {"first"}, ReadMessages(server.RequestBodies));
++            }
++        }
++
++        [Fact]
++        public async Task FailedSendReturnsNonZeroAndReportsServerDetails()
++        {
++            using (var server = new IngestionTestServer(
++                new IngestionTestServer.Response(429, "{\"Error\":\"slow down\"}")))
++            {
++                var captured = new CollectingSink();
++                var result = await RunWithLogger(server, new StringReader("hello"), new string[0], captured);
++                var diagnostic = string.Join(Environment.NewLine, captured.Events.Select(e => e.RenderMessage()));
++
++                Assert.NotEqual(0, result);
++                Assert.Contains("TooManyRequests", diagnostic);
++                Assert.Contains("slow down", diagnostic);
++            }
++        }
++
++        static async Task<LullOutcome> RunAcrossLull(bool clef)
++        {
++            using (var server = new IngestionTestServer())
++            using (var input = new ControlledTextReader())
++            {
++                input.AddLine(clef ? FirstClef : FirstPlain);
++                var run = Task.Run(() => Run(server, input, clef ? new[] {"--json"} : new string[0]));
++                var firstRequestObserved = await WaitUntil(() => server.RequestCount >= 1, TimeSpan.FromSeconds(2));
++                var wasRunning = !run.IsCompleted;
++
++                await Task.Delay(80);
++                var requestsBeforeSecondLine = server.RequestCount;
++                input.AddLine(clef ? SecondClef : SecondPlain);
++                input.Complete();
++                var exitCode = await Await(run, TimeSpan.FromSeconds(2));
++
++                return new LullOutcome(firstRequestObserved, wasRunning, requestsBeforeSecondLine,
++                    exitCode, server.RequestBodies.Select(CountEvents).ToArray());
++            }
++        }
++
++        static async Task<BatchOutcome> RunOpenBatch(int eventCount, int expectedRequests)
++        {
++            using (var server = new IngestionTestServer())
++            using (var input = new ControlledTextReader())
++            {
++                for (var i = 0; i < eventCount; ++i)
++                    input.AddLine("event-" + i);
++
++                var run = Task.Run(() => Run(server, input, new string[0]));
++                var observed = await WaitUntil(() => server.RequestCount >= expectedRequests, TimeSpan.FromSeconds(2));
++                input.Complete();
++                var exitCode = await Await(run, TimeSpan.FromSeconds(2));
++
++                Assert.True(observed, $"Expected {expectedRequests} request(s) before end-of-input.");
++                Assert.Equal(0, exitCode);
++                return new BatchOutcome(server.RequestBodies.Select(CountEvents).ToArray());
++            }
++        }
++
++        static async Task<int> Run(IngestionTestServer server, TextReader input, string[] args)
++        {
++            var config = new SeqCliConfig();
++            config.Connection.ServerUrl = server.Url;
++            var command = new IngestCommand(new SeqConnectionFactory(config));
++            var previousInput = Console.In;
++
++            try
++            {
++                Console.SetIn(input);
++                return await command.Invoke(args);
++            }
++            finally
++            {
++                Console.SetIn(previousInput);
++            }
++        }
++
++        static async Task<int> RunWithLogger(
++            IngestionTestServer server,
++            TextReader input,
++            string[] args,
++            CollectingSink captured)
++        {
++            var previous = Log.Logger;
++            var logger = new LoggerConfiguration().WriteTo.Sink(captured).CreateLogger();
++            Log.Logger = logger;
++
++            try
++            {
++                return await Run(server, input, args);
++            }
++            finally
++            {
++                Log.Logger = previous;
++                logger.Dispose();
++            }
++        }
++
++        static async Task<bool> WaitUntil(Func<bool> condition, TimeSpan timeout)
++        {
++            var deadline = DateTime.UtcNow + timeout;
++            while (DateTime.UtcNow < deadline)
++            {
++                if (condition())
++                    return true;
++                await Task.Delay(10);
++            }
++
++            return condition();
++        }
++
++        static async Task<T> Await<T>(Task<T> task, TimeSpan timeout)
++        {
++            var completed = await Task.WhenAny(task, Task.Delay(timeout));
++            Assert.Same(task, completed);
++            return await task;
++        }
++
++        static int CountEvents(IEnumerable<string> bodies)
++        {
++            return bodies.Sum(CountEvents);
++        }
++
++        static int CountEvents(string body)
++        {
++            return body.Split(new[] {'\n'}, StringSplitOptions.RemoveEmptyEntries).Length;
++        }
++
++        static string[] ReadMessages(IEnumerable<string> bodies)
++        {
++            return bodies
++                .SelectMany(body => body.Split(new[] {'\n'}, StringSplitOptions.RemoveEmptyEntries))
++                .Select(line => LogEventReader.ReadFromString(line).MessageTemplate.Text)
++                .ToArray();
++        }
++
++        sealed class ControlledTextReader : TextReader
++        {
++            readonly object _sync = new object();
++            readonly Queue<string> _lines = new Queue<string>();
++            readonly Queue<TaskCompletionSource<string>> _waiters = new Queue<TaskCompletionSource<string>>();
++            bool _completed;
++
++            public void AddLine(string line)
++            {
++                TaskCompletionSource<string> waiter = null;
++                lock (_sync)
++                {
++                    if (_completed)
++                        throw new InvalidOperationException("Input has already completed.");
++
++                    if (_waiters.Count == 0)
++                        _lines.Enqueue(line);
++                    else
++                        waiter = _waiters.Dequeue();
++                }
++
++                waiter?.TrySetResult(line);
++            }
++
++            public void Complete()
++            {
++                TaskCompletionSource<string>[] waiters;
++                lock (_sync)
++                {
++                    if (_completed)
++                        return;
++
++                    _completed = true;
++                    waiters = _waiters.ToArray();
++                    _waiters.Clear();
++                }
++
++                foreach (var waiter in waiters)
++                    waiter.TrySetResult(null);
++            }
++
++            public override string ReadLine()
++            {
++                return ReadLineAsync().GetAwaiter().GetResult();
++            }
++
++            public override Task<string> ReadLineAsync()
++            {
++                lock (_sync)
++                {
++                    if (_lines.Count > 0)
++                        return Task.FromResult(_lines.Dequeue());
++
++                    if (_completed)
++                        return Task.FromResult<string>(null);
++
++                    var waiter = new TaskCompletionSource<string>();
++                    _waiters.Enqueue(waiter);
++                    return waiter.Task;
++                }
++            }
++
++            protected override void Dispose(bool disposing)
++            {
++                if (disposing)
++                    Complete();
++                base.Dispose(disposing);
++            }
++        }
++
++        sealed class CollectingSink : ILogEventSink
++        {
++            public List<LogEvent> Events { get; } = new List<LogEvent>();
++
++            public void Emit(LogEvent logEvent)
++            {
++                Events.Add(logEvent);
++            }
++        }
++
++        sealed class LullOutcome
++        {
++            public LullOutcome(bool firstRequestObserved, bool wasRunningAfterFirstRequest,
++                int requestsBeforeSecondLine, int exitCode, int[] eventCounts)
++            {
++                FirstRequestObserved = firstRequestObserved;
++                WasRunningAfterFirstRequest = wasRunningAfterFirstRequest;
++                RequestsBeforeSecondLine = requestsBeforeSecondLine;
++                ExitCode = exitCode;
++                EventCounts = eventCounts;
++            }
++
++            public bool FirstRequestObserved { get; }
++            public bool WasRunningAfterFirstRequest { get; }
++            public int RequestsBeforeSecondLine { get; }
++            public int ExitCode { get; }
++            public int[] EventCounts { get; }
++        }
++
++        sealed class BatchOutcome
++        {
++            public BatchOutcome(int[] eventCounts)
++            {
++                EventCounts = eventCounts;
++            }
++
++            public int[] EventCounts { get; }
++        }
++    }
++}
+diff --git a/test/SeqCli.Tests/Ingestion/IngestionTestServer.cs b/test/SeqCli.Tests/Ingestion/IngestionTestServer.cs
+new file mode 100644
+index 0000000..ec8fb9a
+--- /dev/null
++++ b/test/SeqCli.Tests/Ingestion/IngestionTestServer.cs
+@@ -0,0 +1,154 @@
++using System;
++using System.Collections.Generic;
++using System.IO;
++using System.Net;
++using System.Net.Sockets;
++using System.Text;
++using System.Threading.Tasks;
++
++namespace SeqCli.Tests.Ingestion
++{
++    sealed class IngestionTestServer : IDisposable
++    {
++        readonly TcpListener _listener;
++        readonly Queue<Response> _responses;
++        readonly Task _acceptLoop;
++        readonly object _requestsSync = new object();
++        bool _disposed;
++
++        public IngestionTestServer(params Response[] responses)
++        {
++            _responses = new Queue<Response>(responses ?? new Response[0]);
++            _listener = new TcpListener(IPAddress.Loopback, 0);
++            _listener.Start();
++            var endpoint = (IPEndPoint)_listener.LocalEndpoint;
++            Url = $"http://127.0.0.1:{endpoint.Port}/";
++            _acceptLoop = AcceptLoopAsync();
++        }
++
++        public string Url { get; }
++        readonly List<string> _requestBodies = new List<string>();
++        readonly List<string> _requestPaths = new List<string>();
++
++        public string[] RequestBodies
++        {
++            get
++            {
++                lock (_requestsSync)
++                    return _requestBodies.ToArray();
++            }
++        }
++
++        public string[] RequestPaths
++        {
++            get
++            {
++                lock (_requestsSync)
++                    return _requestPaths.ToArray();
++            }
++        }
++
++        public int RequestCount
++        {
++            get
++            {
++                lock (_requestsSync)
++                    return _requestBodies.Count;
++            }
++        }
++
++        async Task AcceptLoopAsync()
++        {
++            try
++            {
++                while (!_disposed)
++                {
++                    var client = await _listener.AcceptTcpClientAsync();
++                    await HandleAsync(client);
++                }
++            }
++            catch (ObjectDisposedException)
++            {
++            }
++            catch (SocketException)
++            {
++                if (!_disposed)
++                    throw;
++            }
++        }
++
++        async Task HandleAsync(TcpClient client)
++        {
++            using (client)
++            using (var stream = client.GetStream())
++            using (var reader = new StreamReader(stream, Encoding.UTF8, false, 1024, true))
++            {
++                var requestLine = await reader.ReadLineAsync();
++                if (requestLine == null)
++                    return;
++
++                var requestParts = requestLine.Split(' ');
++                lock (_requestsSync)
++                    _requestPaths.Add(requestParts.Length > 1 ? requestParts[1] : requestLine);
++
++                var contentLength = 0;
++                string header;
++                while (!string.IsNullOrEmpty(header = await reader.ReadLineAsync()))
++                {
++                    const string contentLengthHeader = "Content-Length:";
++                    if (header.StartsWith(contentLengthHeader, StringComparison.OrdinalIgnoreCase))
++                        contentLength = int.Parse(header.Substring(contentLengthHeader.Length).Trim());
++                }
++
++                var body = new char[contentLength];
++                var offset = 0;
++                while (offset < body.Length)
++                {
++                    var read = await reader.ReadAsync(body, offset, body.Length - offset);
++                    if (read == 0)
++                        break;
++                    offset += read;
++                }
++
++                lock (_requestsSync)
++                    _requestBodies.Add(new string(body, 0, offset));
++
++                var response = _responses.Count == 0 ? Response.Success : _responses.Dequeue();
++                var responseBody = Encoding.UTF8.GetBytes(response.Body ?? "");
++                var reason = response.StatusCode >= 200 && response.StatusCode < 300 ? "Created" : "Error";
++                var responseHeaders = Encoding.ASCII.GetBytes(
++                    $"HTTP/1.1 {response.StatusCode} {reason}\r\n" +
++                    "Content-Type: application/json\r\n" +
++                    $"Content-Length: {responseBody.Length}\r\n" +
++                    "Connection: close\r\n\r\n");
++
++                await stream.WriteAsync(responseHeaders, 0, responseHeaders.Length);
++                await stream.WriteAsync(responseBody, 0, responseBody.Length);
++                await stream.FlushAsync();
++            }
++        }
++
++        public void Dispose()
++        {
++            if (_disposed)
++                return;
++
++            _disposed = true;
++            _listener.Stop();
++        }
++
++        public sealed class Response
++        {
++            public static readonly Response Success = new Response(201, "");
++
++            public Response(int statusCode, string body)
++            {
++                StatusCode = statusCode;
++                Body = body;
++            }
++
++            public int StatusCode { get; }
++            public string Body { get; }
++        }
++    }
++}

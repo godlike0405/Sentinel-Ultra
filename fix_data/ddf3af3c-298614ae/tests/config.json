@@ -1,0 +1,58 @@
+{
+  "schema_version": "compact-swebench-harborized-v1",
+  "execution": {
+    "commands": [
+      "cd \"${VERIFIER_HARNESS_DIR}\" && dotnet restore --ignore-failed-sources -v quiet && dotnet build -c Release --no-restore -v quiet && dotnet bin/Release/net8.0/Harness.dll"
+    ],
+    "selected_test_files_to_run": [],
+    "env": {
+      "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT": "1",
+      "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+      "DOTNET_NOLOGO": "1",
+      "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1"
+    },
+    "timeout_sec": 1200
+  },
+  "grading": {
+    "fail_to_pass": [
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareOrdersByTrailingNumberNaturally",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareLargeTrailingNumberOrdersNaturally",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.ComparePureNumericNamesOrderNaturally",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareNameEndingInLetterOrdersBeforeNameWithTrailingDigit",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareOrdersAdditionalDigitWidthNaturally",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareOrdersNinetyNineBeforeOneHundred",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareOrdersZeroPaddedDifferentWidthsNaturally",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareSamePrefixDifferentCaseAcrossDigitWidths",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareVeryLargeTrailingNumbersWithoutOverflow",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.SortByNameArrayUsesNaturalOrdering",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.SortByNameListUsesNaturalOrdering",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.SortByNameOtherIListUsesNaturalOrdering",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareEqualNumericSuffixesUsesInstanceIdTieBreaker"
+    ],
+    "pass_to_pass": [
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareOrdersZeroPaddedTrailingNumbersNaturally",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareOrdersNameWithoutNumberBeforeNameWithNumber",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareOrdersByDifferentLeadingPortions",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareSamePrefixDifferentCaseOrdersByNumber",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareNamesWithoutTrailingDigitsAreCaseInsensitive",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareNullRightHandOperandOrdersAfter",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareNullLeftHandOperandOrdersBefore",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareObjectToItselfYieldsZero",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareInternalDigitsNotTreatedAsNaturalSort",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareEqualNamesUsesAssetPathBeforeInstanceId"
+    ],
+    "required_pass": [],
+    "allow_extra_failures": false,
+    "parser": {
+      "framework": "verifier-json",
+      "result_source": "stdout"
+    }
+  },
+  "artifacts": {
+    "stdout_log": "/logs/verifier/test-stdout.txt",
+    "stderr_log": "/logs/verifier/test-stderr.txt",
+    "parsed_results": "/logs/verifier/output.json",
+    "report": "/logs/verifier/report.json",
+    "reward": "/logs/verifier/reward.txt"
+  }
+}

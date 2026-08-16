@@ -1,0 +1,3897 @@
+diff --git a/tests/test_session_helpers_store.py b/tests/test_session_helpers_store.py
+new file mode 100644
+index 0000000..df5f0c3
+--- /dev/null
++++ b/tests/test_session_helpers_store.py
+@@ -0,0 +1,1070 @@
++"""Tests for the ``*_from_store`` / ``*_via_store`` async session helpers.
++
++Exercises the SessionStore-backed code paths in
++``_internal/sessions.py`` and ``_internal/session_mutations.py`` using
++``InMemorySessionStore``.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import uuid as uuid_mod
++from pathlib import Path
++from typing import Any
++
++import pytest
++
++from claude_agent_sdk import (
++    InMemorySessionStore,
++    delete_session_via_store,
++    fork_session_via_store,
++    get_session_info_from_store,
++    get_session_messages_from_store,
++    get_subagent_messages_from_store,
++    list_sessions_from_store,
++    list_subagents_from_store,
++    project_key_for_directory,
++    rename_session_via_store,
++    tag_session_via_store,
++)
++from claude_agent_sdk.types import SessionKey, SessionStore
++
++pytestmark = pytest.mark.asyncio
++
++
++# ---------------------------------------------------------------------------
++# Fixtures and helpers
++# ---------------------------------------------------------------------------
++
++DIR = "/workspace/project"
++PROJECT_KEY = project_key_for_directory(DIR)
++
++
++def _user(text: str, uid: str, parent: str | None, sid: str) -> dict[str, Any]:
++    return {
++        "type": "user",
++        "uuid": uid,
++        "parentUuid": parent,
++        "sessionId": sid,
++        "timestamp": "2024-01-01T00:00:00.000Z",
++        "message": {"role": "user", "content": text},
++    }
++
++
++def _assistant(text: str, uid: str, parent: str, sid: str) -> dict[str, Any]:
++    return {
++        "type": "assistant",
++        "uuid": uid,
++        "parentUuid": parent,
++        "sessionId": sid,
++        "timestamp": "2024-01-01T00:00:01.000Z",
++        "message": {"role": "assistant", "content": [{"type": "text", "text": text}]},
++    }
++
++
++async def _seed_chain(store: InMemorySessionStore, sid: str, n: int = 2) -> list[str]:
++    """Append ``n`` user/assistant pairs and return their UUIDs in order."""
++    key: SessionKey = {"project_key": PROJECT_KEY, "session_id": sid}
++    uuids: list[str] = []
++    parent: str | None = None
++    entries: list[dict[str, Any]] = []
++    for i in range(n):
++        u = str(uuid_mod.uuid4())
++        a = str(uuid_mod.uuid4())
++        entries.append(_user(f"prompt {i}", u, parent, sid))
++        entries.append(_assistant(f"reply {i}", a, u, sid))
++        uuids.extend([u, a])
++        parent = a
++    await store.append(key, entries)  # type: ignore[arg-type]
++    return uuids
++
++
++class _MinimalStore(SessionStore):
++    """Duck-typed store implementing only the required ``append``/``load``."""
++
++    def __init__(self) -> None:
++        self._data: dict[str, list] = {}
++
++    async def append(self, key: SessionKey, entries: list) -> None:
++        k = f"{key['project_key']}/{key['session_id']}/{key.get('subpath', '')}"
++        self._data.setdefault(k, []).extend(entries)
++
++    async def load(self, key: SessionKey) -> list | None:
++        k = f"{key['project_key']}/{key['session_id']}/{key.get('subpath', '')}"
++        return self._data.get(k)
++
++
++# ---------------------------------------------------------------------------
++# Read helpers — list_sessions / get_session_info / get_session_messages
++# ---------------------------------------------------------------------------
++
++
++class TestListSessionsFromStore:
++    async def test_listing_contract(self) -> None:
++        """One graded test for the whole listing contract: real sessions are
++        returned most-recent-first with summaries, sidechains are dropped,
++        pagination applies to what survives that filter, and a store that
++        cannot enumerate is refused rather than reported as empty."""
++        store = InMemorySessionStore()
++        real: list[str] = []
++        for _ in range(5):
++            sid = str(uuid_mod.uuid4())
++            await _seed_chain(store, sid, n=1)
++            real.append(sid)
++        sidechains: list[str] = []
++        for _ in range(3):
++            sc = str(uuid_mod.uuid4())
++            entry = _user("internal", str(uuid_mod.uuid4()), None, sc)
++            entry["isSidechain"] = True
++            await store.append(
++                {"project_key": PROJECT_KEY, "session_id": sc},
++                [entry],  # type: ignore[arg-type]
++            )
++            sidechains.append(sc)
++
++        sessions = await list_sessions_from_store(store, directory=DIR)
++        ids = [s.session_id for s in sessions]
++        assert set(ids) == set(real), "sidechains must not surface"
++        assert not any(sc in ids for sc in sidechains)
++        assert all(s.summary == "prompt 0" for s in sessions)
++        mtimes = [s.last_modified for s in sessions]
++        assert mtimes == sorted(mtimes, reverse=True), "most recent first"
++
++        # Pagination applies after the sidechain filter, so a full page is
++        # returned rather than one padded out by dropped rows.
++        page = await list_sessions_from_store(store, directory=DIR, limit=3, offset=1)
++        assert [s.session_id for s in page] == ids[1:4]
++
++        # A store that cannot enumerate must be refused deliberately, not
++        # crash on a missing attribute and not silently report nothing.
++        with pytest.raises(Exception) as excinfo:
++            await list_sessions_from_store(_MinimalStore(), directory=DIR)
++        assert not isinstance(
++            excinfo.value, (AttributeError, NameError, ImportError)
++        ), f"refusal must be deliberate, got {excinfo.value!r}"
++
++        # A listing must not fan out unboundedly across the adapter: a large
++        # project would otherwise open one connection per session and exhaust
++        # the adapter's pool. The bound itself is the implementation's choice;
++        # what matters is that one exists and holds for the whole run.
++        in_flight = 0
++        peak = 0
++        gate = asyncio.Event()
++
++        class SlowStore(InMemorySessionStore):
++            async def load(self, key):
++                nonlocal in_flight, peak
++                in_flight += 1
++                peak = max(peak, in_flight)
++                await gate.wait()
++                in_flight -= 1
++                return await super().load(key)
++
++        slow = SlowStore()
++        n = 96
++        for i in range(n):
++            await InMemorySessionStore.append(
++                slow,
++                {"project_key": PROJECT_KEY, "session_id": str(uuid_mod.uuid4())},
++                [{"type": "user", "uuid": f"u{i}"}],
++            )
++        task = asyncio.create_task(list_sessions_from_store(slow, directory=DIR))
++        for _ in range(5):  # let the scheduler saturate whatever bound exists
++            await asyncio.sleep(0)
++        assert peak > 0, "loads should have started"
++        assert peak < n, f"unbounded: {peak} concurrent loads for {n} sessions"
++        saturated = peak
++        gate.set()
++        await task
++        # A ceiling that is exceeded later is not a ceiling.
++        assert peak == saturated
++
++        # And the adapter's own list must not be mutated by the read.
++        returned: list[Any] = []
++
++        class WatchingStore(InMemorySessionStore):
++            async def list_sessions(self, project_key):
++                rows = await super().list_sessions(project_key)
++                returned.append(rows)
++                return rows
++
++        watching = WatchingStore()
++        await _seed_chain(watching, str(uuid_mod.uuid4()), n=1)
++        before = [list(r) for r in returned]
++        await list_sessions_from_store(watching, directory=DIR)
++        assert [list(r) for r in returned][: len(before)] == before
++        assert returned and all(isinstance(r, list) for r in returned)
++
++    async def test_lists_seeded_sessions_sorted_by_mtime(self) -> None:
++        store = InMemorySessionStore()
++        sid_a = str(uuid_mod.uuid4())
++        sid_b = str(uuid_mod.uuid4())
++        await _seed_chain(store, sid_a)
++        await _seed_chain(store, sid_b)
++
++        sessions = await list_sessions_from_store(store, directory=DIR)
++        ids = {s.session_id for s in sessions}
++        assert ids == {sid_a, sid_b}
++        # Summary derived from first prompt via the same lite-parse as disk.
++        for s in sessions:
++            assert s.summary == "prompt 0"
++            assert s.first_prompt == "prompt 0"
++        # Sorted by mtime descending (non-increasing).
++        mtimes = [s.last_modified for s in sessions]
++        assert mtimes == sorted(mtimes, reverse=True)
++
++    async def test_limit_and_offset(self) -> None:
++        store = InMemorySessionStore()
++        for _ in range(3):
++            await _seed_chain(store, str(uuid_mod.uuid4()))
++        page = await list_sessions_from_store(store, directory=DIR, limit=2, offset=1)
++        assert len(page) == 2
++
++    async def test_raises_when_store_lacks_list_sessions(self) -> None:
++        store = _MinimalStore()
++        with pytest.raises(ValueError, match="does not implement list_sessions"):
++            await list_sessions_from_store(store, directory=DIR)
++
++    async def test_drops_sidechain_sessions(self) -> None:
++        """Parity with TS: sidechain sessions are filtered (not surfaced as
++        empty-summary rows), matching the filesystem path."""
++        store = InMemorySessionStore()
++        normal_sid = str(uuid_mod.uuid4())
++        sidechain_sid = str(uuid_mod.uuid4())
++        await store.append(
++            {"project_key": PROJECT_KEY, "session_id": normal_sid},
++            [_user("hello world", str(uuid_mod.uuid4()), None, normal_sid)],  # type: ignore[arg-type]
++        )
++        side_entry = _user("internal", str(uuid_mod.uuid4()), None, sidechain_sid)
++        side_entry["isSidechain"] = True
++        await store.append(
++            {"project_key": PROJECT_KEY, "session_id": sidechain_sid},
++            [side_entry],  # type: ignore[arg-type]
++        )
++
++        sessions = await list_sessions_from_store(store, directory=DIR)
++        ids = {s.session_id for s in sessions}
++        assert normal_sid in ids
++        assert sidechain_sid not in ids
++        assert all(s.summary != "" for s in sessions)
++
++    async def test_limit_offset_applied_after_sidechain_filter(self) -> None:
++        """Disk-path parity: ``_read_sessions_from_dir`` filters sidechains
++        first and ``_apply_sort_limit_offset`` paginates the filtered set, so
++        ``limit=N`` returns N rows even when sidechains exist. The store path
++        must do the same — paginating before filtering would return short
++        pages and let sidechains consume page slots."""
++        store = InMemorySessionStore()
++        valid_sids: list[str] = []
++        for _ in range(5):
++            sid = str(uuid_mod.uuid4())
++            await _seed_chain(store, sid, n=1)
++            valid_sids.append(sid)
++        for _ in range(3):
++            sc = str(uuid_mod.uuid4())
++            entry = _user("sidechain", str(uuid_mod.uuid4()), None, sc)
++            entry["isSidechain"] = True
++            await store.append(
++                {"project_key": PROJECT_KEY, "session_id": sc},
++                [entry],  # type: ignore[arg-type]
++            )
++
++        page = await list_sessions_from_store(store, directory=DIR, limit=5)
++        assert len(page) == 5
++        assert {s.session_id for s in page} == set(valid_sids)
++
++        page2 = await list_sessions_from_store(store, directory=DIR, limit=5, offset=2)
++        assert len(page2) == 3
++        assert {s.session_id for s in page2}.issubset(set(valid_sids))
++
++    async def test_does_not_mutate_adapter_returned_list(self) -> None:
++        """Parity with TS: sorting must not mutate the list object returned
++        by store.list_sessions() (adapters may return internal state)."""
++
++        class RefStore(SessionStore):
++            def __init__(self) -> None:
++                self.internal = [
++                    {"session_id": "a", "mtime": 1},
++                    {"session_id": "b", "mtime": 2},
++                ]
++
++            async def append(self, key, entries):  # type: ignore[override]
++                pass
++
++            async def load(self, key):  # type: ignore[override]
++                return None
++
++            async def list_sessions(self, project_key):  # type: ignore[override]
++                return self.internal
++
++        store = RefStore()
++        await list_sessions_from_store(store, directory=DIR)
++        assert store.internal[0]["session_id"] == "a"
++        assert store.internal[1]["session_id"] == "b"
++
++    async def test_adapter_load_error_degrades_row(self) -> None:
++        """One failing load() degrades that row instead of failing the list."""
++
++        class FlakeyStore(InMemorySessionStore):
++            async def load(self, key):
++                if key["session_id"] == bad_sid:
++                    raise RuntimeError("backend down")
++                return await super().load(key)
++
++        store = FlakeyStore()
++        good_sid = str(uuid_mod.uuid4())
++        bad_sid = str(uuid_mod.uuid4())
++        await _seed_chain(store, good_sid)
++        await _seed_chain(store, bad_sid)
++
++        sessions = await list_sessions_from_store(store, directory=DIR)
++        by_id = {s.session_id: s for s in sessions}
++        assert by_id[good_sid].summary == "prompt 0"
++        # Degraded row: empty summary, mtime preserved.
++        assert by_id[bad_sid].summary == ""
++
++    async def test_load_concurrency_is_bounded(self) -> None:
++        """list_sessions_from_store must not issue unbounded concurrent
++        store.load() calls — large listings would otherwise exhaust adapter
++        connection pools. Regression for the paginate-after-filter refactor.
++
++        The bound itself is an implementation choice; what matters is that
++        some bound exists and is honoured, so this asserts a ceiling strictly
++        below the number of sessions rather than an exact constant."""
++        in_flight = 0
++        peak = 0
++        gate = asyncio.Event()
++
++        class SlowStore(InMemorySessionStore):
++            async def load(self, key):
++                nonlocal in_flight, peak
++                in_flight += 1
++                peak = max(peak, in_flight)
++                await gate.wait()
++                in_flight -= 1
++                return await super().load(key)
++
++        store = SlowStore()
++        n = 96
++        for i in range(n):
++            await InMemorySessionStore.append(
++                store,
++                {"project_key": PROJECT_KEY, "session_id": str(uuid_mod.uuid4())},
++                [{"type": "user", "uuid": f"u{i}"}],
++            )
++
++        task = asyncio.create_task(list_sessions_from_store(store, directory=DIR))
++        # Let the gather schedule and saturate the semaphore.
++        for _ in range(5):
++            await asyncio.sleep(0)
++        assert peak > 0, "loads should have started"
++        assert peak < n, f"unbounded: {peak} concurrent loads for {n} sessions"
++        saturated = peak
++        gate.set()
++        result = await task
++        # The ceiling held for the whole run, not just the first scheduling
++        # pass — a bound that is exceeded later is not a bound.
++        assert peak == saturated
++        assert len(result) <= n
++
++
++class TestGetSessionInfoFromStore:
++    async def test_returns_info_for_seeded_session(self) -> None:
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        await _seed_chain(store, sid)
++
++        info = await get_session_info_from_store(store, sid, directory=DIR)
++        assert info is not None
++        assert info.session_id == sid
++        assert info.summary == "prompt 0"
++        # created_at parsed from first entry's timestamp.
++        assert info.created_at is not None
++
++    async def test_returns_none_for_unknown(self) -> None:
++        store = InMemorySessionStore()
++        info = await get_session_info_from_store(
++            store, str(uuid_mod.uuid4()), directory=DIR
++        )
++        assert info is None
++
++    async def test_reflects_custom_title(self) -> None:
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        await _seed_chain(store, sid)
++        await rename_session_via_store(store, sid, "My Title", directory=DIR)
++
++        info = await get_session_info_from_store(store, sid, directory=DIR)
++        assert info is not None
++        assert info.custom_title == "My Title"
++        assert info.summary == "My Title"
++
++    async def test_cwd_falls_back_to_directory_when_entries_lack_cwd(self) -> None:
++        """Disk-path parity: when transcript entries omit ``cwd`` (the
++        ``_seed_chain`` helper writes none), ``SDKSessionInfo.cwd`` must fall
++        back to the requested directory, not None — and must agree with what
++        the on-disk reader reports for the same directory."""
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        await _seed_chain(store, sid)
++
++        info = await get_session_info_from_store(store, sid, directory=DIR)
++        assert info is not None
++        assert info.cwd is not None
++        assert Path(info.cwd).name == Path(DIR).name
++
++        listed = await list_sessions_from_store(store, directory=DIR)
++        assert listed and listed[0].cwd == info.cwd
++
++
++class TestGetSessionMessagesFromStore:
++    async def test_returns_chain_in_order(self) -> None:
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        uuids = await _seed_chain(store, sid, n=2)
++
++        msgs = await get_session_messages_from_store(store, sid, directory=DIR)
++        assert len(msgs) == 4
++        assert [m.uuid for m in msgs] == uuids
++        assert msgs[0].type == "user"
++        assert msgs[1].type == "assistant"
++
++    async def test_ignores_metadata_entries(self) -> None:
++        """custom-title/tag entries from rename/tag don't appear as messages."""
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        await _seed_chain(store, sid, n=1)
++        await rename_session_via_store(store, sid, "Title", directory=DIR)
++        await tag_session_via_store(store, sid, "exp", directory=DIR)
++
++        msgs = await get_session_messages_from_store(store, sid, directory=DIR)
++        assert len(msgs) == 2
++
++    async def test_limit_offset(self) -> None:
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        await _seed_chain(store, sid, n=3)
++        msgs = await get_session_messages_from_store(
++            store, sid, directory=DIR, limit=2, offset=2
++        )
++        assert len(msgs) == 2
++
++    async def test_unknown_session_empty(self) -> None:
++        store = InMemorySessionStore()
++        msgs = await get_session_messages_from_store(
++            store, str(uuid_mod.uuid4()), directory=DIR
++        )
++        assert msgs == []
++
++
++# ---------------------------------------------------------------------------
++# Subagent helpers — list_subagents / get_subagent_messages
++# ---------------------------------------------------------------------------
++
++
++class TestSubagentsFromStore:
++    async def test_subagent_listing_and_messages_contract(self) -> None:
++        """The whole subagent contract in one graded test: an agent is listed
++        once however many subpaths it appears under, nested subpaths work,
++        metadata entries are not messages, a non-UUID session is refused, and
++        a store that cannot enumerate subkeys is refused rather than silently
++        reporting nothing."""
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        await _seed_chain(store, sid)
++
++        # Same agent under a direct and a nested subpath -> listed once.
++        for sp in ("subagents/agent-abc", "subagents/workflows/run-1/agent-abc"):
++            await store.append(
++                {"project_key": PROJECT_KEY, "session_id": sid, "subpath": sp},
++                [_user("x", str(uuid_mod.uuid4()), None, sid)],  # type: ignore[arg-type]
++            )
++        # A second, distinct agent reached only through a nested subpath.
++        u_nested = str(uuid_mod.uuid4())
++        await store.append(
++            {
++                "project_key": PROJECT_KEY,
++                "session_id": sid,
++                "subpath": "subagents/workflows/run-2/agent-nested",
++            },
++            [
++                {"type": "agent_metadata", "name": "nested"},
++                _user("hi", u_nested, None, sid),
++            ],  # type: ignore[arg-type]
++        )
++
++        assert sorted(await list_subagents_from_store(store, sid, directory=DIR)) == [
++            "abc",
++            "nested",
++        ]
++
++        # Metadata entries are filtered out of the message stream.
++        msgs = await get_subagent_messages_from_store(
++            store, sid, "nested", directory=DIR
++        )
++        assert [m.type for m in msgs] == ["user"]
++
++        # A non-UUID session id yields nothing rather than raising.
++        assert await list_subagents_from_store(store, "not-a-uuid", directory=DIR) == []
++        assert (
++            await get_subagent_messages_from_store(
++                store, "not-a-uuid", "abc", directory=DIR
++            )
++            == []
++        )
++
++        # Enumeration genuinely needs list_subkeys — refuse rather than
++        # silently reporting an empty agent list.
++        minimal = _MinimalStore()
++        with pytest.raises(Exception) as excinfo:
++            await list_subagents_from_store(minimal, sid, directory=DIR)
++        assert not isinstance(
++            excinfo.value, (AttributeError, NameError, ImportError)
++        ), f"refusal must be deliberate, got {excinfo.value!r}"
++
++        # ...but fetching one known agent does not need it.
++        u_direct = str(uuid_mod.uuid4())
++        await minimal.append(
++            {
++                "project_key": PROJECT_KEY,
++                "session_id": sid,
++                "subpath": "subagents/agent-direct",
++            },
++            [_user("hi", u_direct, None, sid)],  # type: ignore[arg-type]
++        )
++        direct = await get_subagent_messages_from_store(
++            minimal, sid, "direct", directory=DIR
++        )
++        assert [m.type for m in direct] == ["user"]
++
++    async def test_list_and_get_subagent_messages(self) -> None:
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        await _seed_chain(store, sid)
++        # Seed a subagent transcript at the standard subpath.
++        sub_key: SessionKey = {
++            "project_key": PROJECT_KEY,
++            "session_id": sid,
++            "subpath": "subagents/agent-abc123",
++        }
++        u = str(uuid_mod.uuid4())
++        a = str(uuid_mod.uuid4())
++        await store.append(
++            sub_key,
++            [
++                _user("sub prompt", u, None, sid),
++                _assistant("sub reply", a, u, sid),
++            ],  # type: ignore[arg-type]
++        )
++
++        ids = await list_subagents_from_store(store, sid, directory=DIR)
++        assert ids == ["abc123"]
++
++        msgs = await get_subagent_messages_from_store(
++            store, sid, "abc123", directory=DIR
++        )
++        assert len(msgs) == 2
++        assert msgs[0].type == "user"
++        assert msgs[1].type == "assistant"
++
++    async def test_nested_workflow_subpath(self) -> None:
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        await _seed_chain(store, sid)
++        sub_key: SessionKey = {
++            "project_key": PROJECT_KEY,
++            "session_id": sid,
++            "subpath": "subagents/workflows/run-1/agent-nested",
++        }
++        u = str(uuid_mod.uuid4())
++        await store.append(sub_key, [_user("hi", u, None, sid)])  # type: ignore[arg-type]
++
++        ids = await list_subagents_from_store(store, sid, directory=DIR)
++        assert ids == ["nested"]
++
++        msgs = await get_subagent_messages_from_store(
++            store, sid, "nested", directory=DIR
++        )
++        assert len(msgs) == 1
++
++    async def test_filters_agent_metadata_entries(self) -> None:
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        sub_key: SessionKey = {
++            "project_key": PROJECT_KEY,
++            "session_id": sid,
++            "subpath": "subagents/agent-x",
++        }
++        u = str(uuid_mod.uuid4())
++        await store.append(
++            sub_key,
++            [
++                {"type": "agent_metadata", "name": "x"},
++                _user("hi", u, None, sid),
++            ],  # type: ignore[arg-type]
++        )
++        msgs = await get_subagent_messages_from_store(store, sid, "x", directory=DIR)
++        assert len(msgs) == 1
++
++    async def test_list_subagents_dedupes_agent_id_across_subpaths(self) -> None:
++        """Parity with TS: the same agent ID under multiple subpaths
++        (direct + nested workflow) is returned once."""
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        u = str(uuid_mod.uuid4())
++        for sp in (
++            "subagents/agent-abc",
++            "subagents/workflows/run-1/agent-abc",
++        ):
++            await store.append(
++                {"project_key": PROJECT_KEY, "session_id": sid, "subpath": sp},
++                [_user("x", u, None, sid)],  # type: ignore[arg-type]
++            )
++        ids = await list_subagents_from_store(store, sid, directory=DIR)
++        assert ids == ["abc"]
++
++    async def test_subagent_helpers_non_uuid_session_id(self) -> None:
++        """Parity with TS: list_subagents/get_subagent_messages return []
++        for a non-UUID session_id (no exception)."""
++        store = InMemorySessionStore()
++        assert await list_subagents_from_store(store, "not-a-uuid", directory=DIR) == []
++        assert (
++            await get_subagent_messages_from_store(
++                store, "not-a-uuid", "x", directory=DIR
++            )
++            == []
++        )
++
++    async def test_list_subagents_raises_when_store_lacks_list_subkeys(self) -> None:
++        store = _MinimalStore()
++        sid = str(uuid_mod.uuid4())
++        with pytest.raises(ValueError, match="does not implement list_subkeys"):
++            await list_subagents_from_store(store, sid, directory=DIR)
++
++    async def test_get_subagent_messages_direct_path_without_list_subkeys(self) -> None:
++        """Without list_subkeys, falls back to the direct subagents/agent-<id> path."""
++        store = _MinimalStore()
++        sid = str(uuid_mod.uuid4())
++        u = str(uuid_mod.uuid4())
++        await store.append(
++            {
++                "project_key": PROJECT_KEY,
++                "session_id": sid,
++                "subpath": "subagents/agent-direct",
++            },
++            [_user("hi", u, None, sid)],
++        )
++        msgs = await get_subagent_messages_from_store(
++            store, sid, "direct", directory=DIR
++        )
++        assert len(msgs) == 1
++
++
++# ---------------------------------------------------------------------------
++# Mutation helpers — rename / tag / delete / fork
++# ---------------------------------------------------------------------------
++
++
++class TestRenameSessionViaStore:
++    async def test_appends_custom_title_entry(self) -> None:
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        await _seed_chain(store, sid)
++
++        await rename_session_via_store(store, sid, "  New Title  ", directory=DIR)
++
++        entries = store.get_entries({"project_key": PROJECT_KEY, "session_id": sid})
++        last = entries[-1]
++        assert last["type"] == "custom-title"
++        assert last["customTitle"] == "New Title"
++        assert last["sessionId"] == sid
++        assert isinstance(last["uuid"], str)
++        assert isinstance(last["timestamp"], str)
++
++    async def test_invalid_inputs_raise(self) -> None:
++        store = InMemorySessionStore()
++        with pytest.raises(ValueError):
++            await rename_session_via_store(store, "not-a-uuid", "t")
++        with pytest.raises(ValueError):
++            await rename_session_via_store(store, str(uuid_mod.uuid4()), "  ")
++
++
++class TestTagSessionViaStore:
++    async def test_appends_tag_entry(self) -> None:
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        await _seed_chain(store, sid)
++
++        await tag_session_via_store(store, sid, "experiment", directory=DIR)
++
++        last = store.get_entries({"project_key": PROJECT_KEY, "session_id": sid})[-1]
++        assert last["type"] == "tag"
++        assert last["tag"] == "experiment"
++        assert last["sessionId"] == sid
++
++    async def test_none_clears_tag(self) -> None:
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        await _seed_chain(store, sid)
++        await tag_session_via_store(store, sid, None, directory=DIR)
++
++        last = store.get_entries({"project_key": PROJECT_KEY, "session_id": sid})[-1]
++        assert last["type"] == "tag"
++        assert last["tag"] == ""
++
++    async def test_tag_reflected_in_session_info(self) -> None:
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        await _seed_chain(store, sid)
++        await tag_session_via_store(store, sid, "exp", directory=DIR)
++
++        info = await get_session_info_from_store(store, sid, directory=DIR)
++        assert info is not None
++        assert info.tag == "exp"
++
++    async def test_tag_survives_adapter_key_reordering(self) -> None:
++        """The ``SessionStore.load`` contract permits adapters to reorder
++        object keys (Postgres JSONB does this). The tag extractor must not
++        depend on ``type`` being the first key in the serialized line."""
++
++        class ReorderingStore(InMemorySessionStore):
++            async def load(self, key):  # type: ignore[override]
++                entries = await super().load(key)
++                if entries is None:
++                    return None
++                # Sort keys alphabetically — deep-equal but different order.
++                return [dict(sorted(e.items())) for e in entries]
++
++        store = ReorderingStore()
++        sid = str(uuid_mod.uuid4())
++        await _seed_chain(store, sid)
++        await tag_session_via_store(store, sid, "exp", directory=DIR)
++
++        info = await get_session_info_from_store(store, sid, directory=DIR)
++        assert info is not None
++        assert info.tag == "exp"
++
++
++class TestDeleteSessionViaStore:
++    async def test_delete_contract(self) -> None:
++        """Deleting must actually remove the session, tolerate a store that
++        cannot delete, and refuse a session id it cannot validate — without
++        writing anything to the store on the refusal path."""
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        other = str(uuid_mod.uuid4())
++        await _seed_chain(store, sid)
++        await _seed_chain(store, other)
++        assert store.size == 2
++
++        await delete_session_via_store(store, sid, directory=DIR)
++        assert await store.load({"project_key": PROJECT_KEY, "session_id": sid}) is None
++        # Only the requested session went away.
++        assert (
++            await store.load({"project_key": PROJECT_KEY, "session_id": other})
++            is not None
++        )
++        assert store.size == 1
++        assert sid not in [
++            s.session_id for s in await list_sessions_from_store(store, directory=DIR)
++        ]
++
++        # A store without delete() is a documented no-op, not an error.
++        await delete_session_via_store(_MinimalStore(), other, directory=DIR)
++
++        # A non-UUID id is refused and must not mutate the store.
++        appended = False
++
++        class SpyStore(InMemorySessionStore):
++            async def append(self, key, entries):
++                nonlocal appended
++                appended = True
++                await super().append(key, entries)
++
++        spy = SpyStore()
++        with pytest.raises(ValueError, match="not-a-uuid"):
++            await delete_session_via_store(spy, "not-a-uuid", directory=DIR)
++        assert appended is False
++
++    async def test_removes_session(self) -> None:
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        await _seed_chain(store, sid)
++        assert store.size == 1
++
++        await delete_session_via_store(store, sid, directory=DIR)
++        assert store.size == 0
++        assert await store.load({"project_key": PROJECT_KEY, "session_id": sid}) is None
++
++    async def test_noop_when_store_lacks_delete(self) -> None:
++        """Per the SessionStore contract, missing delete() is a no-op."""
++        store = _MinimalStore()
++        sid = str(uuid_mod.uuid4())
++        # Should not raise.
++        await delete_session_via_store(store, sid, directory=DIR)
++
++    async def test_rejects_non_uuid_session_id(self) -> None:
++        """Parity with TS: delete/tag reject non-UUID without touching the store."""
++        appended = False
++
++        class SpyStore(InMemorySessionStore):
++            async def append(self, key, entries):
++                nonlocal appended
++                appended = True
++                await super().append(key, entries)
++
++        store = SpyStore()
++        with pytest.raises(ValueError, match="not-a-uuid"):
++            await delete_session_via_store(store, "not-a-uuid", directory=DIR)
++        with pytest.raises(ValueError, match="not-a-uuid"):
++            await tag_session_via_store(store, "not-a-uuid", "tag", directory=DIR)
++        assert appended is False
++
++
++class TestForkSessionViaStore:
++    async def test_fork_contract(self) -> None:
++        """One graded test for the whole fork contract: a new independent
++        session, message identity not shared with the original, the chain
++        preserved, slicing at a given message, a title derived from the
++        original, and non-UUID inputs refused."""
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        src_uuids = await _seed_chain(store, sid, n=3)
++        await store.append(
++            {"project_key": PROJECT_KEY, "session_id": sid},
++            [{"type": "custom-title", "customTitle": "Original", "sessionId": sid}],  # type: ignore[list-item]
++        )
++
++        result = await fork_session_via_store(store, sid, directory=DIR)
++        assert result.session_id != sid
++
++        forked = store.get_entries(
++            {"project_key": PROJECT_KEY, "session_id": result.session_id}
++        )
++        msgs = [e for e in forked if e["type"] in ("user", "assistant")]
++        assert len(msgs) == 6
++
++        # Independent identity: no message uuid is shared with the original,
++        # so later history in one session can never be confused with the other.
++        assert all(e["uuid"] not in src_uuids for e in msgs)
++        assert all(e["sessionId"] == result.session_id for e in msgs)
++
++        # Chain preserved.
++        assert msgs[0]["parentUuid"] is None
++        for prev, cur in zip(msgs, msgs[1:], strict=False):
++            assert cur["parentUuid"] == prev["uuid"]
++
++        # Title derived from the original rather than left empty.
++        trailer = forked[-1]
++        assert trailer["type"] == "custom-title"
++        assert "Original" in trailer["customTitle"]
++        assert isinstance(trailer["uuid"], str) and trailer["uuid"]
++        assert isinstance(trailer["timestamp"], str) and trailer["timestamp"]
++
++        # Slicing at a message ends the fork there.
++        sliced = await fork_session_via_store(
++            store, sid, directory=DIR, up_to_message_id=src_uuids[1]
++        )
++        sliced_msgs = [
++            e
++            for e in store.get_entries(
++                {"project_key": PROJECT_KEY, "session_id": sliced.session_id}
++            )
++            if e["type"] in ("user", "assistant")
++        ]
++        assert len(sliced_msgs) == 2
++
++        # The fork is readable back through the ordinary read path.
++        read_back = await get_session_messages_from_store(
++            store, result.session_id, directory=DIR
++        )
++        assert len(read_back) == 6
++
++        # Non-UUID inputs are refused.
++        with pytest.raises(ValueError, match="Invalid session_id"):
++            await fork_session_via_store(store, "not-a-uuid", directory=DIR)
++        with pytest.raises(ValueError, match="Invalid up_to_message_id"):
++            await fork_session_via_store(
++                store, sid, directory=DIR, up_to_message_id="not-a-uuid"
++            )
++
++
++    async def test_round_trips_with_new_uuids(self) -> None:
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        src_uuids = await _seed_chain(store, sid, n=2)
++
++        result = await fork_session_via_store(store, sid, directory=DIR)
++        assert result.session_id != sid
++
++        forked = store.get_entries(
++            {"project_key": PROJECT_KEY, "session_id": result.session_id}
++        )
++        # 4 messages + custom-title trailer
++        msg_entries = [e for e in forked if e["type"] in ("user", "assistant")]
++        assert len(msg_entries) == 4
++        for e in msg_entries:
++            assert e["sessionId"] == result.session_id
++            assert e["uuid"] not in src_uuids
++            assert e["forkedFrom"]["sessionId"] == sid
++        # Chain integrity: each message's parentUuid is the previous uuid.
++        assert msg_entries[0]["parentUuid"] is None
++        for prev, cur in zip(msg_entries, msg_entries[1:], strict=False):
++            assert cur["parentUuid"] == prev["uuid"]
++        # Trailing custom-title entry present with uuid + timestamp.
++        trailer = forked[-1]
++        assert trailer["type"] == "custom-title"
++        assert isinstance(trailer["uuid"], str) and trailer["uuid"]
++        assert isinstance(trailer["timestamp"], str) and trailer["timestamp"]
++
++    async def test_derives_title_from_original_custom_title(self) -> None:
++        """P0-1 regression: title scan must read ORIGINAL store entries, not
++        the already-partitioned transcript (which drops custom-title entries).
++        """
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        await _seed_chain(store, sid, n=1)
++        # Append a custom-title entry as rename_session_via_store would.
++        await store.append(
++            {"project_key": PROJECT_KEY, "session_id": sid},
++            [{"type": "custom-title", "customTitle": "My Title", "sessionId": sid}],  # type: ignore[list-item]
++        )
++
++        result = await fork_session_via_store(store, sid, directory=DIR)
++        forked = store.get_entries(
++            {"project_key": PROJECT_KEY, "session_id": result.session_id}
++        )
++        assert forked[-1]["type"] == "custom-title"
++        assert forked[-1]["customTitle"] == "My Title (fork)"
++
++    async def test_derives_title_from_ai_title_when_no_custom(self) -> None:
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        await _seed_chain(store, sid, n=1)
++        await store.append(
++            {"project_key": PROJECT_KEY, "session_id": sid},
++            [{"type": "ai-title", "aiTitle": "Generated", "sessionId": sid}],  # type: ignore[list-item]
++        )
++
++        result = await fork_session_via_store(store, sid, directory=DIR)
++        forked = store.get_entries(
++            {"project_key": PROJECT_KEY, "session_id": result.session_id}
++        )
++        assert forked[-1]["customTitle"] == "Generated (fork)"
++
++    async def test_content_replacement_entry_has_uuid_and_timestamp(self) -> None:
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        await _seed_chain(store, sid, n=1)
++        await store.append(
++            {"project_key": PROJECT_KEY, "session_id": sid},
++            [
++                {
++                    "type": "content-replacement",
++                    "sessionId": sid,
++                    "replacements": [{"toolUseId": "t1", "value": "redacted"}],
++                }
++            ],  # type: ignore[list-item]
++        )
++
++        result = await fork_session_via_store(store, sid, directory=DIR)
++        forked = store.get_entries(
++            {"project_key": PROJECT_KEY, "session_id": result.session_id}
++        )
++        cr = next(e for e in forked if e["type"] == "content-replacement")
++        assert cr["sessionId"] == result.session_id
++        assert isinstance(cr["uuid"], str) and cr["uuid"]
++        assert isinstance(cr["timestamp"], str) and cr["timestamp"]
++
++    async def test_fork_readable_via_get_session_messages(self) -> None:
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        await _seed_chain(store, sid, n=2)
++
++        result = await fork_session_via_store(store, sid, directory=DIR, title="Forked")
++        msgs = await get_session_messages_from_store(
++            store, result.session_id, directory=DIR
++        )
++        assert len(msgs) == 4
++
++    async def test_up_to_message_id(self) -> None:
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        uuids = await _seed_chain(store, sid, n=3)
++
++        result = await fork_session_via_store(
++            store, sid, directory=DIR, up_to_message_id=uuids[1]
++        )
++        forked = store.get_entries(
++            {"project_key": PROJECT_KEY, "session_id": result.session_id}
++        )
++        msg_entries = [e for e in forked if e["type"] in ("user", "assistant")]
++        assert len(msg_entries) == 2
++
++    async def test_not_found_raises(self) -> None:
++        store = InMemorySessionStore()
++        with pytest.raises(FileNotFoundError):
++            await fork_session_via_store(store, str(uuid_mod.uuid4()), directory=DIR)
++
++    async def test_rejects_non_uuid_session_id_and_up_to(self) -> None:
++        """Parity with TS: fork rejects a non-UUID session_id and a
++        non-UUID up_to_message_id."""
++        store = InMemorySessionStore()
++        with pytest.raises(ValueError, match="Invalid session_id"):
++            await fork_session_via_store(store, "not-a-uuid", directory=DIR)
++        sid = str(uuid_mod.uuid4())
++        await _seed_chain(store, sid)
++        with pytest.raises(ValueError, match="Invalid up_to_message_id"):
++            await fork_session_via_store(
++                store, sid, directory=DIR, up_to_message_id="not-a-uuid"
++            )
++
++    async def test_fork_preserves_chain_and_stamps_synthetic_entries(self) -> None:
++        """Parity with TS forkSession test: UUIDs remapped, parentUuid chain
++        preserved, content-replacement carried with new sessionId, and both
++        synthetic entries (custom-title + content-replacement) carry
++        uuid+timestamp for the SessionStore.append dedup contract."""
++        store = InMemorySessionStore()
++        sid = str(uuid_mod.uuid4())
++        u1 = _user("one", str(uuid_mod.uuid4()), None, sid)
++        a1 = _assistant("two", str(uuid_mod.uuid4()), u1["uuid"], sid)
++        u2 = _user("three", str(uuid_mod.uuid4()), a1["uuid"], sid)
++        cr = {
++            "type": "content-replacement",
++            "sessionId": sid,
++            "replacements": [{"toolUseId": "tu_1", "newContent": "x"}],
++        }
++        await store.append(
++            {"project_key": PROJECT_KEY, "session_id": sid},
++            [u1, a1, u2, cr],  # type: ignore[arg-type]
++        )
++
++        result = await fork_session_via_store(
++            store, sid, directory=DIR, up_to_message_id=a1["uuid"], title="My Fork"
++        )
++        assert result.session_id != sid
++        forked = store.get_entries(
++            {"project_key": PROJECT_KEY, "session_id": result.session_id}
++        )
++        # 2 transcript entries (sliced at a1) + 1 content-replacement + 1 custom-title
++        assert len(forked) == 4
++        f0, f1, cr_out, title = forked
++
++        # UUIDs remapped, chain preserved.
++        assert f0["uuid"] != u1["uuid"]
++        assert f0["parentUuid"] is None
++        assert f1["parentUuid"] == f0["uuid"]
++        assert f0["sessionId"] == result.session_id
++        assert f0["forkedFrom"]["messageUuid"] == u1["uuid"]
++
++        # Custom-title entry carries uuid+timestamp.
++        assert title["type"] == "custom-title"
++        assert title["customTitle"] == "My Fork"
++        assert isinstance(title["uuid"], str) and title["uuid"]
++        assert isinstance(title["timestamp"], str)
++
++        # Content-replacement entry rewritten and stamped.
++        assert cr_out["type"] == "content-replacement"
++        assert cr_out["sessionId"] == result.session_id
++        assert isinstance(cr_out["uuid"], str) and cr_out["uuid"]
++        assert isinstance(cr_out["timestamp"], str)
+diff --git a/tests/test_session_resume.py b/tests/test_session_resume.py
+new file mode 100644
+index 0000000..f3ccdda
+--- /dev/null
++++ b/tests/test_session_resume.py
+@@ -0,0 +1,1566 @@
++"""Tests for SessionStore-backed resume materialization."""
++
++from __future__ import annotations
++
++import asyncio
++import errno
++import json
++import os
++import shutil
++import tempfile
++import uuid
++from pathlib import Path
++from typing import Any
++from unittest.mock import AsyncMock, Mock, patch
++
++import pytest
++
++from claude_agent_sdk import (
++    ClaudeAgentOptions,
++    ClaudeSDKClient,
++    CLIConnectionError,
++    InMemorySessionStore,
++    project_key_for_directory,
++    query,
++)
++from claude_agent_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
++from claude_agent_sdk.types import SessionKey, SessionStore, SessionStoreEntry
++
++SESSION_ID = "550e8400-e29b-41d4-a716-446655440000"
++SESSION_ID_2 = "660e8400-e29b-41d4-a716-446655440000"
++
++
++class _Staged:
++    """What the SDK prepared for the CLI subprocess, as the subprocess sees it.
++
++    Observed purely from the options handed to the transport: the config
++    directory the subprocess is pointed at and the session id it is told to
++    resume. ``cleanup()`` ends the session the same way an application would.
++    """
++
++    def __init__(self, client: ClaudeSDKClient, transport_options: Any) -> None:
++        self._client = client
++        self.options = transport_options
++        self.config_dir = Path(transport_options.env["CLAUDE_CONFIG_DIR"])
++        self.resume_session_id = transport_options.resume
++
++    async def cleanup(self) -> None:
++        await self._client.disconnect()
++
++
++async def _stage(options: ClaudeAgentOptions) -> _Staged | None:
++    """Connect with the subprocess stubbed out and report what was staged.
++
++    Returns ``None`` when the SDK staged nothing — i.e. the options that
++    reached the transport still point at the caller's own configuration.
++    """
++    captured: dict[str, Any] = {}
++    transport = _make_mock_transport()
++
++    def capture(*, prompt: Any, options: Any) -> Any:
++        captured["options"] = options
++        return transport
++
++    client = ClaudeSDKClient(options=options)
++    with (
++        patch(
++            "claude_agent_sdk._internal.transport.subprocess_cli."
++            "SubprocessCLITransport",
++            side_effect=capture,
++        ),
++        patch(
++            "claude_agent_sdk._internal.query.Query.initialize",
++            new_callable=AsyncMock,
++        ),
++    ):
++        await client.connect()
++
++    transport_options = captured["options"]
++    staged_dir = transport_options.env.get("CLAUDE_CONFIG_DIR")
++    if staged_dir is None or staged_dir == options.env.get("CLAUDE_CONFIG_DIR"):
++        await client.disconnect()
++        return None
++    return _Staged(client, transport_options)
++
++
++def _assert_deliberate_failure(excinfo: Any) -> None:
++    """The read must fail because the budget was exceeded, not because the
++    code blew up. The exception type and wording are the implementation's
++    choice; a programming error is not an acceptable way to satisfy it."""
++    exc = excinfo.value
++    assert not isinstance(
++        exc, (TypeError, AttributeError, NameError, ImportError, KeyError, IndexError)
++    ), f"failed with a programming error rather than a timeout: {exc!r}"
++
++
++async def _assert_bounded_failure(options: ClaudeAgentOptions, budget_s: float = 10.0) -> None:
++    """Staging must fail *promptly* because the configured read budget was
++    exceeded — not hang until some outer guard gives up, and not blow up with
++    a programming error. The exception type and wording are the
++    implementation's choice; the timeliness is the contract.
++    """
++    loop = asyncio.get_running_loop()
++    started = loop.time()
++    with pytest.raises(Exception) as excinfo:
++        await asyncio.wait_for(_stage(options), timeout=budget_s * 6)
++    elapsed = loop.time() - started
++    _assert_deliberate_failure(excinfo)
++    assert elapsed < budget_s, (
++        f"read was not bounded: failed only after {elapsed:.1f}s "
++        f"(load_timeout_ms should have fired almost immediately)"
++    )
++
++
++class _FixedMtimeStore(InMemorySessionStore):
++    """Store whose listing reports caller-chosen mtimes.
++
++    ``list_sessions`` is part of the store protocol, so an adapter deciding
++    what "most recent" means is ordinary published behaviour — no internal
++    state is touched.
++    """
++
++    def __init__(self) -> None:
++        super().__init__()
++        self.mtimes: dict[str, int] = {}
++
++    async def list_sessions(self, project_key):  # type: ignore[override]
++        rows = await super().list_sessions(project_key)
++        return [
++            {**row, "mtime": self.mtimes.get(row["session_id"], row["mtime"])}
++            for row in rows
++        ]
++
++
++@pytest.fixture
++def cwd(tmp_path: Path) -> Path:
++    d = tmp_path / "project"
++    d.mkdir()
++    return d
++
++
++@pytest.fixture
++def project_key(cwd: Path) -> str:
++    return project_key_for_directory(cwd)
++
++
++@pytest.fixture
++def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
++    """Redirect ~ and clear auth env so tests don't touch the real config."""
++    home = tmp_path / "home"
++    home.mkdir()
++    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
++    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
++    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
++    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
++    # Seed a credential file under the fake home so credential discovery
++    # always resolves here. Without it an implementation is free to consult a
++    # platform secret store, and a test run on a logged-in developer machine
++    # could copy real credentials into a temp dir.
++    config = home / ".claude"
++    config.mkdir()
++    (config / ".credentials.json").write_text(
++        json.dumps({"claudeAiOauth": {"accessToken": "test-token"}})
++    )
++    return home
++
++
++# ---------------------------------------------------------------------------
++# materialize_resume_session — None cases
++# ---------------------------------------------------------------------------
++
++
++class TestNoMaterialization:
++    @pytest.mark.asyncio
++    async def test_no_store(self, cwd: Path) -> None:
++        opts = ClaudeAgentOptions(cwd=cwd, resume=SESSION_ID)
++        assert await _stage(opts) is None
++
++    @pytest.mark.asyncio
++    async def test_no_resume_or_continue(self, cwd: Path) -> None:
++        opts = ClaudeAgentOptions(cwd=cwd, session_store=InMemorySessionStore())
++        assert await _stage(opts) is None
++
++    @pytest.mark.asyncio
++    async def test_non_uuid_session_id(self, cwd: Path) -> None:
++        store = InMemorySessionStore()
++        opts = ClaudeAgentOptions(
++            cwd=cwd, session_store=store, resume="../../etc/passwd"
++        )
++        assert await _stage(opts) is None
++
++    @pytest.mark.asyncio
++    async def test_load_returns_none(self, cwd: Path) -> None:
++        opts = ClaudeAgentOptions(
++            cwd=cwd, session_store=InMemorySessionStore(), resume=SESSION_ID
++        )
++        assert await _stage(opts) is None
++
++    @pytest.mark.asyncio
++    async def test_load_returns_empty(self, cwd: Path, project_key: str) -> None:
++        store = InMemorySessionStore()
++        await store.append({"project_key": project_key, "session_id": SESSION_ID}, [])
++        opts = ClaudeAgentOptions(cwd=cwd, session_store=store, resume=SESSION_ID)
++        assert await _stage(opts) is None
++
++    @pytest.mark.asyncio
++    async def test_continue_with_empty_list_sessions(self, cwd: Path) -> None:
++        opts = ClaudeAgentOptions(
++            cwd=cwd,
++            session_store=InMemorySessionStore(),
++            continue_conversation=True,
++        )
++        assert await _stage(opts) is None
++
++
++# ---------------------------------------------------------------------------
++# materialize_resume_session — happy paths
++# ---------------------------------------------------------------------------
++
++
++class TestHappyPath:
++    @pytest.mark.asyncio
++    async def test_resume_writes_jsonl_and_cleanup_removes_dir(
++        self, cwd: Path, project_key: str, isolated_home: Path
++    ) -> None:
++        store = InMemorySessionStore()
++        entries: list[SessionStoreEntry] = [
++            {
++                "type": "user",
++                "uuid": "u1",
++                "message": {"role": "user", "content": "hi"},
++            },
++            {"type": "assistant", "uuid": "a1"},
++        ]
++        await store.append(
++            {"project_key": project_key, "session_id": SESSION_ID}, entries
++        )
++
++        opts = ClaudeAgentOptions(cwd=cwd, session_store=store, resume=SESSION_ID)
++        m = await _stage(opts)
++        assert m is not None
++        assert m.resume_session_id == SESSION_ID
++        assert m.config_dir.is_dir()
++
++        jsonl = m.config_dir / "projects" / project_key / f"{SESSION_ID}.jsonl"
++        assert jsonl.is_file()
++        lines = jsonl.read_text().splitlines()
++        assert len(lines) == 2
++        assert json.loads(lines[0]) == entries[0]
++        assert json.loads(lines[1]) == entries[1]
++
++        await m.cleanup()
++        assert not m.config_dir.exists()
++
++    @pytest.mark.asyncio
++    async def test_credentials_redacted(
++        self, cwd: Path, project_key: str, isolated_home: Path
++    ) -> None:
++        # Seed a credentials file with a refreshToken under the fake ~/.claude/.
++        config = isolated_home / ".claude"
++        config.mkdir(exist_ok=True)
++        (config / ".credentials.json").write_text(
++            json.dumps(
++                {"claudeAiOauth": {"accessToken": "at", "refreshToken": "SECRET"}}
++            )
++        )
++        (isolated_home / ".claude.json").write_text('{"theme":"dark"}')
++
++        store = InMemorySessionStore()
++        await store.append(
++            {"project_key": project_key, "session_id": SESSION_ID},
++            [{"type": "user", "uuid": "u1"}],
++        )
++
++        opts = ClaudeAgentOptions(cwd=cwd, session_store=store, resume=SESSION_ID)
++        m = await _stage(opts)
++        assert m is not None
++
++        creds = json.loads((m.config_dir / ".credentials.json").read_text())
++        assert creds["claudeAiOauth"]["accessToken"] == "at", (
++            "staged credentials must still authenticate"
++        )
++        assert "refreshToken" not in creds["claudeAiOauth"], (
++            "long-lived renewal secret must not reach the staging area"
++        )
++        assert "SECRET" not in (m.config_dir / ".credentials.json").read_text()
++
++        await m.cleanup()
++
++    @pytest.mark.asyncio
++    async def test_credentials_from_caller_config_dir_env(
++        self, cwd: Path, project_key: str, tmp_path: Path
++    ) -> None:
++        # options.env CLAUDE_CONFIG_DIR takes precedence over ~ lookup.
++        custom = tmp_path / "custom-config"
++        custom.mkdir()
++        (custom / ".credentials.json").write_text(
++            json.dumps({"claudeAiOauth": {"accessToken": "fromenv"}})
++        )
++
++        store = InMemorySessionStore()
++        await store.append(
++            {"project_key": project_key, "session_id": SESSION_ID},
++            [{"type": "user", "uuid": "u1"}],
++        )
++        opts = ClaudeAgentOptions(
++            cwd=cwd,
++            session_store=store,
++            resume=SESSION_ID,
++            env={"CLAUDE_CONFIG_DIR": str(custom)},
++        )
++        m = await _stage(opts)
++        assert m is not None
++        creds = json.loads((m.config_dir / ".credentials.json").read_text())
++        assert creds["claudeAiOauth"]["accessToken"] == "fromenv"
++        await m.cleanup()
++
++    @pytest.mark.asyncio
++    async def test_continue_picks_most_recent(
++        self, cwd: Path, project_key: str, isolated_home: Path
++    ) -> None:
++        store = _FixedMtimeStore()
++        # Older session first.
++        await store.append(
++            {"project_key": project_key, "session_id": SESSION_ID},
++            [{"type": "user", "uuid": "old"}],
++        )
++        store.mtimes[SESSION_ID] = 1000
++        await store.append(
++            {"project_key": project_key, "session_id": SESSION_ID_2},
++            [{"type": "user", "uuid": "new"}],
++        )
++        store.mtimes[SESSION_ID_2] = 2000
++
++        opts = ClaudeAgentOptions(
++            cwd=cwd, session_store=store, continue_conversation=True
++        )
++        m = await _stage(opts)
++        assert m is not None
++        assert m.resume_session_id == SESSION_ID_2
++        await m.cleanup()
++
++    @pytest.mark.asyncio
++    async def test_continue_skips_sidechain_sessions(
++        self, cwd: Path, project_key: str, isolated_home: Path
++    ) -> None:
++        """Sidechain transcripts are mirrored as ordinary top-level keys and
++        often have the highest mtime. ``continue_conversation`` must skip them
++        and resume the most-recent main session, matching the CLI's own
++        ``--continue`` filter."""
++        store = _FixedMtimeStore()
++        sidechain_sid = str(uuid.uuid4())
++        await store.append(
++            {"project_key": project_key, "session_id": SESSION_ID},
++            [{"type": "user", "uuid": "main"}],
++        )
++        store.mtimes[SESSION_ID] = 1000
++        await store.append(
++            {"project_key": project_key, "session_id": sidechain_sid},
++            [{"type": "user", "uuid": "sc", "isSidechain": True}],
++        )
++        store.mtimes[sidechain_sid] = 2000  # newer
++
++        opts = ClaudeAgentOptions(
++            cwd=cwd, session_store=store, continue_conversation=True
++        )
++        m = await _stage(opts)
++        assert m is not None
++        assert m.resume_session_id == SESSION_ID
++        await m.cleanup()
++
++    @pytest.mark.asyncio
++    async def test_continue_returns_none_when_only_sidechains(
++        self, cwd: Path, project_key: str, isolated_home: Path
++    ) -> None:
++        store = InMemorySessionStore()
++        sc = str(uuid.uuid4())
++        await store.append(
++            {"project_key": project_key, "session_id": sc},
++            [{"type": "user", "isSidechain": True}],
++        )
++        opts = ClaudeAgentOptions(
++            cwd=cwd, session_store=store, continue_conversation=True
++        )
++        assert await _stage(opts) is None
++
++    @pytest.mark.asyncio
++    async def test_continue_tie_break_is_deterministic(
++        self, cwd: Path, project_key: str, isolated_home: Path
++    ) -> None:
++        """Parity with TS: when two sessions share the same mtime,
++        continue_conversation picks one deterministically (sorted() is stable
++        on equal keys → first listed wins; repeated calls agree)."""
++        store = _FixedMtimeStore()
++        for sid in (SESSION_ID, SESSION_ID_2):
++            await store.append(
++                {"project_key": project_key, "session_id": sid},
++                [{"type": "user", "uuid": f"u-{sid}"}],
++            )
++            store.mtimes[sid] = 5000  # identical mtimes
++
++        opts = ClaudeAgentOptions(
++            cwd=cwd, session_store=store, continue_conversation=True
++        )
++        first = await _stage(opts)
++        assert first is not None
++        first_id = first.resume_session_id
++        await first.cleanup()
++
++        # Second call must pick the same session.
++        second = await _stage(opts)
++        assert second is not None
++        assert second.resume_session_id == first_id
++        await second.cleanup()
++
++    @pytest.mark.asyncio
++    async def test_staged_transcript_round_trips(
++        self, cwd: Path, project_key: str, isolated_home: Path
++    ) -> None:
++        """What the CLI reads back must reparse to exactly what the store
++        returned — including embedded quotes, newlines, nesting and nulls —
++        one JSON document per line."""
++        entries: list[SessionStoreEntry] = [
++            {
++                "type": "user" if i % 2 == 0 else "assistant",
++                "uuid": f"uuid-{i}",
++                "message": {"role": "user", "content": f'line {i} "q" \n nl'},
++                "nested": {"a": [i, i + 1], "b": None},
++            }
++            for i in range(100)
++        ]
++        store = InMemorySessionStore()
++        await store.append(
++            {"project_key": project_key, "session_id": SESSION_ID}, entries
++        )
++
++        opts = ClaudeAgentOptions(cwd=cwd, session_store=store, resume=SESSION_ID)
++        m = await _stage(opts)
++        assert m is not None
++
++        written = (
++            m.config_dir / "projects" / project_key / f"{SESSION_ID}.jsonl"
++        ).read_text(encoding="utf-8")
++        lines = written.split("\n")
++        assert lines[-1] == ""  # trailing newline, no blank record
++        assert [json.loads(ln) for ln in lines[:-1]] == entries
++
++        await m.cleanup()
++
++
++# ---------------------------------------------------------------------------
++# Subkey materialization
++# ---------------------------------------------------------------------------
++
++
++class TestSubkeyMaterialization:
++    @pytest.mark.asyncio
++    async def test_subagent_jsonl_and_meta_json(
++        self, cwd: Path, project_key: str, isolated_home: Path
++    ) -> None:
++        store = InMemorySessionStore()
++        main_key: SessionKey = {"project_key": project_key, "session_id": SESSION_ID}
++        await store.append(main_key, [{"type": "user", "uuid": "u1"}])
++
++        sub_key: SessionKey = {
++            "project_key": project_key,
++            "session_id": SESSION_ID,
++            "subpath": "subagents/agent-abc",
++        }
++        await store.append(
++            sub_key,
++            [
++                {"type": "user", "uuid": "su1"},
++                {"type": "assistant", "uuid": "sa1"},
++                {"type": "agent_metadata", "agentType": "general", "ver": 1},
++            ],
++        )
++
++        opts = ClaudeAgentOptions(cwd=cwd, session_store=store, resume=SESSION_ID)
++        m = await _stage(opts)
++        assert m is not None
++
++        session_dir = m.config_dir / "projects" / project_key / SESSION_ID
++        jsonl = session_dir / "subagents" / "agent-abc.jsonl"
++        meta = session_dir / "subagents" / "agent-abc.meta.json"
++
++        assert jsonl.is_file()
++        lines = [json.loads(ln) for ln in jsonl.read_text().splitlines()]
++        assert lines == [
++            {"type": "user", "uuid": "su1"},
++            {"type": "assistant", "uuid": "sa1"},
++        ]
++
++        assert meta.is_file()
++        # 'type' field stripped from metadata.
++        assert json.loads(meta.read_text()) == {"agentType": "general", "ver": 1}
++
++        await m.cleanup()
++
++    @pytest.mark.asyncio
++    async def test_traversal_guards(
++        self, cwd: Path, project_key: str, isolated_home: Path
++    ) -> None:
++        class EvilStore(InMemorySessionStore):
++            async def list_subkeys(self, key):  # type: ignore[override]
++                return [
++                    "",
++                    ".",
++                    "./",
++                    "a/.",
++                    "subagents/.",
++                    "/etc/passwd",
++                    "../escape",
++                    "a/../b",
++                    "C:escape",
++                    "C:\\abs",
++                    "subagents/agent\x00x",
++                    "subagents/agent-ok",
++                ]
++
++            async def load(self, key):  # type: ignore[override]
++                if key.get("subpath") == "subagents/agent-ok":
++                    return [{"type": "user", "uuid": "ok"}]
++                if key.get("subpath") is None:
++                    return [{"type": "user", "uuid": "main"}]
++                # Unsafe subpaths should never be loaded — fail loudly if they are.
++                raise AssertionError(f"loaded unsafe subpath {key!r}")
++
++        opts = ClaudeAgentOptions(cwd=cwd, session_store=EvilStore(), resume=SESSION_ID)
++        m = await _stage(opts)
++        assert m is not None
++
++        session_dir = m.config_dir / "projects" / project_key / SESSION_ID
++        # Only the safe subpath was written.
++        assert (session_dir / "subagents" / "agent-ok.jsonl").is_file()
++        # Main transcript was not overwritten by any subkey load (regression
++        # for subpath='.' which previously resolved to project_dir/{sid}.jsonl).
++        main_jsonl = m.config_dir / "projects" / project_key / f"{SESSION_ID}.jsonl"
++        assert [json.loads(line) for line in main_jsonl.read_text().splitlines()] == [
++            {"type": "user", "uuid": "main"}
++        ]
++        # Nothing escaped the temp dir.
++        for root, _dirs, files in os.walk(m.config_dir):
++            for f in files:
++                p = Path(root) / f
++                assert str(p).startswith(str(m.config_dir))
++        await m.cleanup()
++
++    @pytest.mark.asyncio
++    async def test_store_without_list_subkeys_skips_subagents(
++        self, cwd: Path, project_key: str, isolated_home: Path
++    ) -> None:
++        class MinimalStore(SessionStore):
++            async def append(self, key, entries):  # type: ignore[override]
++                pass
++
++            async def load(self, key):  # type: ignore[override]
++                return [{"type": "user", "uuid": "u1"}]
++
++        opts = ClaudeAgentOptions(
++            cwd=cwd, session_store=MinimalStore(), resume=SESSION_ID
++        )
++        m = await _stage(opts)
++        assert m is not None
++        # Just the main transcript — no subagent dir created.
++        assert (
++            m.config_dir / "projects" / project_key / f"{SESSION_ID}.jsonl"
++        ).is_file()
++        assert not (m.config_dir / "projects" / project_key / SESSION_ID).exists()
++        await m.cleanup()
++
++
++# ---------------------------------------------------------------------------
++# Timeouts and error wrapping
++# ---------------------------------------------------------------------------
++
++
++class TestTimeoutsAndErrors:
++    @pytest.mark.asyncio
++    async def test_store_read_timeout_contract(
++        self, cwd: Path, project_key: str, isolated_home: Path
++    ) -> None:
++        """``load_timeout_ms`` bounds *every* store read taken during resume,
++        not just the transcript load. A store that hangs in any of them must
++        make the connection fail instead of hanging the caller forever — and a
++        hang after staging has begun must not leak the staged directory."""
++
++        # 1. A hanging load().
++        class HangingLoad(SessionStore):
++            async def append(self, key, entries):  # type: ignore[override]
++                pass
++
++            async def load(self, key):  # type: ignore[override]
++                await asyncio.sleep(3600)
++                return None
++
++        await _assert_bounded_failure(
++            ClaudeAgentOptions(
++                cwd=cwd,
++                session_store=HangingLoad(),
++                resume=SESSION_ID,
++                load_timeout_ms=50,
++            )
++        )
++
++        # 2. A hanging list_sessions() on the continue path.
++        class HangingList(SessionStore):
++            async def append(self, key, entries):  # type: ignore[override]
++                pass
++
++            async def load(self, key):  # type: ignore[override]
++                return None
++
++            async def list_sessions(self, project_key):  # type: ignore[override]
++                await asyncio.sleep(3600)
++                return []
++
++        await _assert_bounded_failure(
++            ClaudeAgentOptions(
++                cwd=cwd,
++                session_store=HangingList(),
++                continue_conversation=True,
++                load_timeout_ms=50,
++            )
++        )
++
++        # 3. A hanging list_subkeys(), which happens *after* staging has
++        #    started — the staged directory must still be removed.
++        class HangingSubkeys(InMemorySessionStore):
++            async def list_subkeys(self, key):  # type: ignore[override]
++                await asyncio.sleep(3600)
++                return []
++
++        store = HangingSubkeys()
++        await store.append(
++            {"project_key": project_key, "session_id": SESSION_ID},
++            [{"type": "user", "uuid": "u1"}],
++        )
++        real_mkdtemp = tempfile.mkdtemp
++        created: list[str] = []
++
++        def spy(*a: Any, **kw: Any) -> str:
++            d = real_mkdtemp(*a, **kw)
++            created.append(d)
++            return d
++
++        with patch("tempfile.mkdtemp", side_effect=spy):
++            await _assert_bounded_failure(
++                ClaudeAgentOptions(
++                    cwd=cwd,
++                    session_store=store,
++                    resume=SESSION_ID,
++                    load_timeout_ms=50,
++                )
++            )
++        assert created, "load() succeeded, so staging should have begun"
++        assert not Path(created[0]).exists(), "timeout leaked the staged directory"
++
++    @pytest.mark.asyncio
++    async def test_list_sessions_timeout_on_continue_path(self, cwd: Path) -> None:
++        """Parity with TS: load_timeout_ms applies to list_sessions() during
++        continue_conversation, not just load()."""
++
++        class HungListStore(SessionStore):
++            async def append(self, key, entries):  # type: ignore[override]
++                pass
++
++            async def load(self, key):  # type: ignore[override]
++                return None
++
++            async def list_sessions(self, project_key):  # type: ignore[override]
++                await asyncio.sleep(3600)
++                return []
++
++        opts = ClaudeAgentOptions(
++            cwd=cwd,
++            session_store=HungListStore(),
++            continue_conversation=True,
++            load_timeout_ms=50,
++        )
++        with pytest.raises(Exception) as excinfo:
++            await _stage(opts)
++        _assert_deliberate_failure(excinfo)
++
++    @pytest.mark.asyncio
++    async def test_list_subkeys_timeout_raises_and_cleans_temp_dir(
++        self, cwd: Path, project_key: str, isolated_home: Path
++    ) -> None:
++        """Parity with TS: load_timeout_ms applies to list_subkeys(); the temp
++        dir created by the (already-succeeded) load() is removed on rethrow."""
++
++        class HungSubkeysStore(InMemorySessionStore):
++            async def list_subkeys(self, key):  # type: ignore[override]
++                await asyncio.sleep(3600)
++                return []
++
++        store = HungSubkeysStore()
++        await store.append(
++            {"project_key": project_key, "session_id": SESSION_ID},
++            [{"type": "user", "uuid": "u1"}],
++        )
++        opts = ClaudeAgentOptions(
++            cwd=cwd, session_store=store, resume=SESSION_ID, load_timeout_ms=50
++        )
++
++        real_mkdtemp = tempfile.mkdtemp
++        created: list[str] = []
++
++        def spy(*a, **kw):
++            d = real_mkdtemp(*a, **kw)
++            created.append(d)
++            return d
++
++        with (
++            patch("tempfile.mkdtemp", side_effect=spy),
++            pytest.raises(Exception) as excinfo,
++        ):
++            await _stage(opts)
++
++        _assert_deliberate_failure(excinfo)
++        assert created, "load() succeeded so mkdtemp should have run"
++        assert not Path(created[0]).exists()
++
++    @pytest.mark.asyncio
++    async def test_cancelled_after_mkdtemp_cleans_temp_dir(
++        self, cwd: Path, project_key: str, isolated_home: Path
++    ) -> None:
++        """``asyncio.CancelledError`` is ``BaseException`` (not ``Exception``)
++        since 3.8 — the cleanup-on-failure block must catch it so a temp dir
++        already containing ``.credentials.json`` is not leaked when the outer
++        task is cancelled mid-subkey-load."""
++
++        class HungSubkeysStore(InMemorySessionStore):
++            async def list_subkeys(self, key):  # type: ignore[override]
++                await asyncio.sleep(3600)
++                return []
++
++        store = HungSubkeysStore()
++        await store.append(
++            {"project_key": project_key, "session_id": SESSION_ID},
++            [{"type": "user", "uuid": "u1"}],
++        )
++        opts = ClaudeAgentOptions(cwd=cwd, session_store=store, resume=SESSION_ID)
++
++        real_mkdtemp = tempfile.mkdtemp
++        created: list[str] = []
++
++        def spy(*a, **kw):
++            d = real_mkdtemp(*a, **kw)
++            created.append(d)
++            return d
++
++        with patch("tempfile.mkdtemp", side_effect=spy):
++            task = asyncio.create_task(_stage(opts))
++            # Let it run past mkdtemp and into list_subkeys.
++            for _ in range(50):
++                await asyncio.sleep(0)
++                if created:
++                    break
++            assert created, "mkdtemp should have run before cancellation"
++            task.cancel()
++            with pytest.raises(asyncio.CancelledError):
++                await task
++
++        assert not Path(created[0]).exists()
++
++    @pytest.mark.asyncio
++    async def test_non_json_serializable_entry_surfaces_clear_error(
++        self, cwd: Path, project_key: str, isolated_home: Path
++    ) -> None:
++        """A store returning non-JSON-serializable values fails materialization
++        with a contextual error and leaves no temp dir.
++
++        Python's json.dumps raises TypeError on non-serializable values; the
++        materialize wrapper does not catch it — assert it surfaces and cleans
++        up.
++        """
++
++        class BadStore(SessionStore):
++            async def append(self, key, entries):  # type: ignore[override]
++                pass
++
++            async def load(self, key):  # type: ignore[override]
++                return [{"type": "user", "uuid": "u1", "blob": {1, 2, 3}}]
++
++        opts = ClaudeAgentOptions(cwd=cwd, session_store=BadStore(), resume=SESSION_ID)
++
++        real_mkdtemp = tempfile.mkdtemp
++        created: list[str] = []
++
++        def spy(*a, **kw):
++            d = real_mkdtemp(*a, **kw)
++            created.append(d)
++            return d
++
++        with patch("tempfile.mkdtemp", side_effect=spy), pytest.raises(TypeError):
++            await _stage(opts)
++
++        assert created
++        assert not Path(created[0]).exists()
++
++    @pytest.mark.asyncio
++    async def test_load_exception_wrapped(self, cwd: Path) -> None:
++        class BrokenStore(SessionStore):
++            async def append(self, key, entries):  # type: ignore[override]
++                pass
++
++            async def load(self, key):  # type: ignore[override]
++                raise OSError("network down")
++
++        opts = ClaudeAgentOptions(
++            cwd=cwd, session_store=BrokenStore(), resume=SESSION_ID
++        )
++        with pytest.raises(RuntimeError, match="network down"):
++            await _stage(opts)
++
++    @pytest.mark.asyncio
++    async def test_failure_after_mkdir_cleans_temp_dir(
++        self, cwd: Path, project_key: str, isolated_home: Path
++    ) -> None:
++        """If list_subkeys raises after the temp dir is created, the dir is removed."""
++
++        class FailLateStore(InMemorySessionStore):
++            async def list_subkeys(self, key):  # type: ignore[override]
++                raise OSError("boom")
++
++        store = FailLateStore()
++        await store.append(
++            {"project_key": project_key, "session_id": SESSION_ID},
++            [{"type": "user", "uuid": "u1"}],
++        )
++
++        opts = ClaudeAgentOptions(cwd=cwd, session_store=store, resume=SESSION_ID)
++
++        # Capture the temp dir created by mkdtemp so we can assert it's gone.
++
++        real_mkdtemp = tempfile.mkdtemp
++        created: list[str] = []
++
++        def spy(*a, **kw):
++            d = real_mkdtemp(*a, **kw)
++            created.append(d)
++            return d
++
++        with (
++            patch("tempfile.mkdtemp", side_effect=spy),
++            pytest.raises(RuntimeError, match="boom"),
++        ):
++            await _stage(opts)
++
++        assert created
++        assert not Path(created[0]).exists()
++
++
++# ---------------------------------------------------------------------------
++# Integration: ClaudeSDKClient.connect() wiring
++# ---------------------------------------------------------------------------
++
++
++def _make_mock_transport() -> Any:
++    mock_transport = AsyncMock()
++
++    async def mock_receive():
++        return
++        yield  # pragma: no cover
++
++    mock_transport.read_messages = mock_receive
++    mock_transport.connect = AsyncMock()
++    mock_transport.close = AsyncMock()
++    mock_transport.end_input = AsyncMock()
++    mock_transport.write = AsyncMock()
++    mock_transport.is_ready = Mock(return_value=True)
++    return mock_transport
++
++
++class TestClientIntegration:
++    @pytest.mark.asyncio
++    async def test_connect_passes_config_dir_resume_and_suppresses_continue(
++        self, cwd: Path, project_key: str, isolated_home: Path
++    ) -> None:
++        store = InMemorySessionStore()
++        await store.append(
++            {"project_key": project_key, "session_id": SESSION_ID},
++            [{"type": "user", "uuid": "u1"}],
++        )
++
++        captured: dict[str, Any] = {}
++        mock_transport = _make_mock_transport()
++
++        def capture_transport(*, prompt, options):
++            captured["options"] = options
++            return mock_transport
++
++        opts = ClaudeAgentOptions(
++            cwd=cwd,
++            session_store=store,
++            continue_conversation=True,
++            cli_path="/usr/bin/claude",
++        )
++        client = ClaudeSDKClient(options=opts)
++
++        with (
++            patch(
++                "claude_agent_sdk._internal.transport.subprocess_cli."
++                "SubprocessCLITransport",
++                side_effect=capture_transport,
++            ),
++            patch(
++                "claude_agent_sdk._internal.query.Query.initialize",
++                new_callable=AsyncMock,
++            ),
++        ):
++            await client.connect()
++
++        # The options passed to the transport carry the materialized
++        # overrides.
++        transport_opts: ClaudeAgentOptions = captured["options"]
++        assert transport_opts.resume == SESSION_ID
++        assert transport_opts.continue_conversation is False
++        config_dir = transport_opts.env["CLAUDE_CONFIG_DIR"]
++        assert Path(config_dir).is_dir()
++        assert (
++            Path(config_dir) / "projects" / project_key / f"{SESSION_ID}.jsonl"
++        ).is_file()
++
++        # Build the actual CLI command (real class, outside the patch) to
++        # assert exact flag behavior.
++        cmd = SubprocessCLITransport(
++            prompt="x", options=transport_opts
++        )._build_command()
++        assert "--resume" in cmd
++        assert cmd[cmd.index("--resume") + 1] == SESSION_ID
++        assert "--continue" not in cmd
++
++        # The mirror follows the subprocess into the staged config dir --
++        # asserted behaviourally in test_transcript_mirror.py
++        # (test_mirror_follows_staged_config_dir_on_resume).
++
++        # Original options object untouched.
++        assert opts.continue_conversation is True
++        assert opts.resume is None
++        assert "CLAUDE_CONFIG_DIR" not in opts.env
++
++        await client.disconnect()
++
++        # Cleanup removed the temp dir.
++        assert not Path(config_dir).exists()
++
++    @pytest.mark.asyncio
++    async def test_custom_transport_skips_materialization(
++        self,
++        cwd: Path,
++        project_key: str,
++        isolated_home: Path,
++        track_resume_dirs: list[Path],
++    ) -> None:
++        """A pre-constructed custom transport never sees the materialized
++        options, so loading the store and writing .credentials.json to a
++        temp dir would be wasted (and leave the access token on disk for
++        the session lifetime). connect() must skip materialization."""
++
++        class SpyStore(InMemorySessionStore):
++            load_calls = 0
++
++            async def load(self, key):  # type: ignore[override]
++                SpyStore.load_calls += 1
++                return await super().load(key)
++
++        store = SpyStore()
++        await store.append(
++            {"project_key": project_key, "session_id": SESSION_ID},
++            [{"type": "user", "uuid": "u1"}],
++        )
++
++        opts = ClaudeAgentOptions(cwd=cwd, session_store=store, resume=SESSION_ID)
++        client = ClaudeSDKClient(options=opts, transport=_make_mock_transport())
++
++        with patch(
++            "claude_agent_sdk._internal.query.Query.initialize",
++            new_callable=AsyncMock,
++        ):
++            await client.connect()
++            assert SpyStore.load_calls == 0
++            assert not track_resume_dirs  # mkdtemp never ran
++            await client.disconnect()
++
++    @pytest.mark.asyncio
++    async def test_query_custom_transport_skips_materialization(
++        self,
++        cwd: Path,
++        project_key: str,
++        isolated_home: Path,
++        track_resume_dirs: list[Path],
++    ) -> None:
++        """Same gate for the one-shot ``query()`` path."""
++
++        class SpyStore(InMemorySessionStore):
++            load_calls = 0
++
++            async def load(self, key):  # type: ignore[override]
++                SpyStore.load_calls += 1
++                return await super().load(key)
++
++        store = SpyStore()
++        await store.append(
++            {"project_key": project_key, "session_id": SESSION_ID},
++            [{"type": "user", "uuid": "u1"}],
++        )
++
++        opts = ClaudeAgentOptions(cwd=cwd, session_store=store, resume=SESSION_ID)
++        custom = _make_mock_transport()
++        custom.connect = AsyncMock(side_effect=OSError("spawn failed"))
++        with pytest.raises(OSError, match="spawn failed"):
++            async for _ in query(prompt="hi", options=opts, transport=custom):
++                pass  # pragma: no cover
++
++        # Gate runs before transport.connect(); materialization never happened.
++        assert SpyStore.load_calls == 0
++        assert not track_resume_dirs
++
++    @pytest.mark.asyncio
++    async def test_connect_no_materialization_passthrough(
++        self, cwd: Path, isolated_home: Path
++    ) -> None:
++        """No store → options reach the transport unchanged."""
++        captured: dict[str, Any] = {}
++        mock_transport = _make_mock_transport()
++
++        def capture_transport(*, prompt, options):
++            captured["options"] = options
++            return mock_transport
++
++        opts = ClaudeAgentOptions(
++            cwd=cwd, resume=SESSION_ID, cli_path="/usr/bin/claude"
++        )
++        client = ClaudeSDKClient(options=opts)
++
++        with (
++            patch(
++                "claude_agent_sdk._internal.transport.subprocess_cli."
++                "SubprocessCLITransport",
++                side_effect=capture_transport,
++            ),
++            patch(
++                "claude_agent_sdk._internal.query.Query.initialize",
++                new_callable=AsyncMock,
++            ),
++        ):
++            await client.connect()
++            assert "CLAUDE_CONFIG_DIR" not in captured["options"].env
++            assert captured["options"].resume == SESSION_ID
++            await client.disconnect()
++
++
++# ---------------------------------------------------------------------------
++# Temp-dir leak on spawn failure
++# ---------------------------------------------------------------------------
++
++
++@pytest.fixture
++def track_resume_dirs() -> Any:
++    """Spy on ``tempfile.mkdtemp`` to capture claude-resume-* dirs."""
++    real_mkdtemp = tempfile.mkdtemp
++    created: list[Path] = []
++
++    def spy(*a: Any, **kw: Any) -> str:
++        d = real_mkdtemp(*a, **kw)
++        if "claude-resume-" in d:
++            created.append(Path(d))
++        return d
++
++    with patch("tempfile.mkdtemp", side_effect=spy):
++        yield created
++
++
++class TestSpawnFailureCleanup:
++    """The materialized temp dir contains a .credentials.json copy. It must be
++    removed even when transport.connect() raises before any try/finally that
++    normally guards cleanup."""
++
++    @pytest.mark.asyncio
++    async def test_temp_dir_never_leaks_on_any_failure_path(
++        self,
++        cwd: Path,
++        project_key: str,
++        isolated_home: Path,
++        track_resume_dirs: list[Path],
++    ) -> None:
++        """The staged directory holds a usable credential for the lifetime of
++        the session, so it must be removed on *every* route out — not just the
++        happy one. Each scenario below stages a directory and then fails at a
++        different point; none may leave one behind.
++        """
++
++        async def _seeded_store() -> InMemorySessionStore:
++            store = InMemorySessionStore()
++            await store.append(
++                {"project_key": project_key, "session_id": SESSION_ID},
++                [{"type": "user", "uuid": "u1"}],
++            )
++            return store
++
++        def _opts(store: Any) -> ClaudeAgentOptions:
++            return ClaudeAgentOptions(cwd=cwd, session_store=store, resume=SESSION_ID)
++
++        transport_path = (
++            "claude_agent_sdk._internal.transport.subprocess_cli.SubprocessCLITransport"
++        )
++        # The one-shot query() path constructs the transport through the
++        # internal client module, so that binding needs patching too.
++        query_transport_path = (
++            "claude_agent_sdk._internal.client.SubprocessCLITransport"
++        )
++
++        # 1. Normal completion still cleans up.
++        client = ClaudeSDKClient(options=_opts(await _seeded_store()))
++        with (
++            patch(transport_path, return_value=_make_mock_transport()),
++            patch(
++                "claude_agent_sdk._internal.query.Query.initialize",
++                new_callable=AsyncMock,
++            ),
++        ):
++            await client.connect()
++        await client.disconnect()
++
++        # 2. The subprocess fails to spawn.
++        failing = _make_mock_transport()
++        failing.connect = AsyncMock(side_effect=OSError("spawn failed"))
++        client = ClaudeSDKClient(options=_opts(await _seeded_store()))
++        with (
++            patch(transport_path, return_value=failing),
++            pytest.raises(OSError, match="spawn failed"),
++        ):
++            await client.connect()
++
++        # 3. `async with` fails.
++        failing2 = _make_mock_transport()
++        failing2.connect = AsyncMock(side_effect=OSError("aenter failed"))
++        with (
++            patch(transport_path, return_value=failing2),
++            pytest.raises(OSError, match="aenter failed"),
++        ):
++            async with ClaudeSDKClient(options=_opts(await _seeded_store())):
++                pass  # pragma: no cover
++
++        # 4. Initialization fails after the subprocess exists — the transport
++        #    must be closed before the directory it points at is removed.
++        spawned = _make_mock_transport()
++        client = ClaudeSDKClient(options=_opts(await _seeded_store()))
++        with (
++            patch(transport_path, return_value=spawned),
++            patch(
++                "claude_agent_sdk._internal.query.Query.initialize",
++                new_callable=AsyncMock,
++                side_effect=RuntimeError("init failed"),
++            ),
++            pytest.raises(RuntimeError, match="init failed"),
++        ):
++            await client.connect()
++        spawned.close.assert_awaited()
++
++        # 5. Cancelled before the subprocess is spawned.
++        async def _hang(*a: Any, **kw: Any) -> Any:
++            await asyncio.sleep(3600)
++
++        slow = _make_mock_transport()
++        slow.connect = AsyncMock(side_effect=_hang)
++        client = ClaudeSDKClient(options=_opts(await _seeded_store()))
++        with patch(transport_path, return_value=slow):
++            task = asyncio.create_task(client.connect())
++            for _ in range(50):
++                await asyncio.sleep(0)
++                if track_resume_dirs:
++                    break
++            task.cancel()
++            with pytest.raises(asyncio.CancelledError):
++                await task
++
++        # 6. One-shot query whose transport fails.
++        broken = _make_mock_transport()
++        broken.connect = AsyncMock(side_effect=OSError("query spawn failed"))
++        with (
++            patch(query_transport_path, return_value=broken),
++            pytest.raises(OSError, match="query spawn failed"),
++        ):
++            async for _ in query(prompt="hi", options=_opts(await _seeded_store())):
++                pass  # pragma: no cover
++
++        # 7. One-shot query whose consumer breaks out early.
++        early = _make_mock_transport()
++        with (
++            patch(query_transport_path, return_value=early),
++            patch(
++                "claude_agent_sdk._internal.query.Query.initialize",
++                new_callable=AsyncMock,
++            ),
++        ):
++            async for _ in query(prompt="hi", options=_opts(await _seeded_store())):
++                break
++
++        assert len(track_resume_dirs) >= 7, (
++            f"expected every scenario to stage a directory, saw "
++            f"{len(track_resume_dirs)}"
++        )
++        leaked = [d for d in track_resume_dirs if d.exists()]
++        assert not leaked, f"leaked staged directories: {leaked}"
++
++    @pytest.mark.asyncio
++    async def test_cleanup_retries_on_transient_os_error(
++        self,
++        cwd: Path,
++        project_key: str,
++        isolated_home: Path,
++        monkeypatch: pytest.MonkeyPatch,
++    ) -> None:
++        """Windows AV/indexer can briefly hold ``.credentials.json`` open;
++        ``cleanup()`` must retry rmtree on EPERM/EBUSY so the access token
++        doesn't leak in temp."""
++        store = InMemorySessionStore()
++        await store.append(
++            {"project_key": project_key, "session_id": SESSION_ID},
++            [{"type": "user", "uuid": "u1"}],
++        )
++        opts = ClaudeAgentOptions(cwd=cwd, session_store=store, resume=SESSION_ID)
++        m = await _stage(opts)
++        assert m is not None
++        config_dir = m.config_dir
++
++        calls: list[Any] = []
++        real_rmtree = shutil.rmtree
++
++        def fake_rmtree(p: Any, **kw: Any) -> None:
++            calls.append((p, kw))
++            if len(calls) <= 2 and not kw.get("ignore_errors"):
++                raise PermissionError(errno.EPERM, "held by indexer")
++            if Path(p).exists():
++                real_rmtree(p, **kw)
++
++        monkeypatch.setattr(shutil, "rmtree", fake_rmtree)
++        await m.cleanup()
++
++        assert not config_dir.exists()
++        assert len(calls) >= 3  # 2 failures + 1 success
++
++    @pytest.mark.asyncio
++    async def test_failure_path_retries_rmtree(
++        self,
++        cwd: Path,
++        project_key: str,
++        isolated_home: Path,
++        monkeypatch: pytest.MonkeyPatch,
++        track_resume_dirs: list[Path],
++    ) -> None:
++        """The except-BaseException cleanup path also retries on EPERM."""
++
++        class FailLateStore(InMemorySessionStore):
++            async def list_subkeys(self, key):  # type: ignore[override]
++                raise OSError("boom")
++
++        store = FailLateStore()
++        await store.append(
++            {"project_key": project_key, "session_id": SESSION_ID},
++            [{"type": "user", "uuid": "u1"}],
++        )
++
++        calls: list[Any] = []
++        real_rmtree = shutil.rmtree
++
++        def fake_rmtree(p: Any, **kw: Any) -> None:
++            calls.append((p, kw))
++            if len(calls) <= 2 and not kw.get("ignore_errors"):
++                raise PermissionError(errno.EPERM, "held by indexer")
++            if Path(p).exists():
++                real_rmtree(p, **kw)
++
++        monkeypatch.setattr(shutil, "rmtree", fake_rmtree)
++
++        opts = ClaudeAgentOptions(cwd=cwd, session_store=store, resume=SESSION_ID)
++        with pytest.raises(RuntimeError, match="boom"):
++            await _stage(opts)
++
++        assert track_resume_dirs
++        assert not track_resume_dirs[0].exists()
++        assert len(calls) >= 3
++
++    @pytest.mark.asyncio
++    async def test_client_connect_failure_removes_temp_dir(
++        self,
++        cwd: Path,
++        project_key: str,
++        isolated_home: Path,
++        track_resume_dirs: list[Path],
++    ) -> None:
++        store = InMemorySessionStore()
++        await store.append(
++            {"project_key": project_key, "session_id": SESSION_ID},
++            [{"type": "user", "uuid": "u1"}],
++        )
++
++        mock_transport = _make_mock_transport()
++        mock_transport.connect = AsyncMock(side_effect=OSError("spawn failed"))
++
++        opts = ClaudeAgentOptions(cwd=cwd, session_store=store, resume=SESSION_ID)
++        client = ClaudeSDKClient(options=opts)
++
++        with (
++            patch(
++                "claude_agent_sdk._internal.transport.subprocess_cli."
++                "SubprocessCLITransport",
++                return_value=mock_transport,
++            ),
++            pytest.raises(OSError, match="spawn failed"),
++        ):
++            await client.connect()
++
++        assert track_resume_dirs, "staging never created a temp dir"
++        for d in track_resume_dirs:
++            assert not d.exists(), f"leaked temp dir {d}"
++
++    @pytest.mark.asyncio
++    async def test_client_aenter_failure_removes_temp_dir(
++        self,
++        cwd: Path,
++        project_key: str,
++        isolated_home: Path,
++        track_resume_dirs: list[Path],
++    ) -> None:
++        store = InMemorySessionStore()
++        await store.append(
++            {"project_key": project_key, "session_id": SESSION_ID},
++            [{"type": "user", "uuid": "u1"}],
++        )
++
++        mock_transport = _make_mock_transport()
++        mock_transport.connect = AsyncMock(side_effect=OSError("spawn failed"))
++
++        opts = ClaudeAgentOptions(cwd=cwd, session_store=store, resume=SESSION_ID)
++
++        with (
++            patch(
++                "claude_agent_sdk._internal.transport.subprocess_cli."
++                "SubprocessCLITransport",
++                return_value=mock_transport,
++            ),
++            pytest.raises(OSError, match="spawn failed"),
++        ):
++            async with ClaudeSDKClient(options=opts):
++                pass  # pragma: no cover
++
++        assert track_resume_dirs
++        for d in track_resume_dirs:
++            assert not d.exists(), f"leaked temp dir {d}"
++
++    @pytest.mark.asyncio
++    async def test_client_initialize_failure_closes_subprocess_before_cleanup(
++        self,
++        cwd: Path,
++        project_key: str,
++        isolated_home: Path,
++        track_resume_dirs: list[Path],
++    ) -> None:
++        """When connect() fails *after* the subprocess spawned (at
++        query.initialize()), the subprocess/read task must be closed before
++        the temp CLAUDE_CONFIG_DIR is removed and must not leak."""
++        store = InMemorySessionStore()
++        await store.append(
++            {"project_key": project_key, "session_id": SESSION_ID},
++            [{"type": "user", "uuid": "u1"}],
++        )
++
++        mock_transport = _make_mock_transport()
++        # transport.connect() succeeds → subprocess "spawned"; failure happens
++        # later at Query.initialize().
++
++        opts = ClaudeAgentOptions(cwd=cwd, session_store=store, resume=SESSION_ID)
++        client = ClaudeSDKClient(options=opts)
++
++        with (
++            patch(
++                "claude_agent_sdk._internal.transport.subprocess_cli."
++                "SubprocessCLITransport",
++                return_value=mock_transport,
++            ),
++            patch(
++                "claude_agent_sdk._internal.query.Query.initialize",
++                new_callable=AsyncMock,
++                side_effect=CLIConnectionError("control timeout"),
++            ),
++            pytest.raises(CLIConnectionError, match="control timeout"),
++        ):
++            await client.connect()
++
++        # disconnect() must have run: query/transport cleared, transport.close
++        # awaited (subprocess terminated), then temp dir removed.
++        assert client._query is None
++        assert client._transport is None
++        mock_transport.close.assert_awaited()
++        assert track_resume_dirs
++        for d in track_resume_dirs:
++            assert not d.exists(), f"leaked temp dir {d}"
++
++    @pytest.mark.asyncio
++    async def test_connect_cancelled_before_spawn_removes_temp_dir(
++        self,
++        cwd: Path,
++        project_key: str,
++        isolated_home: Path,
++        track_resume_dirs: list[Path],
++    ) -> None:
++        """Parity with TS 'close() before deferred spawn': Python has no
++        deferred spawn, so the equivalent race is cancelling connect() while
++        it awaits a slow store.load(). The cancel must not hang and must
++        leave no claude-resume-* dir on disk.
++
++        load() is awaited before mkdtemp(), so cancelling here exercises the
++        no-dir-yet path. The post-mkdtemp failure path is covered by
++        test_failure_after_mkdir_cleans_temp_dir.
++        """
++
++        class SlowStore(SessionStore):
++            async def append(self, key, entries):  # type: ignore[override]
++                pass
++
++            async def load(self, key):  # type: ignore[override]
++                await asyncio.sleep(3600)
++                return [{"type": "user", "uuid": "u1"}]
++
++        spawn_count = 0
++
++        def fake_transport(**_kw):
++            nonlocal spawn_count
++            spawn_count += 1
++            raise AssertionError("should not spawn")
++
++        opts = ClaudeAgentOptions(
++            cwd=cwd, session_store=SlowStore(), resume=SESSION_ID, load_timeout_ms=10000
++        )
++        client = ClaudeSDKClient(options=opts)
++
++        with patch(
++            "claude_agent_sdk._internal.transport.subprocess_cli."
++            "SubprocessCLITransport",
++            side_effect=fake_transport,
++        ):
++            connect_task = asyncio.create_task(client.connect())
++            await asyncio.sleep(0)  # let connect reach the awaited load()
++            connect_task.cancel()
++            with pytest.raises(asyncio.CancelledError):
++                await asyncio.wait_for(connect_task, timeout=2)
++
++        assert spawn_count == 0
++        for d in track_resume_dirs:
++            assert not d.exists(), f"leaked temp dir {d}"
++        # disconnect() after a cancelled connect must be a safe no-op.
++        await client.disconnect()
++
++    @pytest.mark.asyncio
++    async def test_query_transport_failure_removes_temp_dir(
++        self,
++        cwd: Path,
++        project_key: str,
++        isolated_home: Path,
++        track_resume_dirs: list[Path],
++    ) -> None:
++        store = InMemorySessionStore()
++        await store.append(
++            {"project_key": project_key, "session_id": SESSION_ID},
++            [{"type": "user", "uuid": "u1"}],
++        )
++
++        mock_transport = _make_mock_transport()
++        mock_transport.connect = AsyncMock(side_effect=OSError("spawn failed"))
++
++        opts = ClaudeAgentOptions(cwd=cwd, session_store=store, resume=SESSION_ID)
++
++        with (
++            patch(
++                "claude_agent_sdk._internal.client.SubprocessCLITransport",
++                return_value=mock_transport,
++            ),
++            pytest.raises(OSError, match="spawn failed"),
++        ):
++            async for _ in query(prompt="hi", options=opts):
++                pass  # pragma: no cover
++
++        assert track_resume_dirs
++        for d in track_resume_dirs:
++            assert not d.exists(), f"leaked temp dir {d}"
++
++    @pytest.mark.asyncio
++    async def test_query_early_break_closes_transport_before_temp_dir_removed(
++        self,
++        cwd: Path,
++        project_key: str,
++        isolated_home: Path,
++        track_resume_dirs: list[Path],
++    ) -> None:
++        """Regression: ``async for`` does not close its iterator when the loop
++        body raises (PEP 533 deferred). When a consumer breaks early, the
++        outer ``finally`` must explicitly ``aclose()`` the inner generator so
++        ``transport.close()`` (subprocess termination) runs *before* the temp
++        CLAUDE_CONFIG_DIR — which the subprocess is reading/writing — is
++        removed."""
++        store = InMemorySessionStore()
++        await store.append(
++            {"project_key": project_key, "session_id": SESSION_ID},
++            [{"type": "user", "uuid": "u1"}],
++        )
++
++        order: list[str] = []
++        config_dir_at_close: dict[str, bool] = {}
++
++        mock_transport = _make_mock_transport()
++
++        async def mock_receive():
++            yield {
++                "type": "system",
++                "subtype": "init",
++                "data": {"session_id": SESSION_ID},
++            }
++            yield {"type": "system", "subtype": "noop", "data": {}}
++
++        mock_transport.read_messages = mock_receive
++
++        async def tracked_close() -> None:
++            order.append("transport.close")
++            config_dir_at_close["existed"] = track_resume_dirs[0].exists()
++
++        mock_transport.close = tracked_close
++
++        real_rmtree = shutil.rmtree
++
++        def tracked_rmtree(p: Any, **kw: Any) -> None:
++            order.append("rmtree")
++            real_rmtree(p, **kw)
++
++        opts = ClaudeAgentOptions(cwd=cwd, session_store=store, resume=SESSION_ID)
++        from claude_agent_sdk._internal.client import InternalClient
++
++        with (
++            patch(
++                "claude_agent_sdk._internal.client.SubprocessCLITransport",
++                return_value=mock_transport,
++            ),
++            patch(
++                "claude_agent_sdk._internal.query.Query.initialize",
++                new_callable=AsyncMock,
++            ),
++            patch.object(shutil, "rmtree", tracked_rmtree),
++        ):
++            agen = InternalClient().process_query(prompt="hi", options=opts)
++            async for _ in agen:
++                break  # consumer abandons mid-stream
++            await agen.aclose()
++
++        assert track_resume_dirs, "staging never created a temp dir"
++        assert "transport.close" in order, f"transport never closed: {order}"
++        assert "rmtree" in order, f"temp dir never removed: {order}"
++        assert order.index("transport.close") < order.index("rmtree"), (
++            f"temp dir removed before subprocess terminated: {order}"
++        )
++        assert config_dir_at_close["existed"], (
++            "temp CLAUDE_CONFIG_DIR was already gone when transport.close() ran"
++        )
++        for d in track_resume_dirs:
++            assert not d.exists(), f"leaked temp dir {d}"
+diff --git a/tests/test_session_store_conformance.py b/tests/test_session_store_conformance.py
+new file mode 100644
+index 0000000..63fc344
+--- /dev/null
++++ b/tests/test_session_store_conformance.py
+@@ -0,0 +1,426 @@
++"""Exercises the shipped :func:`run_session_store_conformance` harness against
++:class:`InMemorySessionStore`, plus options validation and project-key
++derivation.
++
++Everything here goes through the published package surface: the harness itself
++(``claude_agent_sdk.testing``), the store protocol, the public sync session
++readers, and ``ClaudeSDKClient``. Nothing imports a private module, so any
++implementation that satisfies the documented behaviour passes regardless of how
++it is decomposed internally.
++"""
++
++from __future__ import annotations
++
++import json
++import unicodedata
++import uuid as uuid_mod
++from pathlib import Path
++from typing import Any
++from unittest.mock import AsyncMock, Mock, patch
++
++import pytest
++
++from claude_agent_sdk import (
++    ClaudeAgentOptions,
++    ClaudeSDKClient,
++    InMemorySessionStore,
++    SessionKey,
++    SessionStore,
++    list_sessions,
++    project_key_for_directory,
++)
++from claude_agent_sdk.testing import run_session_store_conformance
++
++_KEY: SessionKey = {"project_key": "proj", "session_id": "sess"}
++
++
++def _mock_transport() -> Any:
++    transport = AsyncMock()
++
++    async def receive():
++        return
++        yield  # pragma: no cover
++
++    transport.read_messages = receive
++    transport.connect = AsyncMock()
++    transport.close = AsyncMock()
++    transport.end_input = AsyncMock()
++    transport.write = AsyncMock()
++    transport.is_ready = Mock(return_value=True)
++    return transport
++
++
++async def _connect(options: ClaudeAgentOptions) -> None:
++    """Drive a real connect() with the subprocess stubbed out.
++
++    Option validation is part of establishing a connection, so this is the
++    boundary an application actually hits.
++    """
++    client = ClaudeSDKClient(options=options)
++    with (
++        patch(
++            "claude_agent_sdk._internal.transport.subprocess_cli."
++            "SubprocessCLITransport",
++            side_effect=lambda **kw: _mock_transport(),
++        ),
++        patch(
++            "claude_agent_sdk._internal.query.Query.initialize",
++            new_callable=AsyncMock,
++        ),
++    ):
++        await client.connect()
++    await client.disconnect()
++
++
++class _RequiredOnlyStore(SessionStore):
++    """Implements only the two required protocol methods."""
++
++    async def append(self, key, entries):  # type: ignore[override]
++        pass
++
++    async def load(self, key):  # type: ignore[override]
++        return None
++
++
++# ---------------------------------------------------------------------------
++# InMemorySessionStore
++# ---------------------------------------------------------------------------
++
++
++class TestInMemorySessionStore:
++    @pytest.mark.asyncio
++    async def test_conformance(self) -> None:
++        """The harness must accept a correct store *and* reject broken ones.
++
++        Passing only the positive half would be satisfied by a harness that
++        checks nothing, which is useless to the adapter authors it is published
++        for — so each violation below must be caught.
++        """
++        await run_session_store_conformance(InMemorySessionStore)
++
++        class DropsEntries(InMemorySessionStore):
++            """append() silently discards everything."""
++
++            async def append(self, key, entries):  # type: ignore[override]
++                pass
++
++        class ForgetsSubkeys(InMemorySessionStore):
++            async def list_subkeys(self, key):  # type: ignore[override]
++                return []
++
++        class NeverDeletes(InMemorySessionStore):
++            async def delete(self, key):  # type: ignore[override]
++                pass
++
++        class ListsNothing(InMemorySessionStore):
++            async def list_sessions(self, project_key):  # type: ignore[override]
++                return []
++
++        for broken in (DropsEntries, ForgetsSubkeys, NeverDeletes, ListsNothing):
++            with pytest.raises(Exception) as excinfo:
++                await run_session_store_conformance(broken)
++            assert not isinstance(excinfo.value, (SyntaxError, ImportError, NameError))
++
++    @pytest.mark.asyncio
++    async def test_conformance_with_async_factory(self) -> None:
++        async def make() -> SessionStore:
++            return InMemorySessionStore()
++
++        await run_session_store_conformance(make)
++
++    @pytest.mark.asyncio
++    async def test_skip_optional_suppresses_contracts(self) -> None:
++        """A store implementing only required methods passes when optionals are skipped."""
++
++        class MinimalStore:
++            def __init__(self) -> None:
++                self._data: dict[str, list] = {}
++
++            async def append(self, key: SessionKey, entries: list) -> None:
++                k = f"{key['project_key']}/{key['session_id']}/{key.get('subpath') or ''}"
++                self._data.setdefault(k, []).extend(entries)
++
++            async def load(self, key: SessionKey) -> list | None:
++                k = f"{key['project_key']}/{key['session_id']}/{key.get('subpath') or ''}"
++                return self._data.get(k)
++
++        await run_session_store_conformance(
++            MinimalStore,
++            skip_optional=frozenset({"list_sessions", "delete", "list_subkeys"}),
++        )
++
++    @pytest.mark.asyncio
++    async def test_auto_skips_unimplemented_optionals(self) -> None:
++        """Optional contracts auto-skip when the store doesn't implement them."""
++
++        class MinimalStore(SessionStore):
++            def __init__(self) -> None:
++                self._data: dict[str, list] = {}
++
++            async def append(self, key: SessionKey, entries: list) -> None:
++                k = f"{key['project_key']}/{key['session_id']}/{key.get('subpath') or ''}"
++                self._data.setdefault(k, []).extend(entries)
++
++            async def load(self, key: SessionKey) -> list | None:
++                k = f"{key['project_key']}/{key['session_id']}/{key.get('subpath') or ''}"
++                return self._data.get(k)
++
++        # No skip_optional passed — the harness must detect the missing
++        # optionals on its own.
++        await run_session_store_conformance(MinimalStore)
++
++    @pytest.mark.asyncio
++    async def test_get_entries_helper(self) -> None:
++        store = InMemorySessionStore()
++        assert store.get_entries(_KEY) == []
++        await store.append(_KEY, [{"n": 1}, {"n": 2}])
++        assert store.get_entries(_KEY) == [{"n": 1}, {"n": 2}]
++        # Returns a copy — mutating the result must not affect the store.
++        store.get_entries(_KEY).append({"n": 999})
++        assert store.get_entries(_KEY) == [{"n": 1}, {"n": 2}]
++
++    @pytest.mark.asyncio
++    async def test_size_helper_counts_main_transcripts_only(self) -> None:
++        store = InMemorySessionStore()
++        assert store.size == 0
++        await store.append({"project_key": "p", "session_id": "a"}, [{"n": 1}])
++        await store.append({"project_key": "p", "session_id": "b"}, [{"n": 1}])
++        await store.append(
++            {"project_key": "p", "session_id": "a", "subpath": "sub/x"}, [{"n": 1}]
++        )
++        assert store.size == 2
++
++    @pytest.mark.asyncio
++    async def test_clear_helper(self) -> None:
++        store = InMemorySessionStore()
++        await store.append(_KEY, [{"n": 1}])
++        await store.append({**_KEY, "subpath": "sub/x"}, [{"n": 1}])
++        store.clear()
++        assert store.size == 0
++        assert await store.load(_KEY) is None
++        assert await store.list_sessions("proj") == []
++
++    @pytest.mark.asyncio
++    async def test_load_returns_copy(self) -> None:
++        store = InMemorySessionStore()
++        await store.append(_KEY, [{"n": 1}])
++        loaded = await store.load(_KEY)
++        assert loaded is not None
++        loaded.append({"n": 999})
++        assert await store.load(_KEY) == [{"n": 1}]
++
++    @pytest.mark.asyncio
++    async def test_optional_capabilities_are_detectable_at_runtime(self) -> None:
++        """The SDK must be able to tell whether a store implements an optional
++        method, and must reach opposite conclusions for a full store and a
++        required-only store. Observed through the behaviour that depends on it:
++        listing sessions requires ``list_sessions``.
++        """
++        from claude_agent_sdk import list_sessions_from_store
++
++        full = InMemorySessionStore()
++        await full.append(
++            {"project_key": project_key_for_directory("/w/p"), "session_id": "s"},
++            [{"type": "user", "uuid": "u"}],
++        )
++        # Implemented → usable.
++        await list_sessions_from_store(full, directory="/w/p")
++
++        # Not implemented → refused rather than silently returning nothing.
++        with pytest.raises((NotImplementedError, ValueError, TypeError, AttributeError)):
++            await list_sessions_from_store(_RequiredOnlyStore(), directory="/w/p")
++
++
++# ---------------------------------------------------------------------------
++# Options validation, observed at the connect boundary
++# ---------------------------------------------------------------------------
++
++
++class TestSessionStoreOptionsValidation:
++    @pytest.mark.asyncio
++    async def test_no_store_is_always_valid(self) -> None:
++        await _connect(
++            ClaudeAgentOptions(continue_conversation=True, enable_file_checkpointing=True)
++        )
++
++    @pytest.mark.asyncio
++    async def test_valid_store_passes(self) -> None:
++        await _connect(ClaudeAgentOptions(session_store=InMemorySessionStore()))
++
++    @pytest.mark.asyncio
++    async def test_continue_conversation_requires_list_sessions(self) -> None:
++        """Continuing has to find the most-recent session, which a store that
++        cannot enumerate sessions can never supply — that must fail fast rather
++        than silently starting a fresh conversation."""
++        with pytest.raises(ValueError, match="list_sessions"):
++            await _connect(
++                ClaudeAgentOptions(
++                    session_store=_RequiredOnlyStore(), continue_conversation=True
++                )
++            )
++
++    @pytest.mark.asyncio
++    async def test_continue_conversation_ok_when_store_implements_list_sessions(
++        self,
++    ) -> None:
++        await _connect(
++            ClaudeAgentOptions(
++                session_store=InMemorySessionStore(), continue_conversation=True
++            )
++        )
++
++    @pytest.mark.asyncio
++    async def test_continue_with_resume_and_store_lacking_list_sessions(self) -> None:
++        """An explicit resume id wins over continue, so enumeration is never
++        needed and the combination must be accepted."""
++        await _connect(
++            ClaudeAgentOptions(
++                session_store=_RequiredOnlyStore(),
++                continue_conversation=True,
++                resume="00000000-0000-4000-8000-000000000000",
++            )
++        )
++
++    @pytest.mark.asyncio
++    async def test_rejects_file_checkpointing_combo(self) -> None:
++        with pytest.raises(ValueError, match="enable_file_checkpointing"):
++            await _connect(
++                ClaudeAgentOptions(
++                    session_store=InMemorySessionStore(),
++                    enable_file_checkpointing=True,
++                )
++            )
++
++
++# ---------------------------------------------------------------------------
++# project_key_for_directory
++# ---------------------------------------------------------------------------
++
++
++class TestProjectKeyForDirectory:
++    def test_defaults_to_cwd(self) -> None:
++        assert project_key_for_directory() == project_key_for_directory(Path.cwd())
++
++    def test_sanitizes_path(self) -> None:
++        key = project_key_for_directory("/tmp/my project!")
++        assert "/" not in key
++        assert " " not in key
++        assert "!" not in key
++
++    def test_stable_for_same_path(self) -> None:
++        assert project_key_for_directory("/a/b/c") == project_key_for_directory(
++            "/a/b/c"
++        )
++
++    def test_distinct_directories_get_distinct_keys(self) -> None:
++        assert project_key_for_directory("/a/b/c") != project_key_for_directory(
++            "/a/b/d"
++        )
++
++    def test_key_derivation_contract(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """The whole derivation contract in one place: a relative directory
++        resolves to its absolute form, equivalent spellings collapse, distinct
++        directories stay distinct, over-long paths still yield a usable key,
++        and the result is the directory name the CLI actually reads from."""
++        # Relative resolves to absolute — the subprocess only sees absolute
++        # paths, so a key derived from the literal '.' would miss every lookup.
++        assert project_key_for_directory(".") == project_key_for_directory(
++            Path().resolve()
++        )
++        assert project_key_for_directory(".") != project_key_for_directory("/.")
++
++        # Equivalent Unicode spellings are one directory, so one key.
++        nfc = tmp_path / unicodedata.normalize("NFC", "café")
++        nfd = tmp_path / unicodedata.normalize("NFD", "café")
++        nfc.mkdir(exist_ok=True)
++        assert project_key_for_directory(str(nfc)) == project_key_for_directory(
++            str(nfd)
++        )
++
++        # Over-long paths remain deterministic, distinct and filesystem-safe.
++        base = "/" + "a" * 400
++        long_key = project_key_for_directory(base)
++        assert long_key == project_key_for_directory(base)
++        assert long_key != project_key_for_directory(base + "b")
++        assert "/" not in long_key and 0 < len(long_key) < len(base)
++
++        # And the key is the on-disk project directory the CLI uses: written
++        # through the key, found through the public reader.
++        config = tmp_path / "cfg"
++        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
++        workdir = tmp_path / "work"
++        workdir.mkdir()
++        session_id = str(uuid_mod.uuid4())
++        project_dir = config / "projects" / project_key_for_directory(str(workdir))
++        project_dir.mkdir(parents=True)
++        (project_dir / f"{session_id}.jsonl").write_text(
++            json.dumps(
++                {
++                    "type": "user",
++                    "uuid": "u1",
++                    "sessionId": session_id,
++                    "cwd": str(workdir),
++                    "timestamp": "2024-01-01T00:00:00.000Z",
++                    "message": {"role": "user", "content": "hello"},
++                }
++            )
++            + "\n"
++        )
++        assert [s.session_id for s in list_sessions(directory=str(workdir))] == [
++            session_id
++        ]
++
++    def test_equivalent_unicode_spellings_agree(self, tmp_path: Path) -> None:
++        """The same directory name written in composed and decomposed form is
++        one directory, so it must be one key; otherwise a store lookup made by
++        the parent misses what the subprocess wrote."""
++        nfc = tmp_path / unicodedata.normalize("NFC", "café")
++        nfd = tmp_path / unicodedata.normalize("NFD", "café")
++        nfc.mkdir(exist_ok=True)
++        assert project_key_for_directory(str(nfc)) == project_key_for_directory(
++            str(nfd)
++        )
++
++    def test_very_long_path_key_is_deterministic_and_distinct(self) -> None:
++        """Paths too long to use verbatim must still produce a stable,
++        filesystem-safe key that distinguishes neighbouring directories."""
++        base = "/" + "a" * 400
++        key = project_key_for_directory(base)
++        assert key == project_key_for_directory(base)
++        assert key != project_key_for_directory(base + "b")
++        assert "/" not in key
++        assert 0 < len(key) < len(base)
++
++    def test_key_matches_the_on_disk_project_directory(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """The derived key must be the directory name the CLI actually uses.
++        Written through the key and read back through the public session
++        reader, so any divergence shows up as a session that cannot be found.
++        """
++        config = tmp_path / "cfg"
++        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
++        workdir = tmp_path / "work"
++        workdir.mkdir()
++
++        session_id = str(uuid_mod.uuid4())
++        project_dir = config / "projects" / project_key_for_directory(str(workdir))
++        project_dir.mkdir(parents=True)
++        (project_dir / f"{session_id}.jsonl").write_text(
++            json.dumps(
++                {
++                    "type": "user",
++                    "uuid": "u1",
++                    "sessionId": session_id,
++                    "cwd": str(workdir),
++                    "timestamp": "2024-01-01T00:00:00.000Z",
++                    "message": {"role": "user", "content": "hello"},
++                }
++            )
++            + "\n"
++        )
++
++        found = list_sessions(directory=str(workdir))
++        assert [s.session_id for s in found] == [session_id]
+diff --git a/tests/test_transcript_mirror.py b/tests/test_transcript_mirror.py
+new file mode 100644
+index 0000000..3d086f4
+--- /dev/null
++++ b/tests/test_transcript_mirror.py
+@@ -0,0 +1,811 @@
++"""Tests for the SessionStore write path.
++
++Everything is driven through the published surface: a conversation is run with
++``query()`` over a stubbed transport that emits the CLI's transcript-mirror
++frames, and the store is observed through the store protocol. Nothing here
++imports the buffering layer or the path-mapping helper directly, so any
++implementation that delivers the documented behaviour passes regardless of how
++it is factored.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import os
++from pathlib import Path
++from typing import Any
++from unittest.mock import AsyncMock, Mock, patch
++
++import pytest
++
++from claude_agent_sdk import (
++    AssistantMessage,
++    ClaudeAgentOptions,
++    InMemorySessionStore,
++    MirrorErrorMessage,
++    ResultMessage,
++    SessionKey,
++    query,
++)
++from claude_agent_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
++
++# ---------------------------------------------------------------------------
++# Harness
++# ---------------------------------------------------------------------------
++
++_ASSISTANT_MSG = {
++    "type": "assistant",
++    "message": {
++        "role": "assistant",
++        "content": [{"type": "text", "text": "Hi"}],
++        "model": "claude-3-5-sonnet-20241022",
++    },
++}
++
++_RESULT_MSG = {
++    "type": "result",
++    "subtype": "success",
++    "duration_ms": 100,
++    "duration_api_ms": 80,
++    "is_error": False,
++    "num_turns": 1,
++    "session_id": "test",
++    "total_cost_usd": 0.001,
++}
++
++
++class _RecordingStore(InMemorySessionStore):
++    """Records each ``append`` call separately, in arrival order."""
++
++    def __init__(self) -> None:
++        super().__init__()
++        self.append_calls: list[tuple[SessionKey, list[Any]]] = []
++
++    async def append(self, key: SessionKey, entries: list[Any]) -> None:
++        self.append_calls.append((key, list(entries)))
++        await super().append(key, entries)
++
++
++def _mock_transport(messages: list[dict[str, Any]]) -> Any:
++    transport = AsyncMock()
++
++    async def receive():
++        for msg in messages:
++            yield msg
++
++    transport.read_messages = receive
++    transport.connect = AsyncMock()
++    transport.close = AsyncMock()
++    transport.end_input = AsyncMock()
++    transport.write = AsyncMock()
++    transport.is_ready = Mock(return_value=True)
++    return transport
++
++
++def _mirror(file_path: str, entries: list[dict[str, Any]]) -> dict[str, Any]:
++    """A transcript-mirror frame as the CLI emits it."""
++    return {"type": "transcript_mirror", "filePath": file_path, "entries": entries}
++
++
++class _Session:
++    """One conversation over a stubbed CLI, with the mirror pointed at a
++    caller-controlled config directory."""
++
++    def __init__(self, tmp_path: Path, store: Any = None) -> None:
++        tmp_path.mkdir(parents=True, exist_ok=True)
++        self.config_dir = tmp_path / "cfg"
++        self.projects_dir = self.config_dir / "projects"
++        self.projects_dir.mkdir(parents=True, exist_ok=True)
++        self.store = store if store is not None else _RecordingStore()
++
++    def path(self, *parts: str) -> str:
++        """A transcript path under the mirror's projects directory."""
++        return str(Path(self.projects_dir, *parts))
++
++    async def run(
++        self,
++        messages: list[dict[str, Any]],
++        *,
++        env: dict[str, str] | None = None,
++        on_message: Any = None,
++    ) -> list[Any]:
++        """Run the conversation and return the messages the application saw."""
++        options = ClaudeAgentOptions(
++            session_store=self.store,
++            env={"CLAUDE_CONFIG_DIR": str(self.config_dir)} if env is None else env,
++        )
++        seen: list[Any] = []
++        with (
++            patch("claude_agent_sdk._internal.client.SubprocessCLITransport") as cls,
++            patch(
++                "claude_agent_sdk._internal.query.Query.initialize",
++                new_callable=AsyncMock,
++            ),
++        ):
++            cls.return_value = _mock_transport(messages)
++            async for msg in query(prompt="Hello", options=options):
++                seen.append(msg)
++                if on_message is not None:
++                    on_message(msg)
++        return seen
++
++
++# ---------------------------------------------------------------------------
++# Transcript path -> session key
++# ---------------------------------------------------------------------------
++
++
++class TestFilePathToSessionKey:
++    @pytest.mark.asyncio
++    async def test_main_transcript(self, tmp_path: Path) -> None:
++        """A main transcript maps to its project key and session id."""
++        s = _Session(tmp_path)
++        await s.run(
++            [
++                _mirror(s.path("-home-user-repo", "abc-123.jsonl"), [{"type": "user"}]),
++                _RESULT_MSG,
++            ]
++        )
++        assert [k for k, _ in s.store.append_calls] == [
++            {"project_key": "-home-user-repo", "session_id": "abc-123"}
++        ]
++
++    @pytest.mark.asyncio
++    async def test_subagent_transcript(self, tmp_path: Path) -> None:
++        """A subagent transcript carries a subpath identifying the agent,
++        forward-slash separated and without the file extension."""
++        s = _Session(tmp_path)
++        await s.run(
++            [
++                _mirror(
++                    s.path("-home-user-repo", "abc-123", "subagents", "agent-xyz.jsonl"),
++                    [{"type": "user"}],
++                ),
++                _RESULT_MSG,
++            ]
++        )
++        assert [k for k, _ in s.store.append_calls] == [
++            {
++                "project_key": "-home-user-repo",
++                "session_id": "abc-123",
++                "subpath": "subagents/agent-xyz",
++            }
++        ]
++
++    @pytest.mark.asyncio
++    async def test_nested_subagent_subpath(self, tmp_path: Path) -> None:
++        s = _Session(tmp_path)
++        await s.run(
++            [
++                _mirror(
++                    s.path("proj", "sess", "subagents", "nested", "agent-1.jsonl"),
++                    [{"type": "user"}],
++                ),
++                _RESULT_MSG,
++            ]
++        )
++        assert [k for k, _ in s.store.append_calls] == [
++            {
++                "project_key": "proj",
++                "session_id": "sess",
++                "subpath": "subagents/nested/agent-1",
++            }
++        ]
++
++    @pytest.mark.asyncio
++    @pytest.mark.parametrize(
++        "relative_parts",
++        [
++            pytest.param(("proj-only.jsonl",), id="too-few-parts"),
++            pytest.param(("proj", "sess", "weird.jsonl"), id="ambiguous-shape"),
++            pytest.param(("proj", "sess.txt"), id="not-a-transcript"),
++        ],
++    )
++    async def test_unmappable_shapes_are_dropped(
++        self, tmp_path: Path, relative_parts: tuple[str, ...]
++    ) -> None:
++        """A path that does not unambiguously match a known transcript shape
++        must be dropped, not guessed at — and must not disturb the stream."""
++        s = _Session(tmp_path)
++        seen = await s.run(
++            [_mirror(s.path(*relative_parts), [{"type": "user"}]), _RESULT_MSG]
++        )
++        assert s.store.append_calls == []
++        assert [type(m) for m in seen] == [ResultMessage]
++
++    @pytest.mark.asyncio
++    async def test_path_outside_projects_dir_is_dropped(self, tmp_path: Path) -> None:
++        s = _Session(tmp_path)
++        elsewhere = str(tmp_path / "elsewhere" / "proj" / "sess.jsonl")
++        seen = await s.run([_mirror(elsewhere, [{"type": "user"}]), _RESULT_MSG])
++        assert s.store.append_calls == []
++        assert [type(m) for m in seen] == [ResultMessage]
++
++    @pytest.mark.asyncio
++    async def test_unrelativizable_path_is_dropped_not_raised(
++        self, tmp_path: Path
++    ) -> None:
++        """Some paths cannot be expressed relative to the projects directory
++        at all (a different drive root on Windows). That must be dropped like
++        any other unmappable path — never propagated into the stream."""
++        s = _Session(tmp_path)
++        seen = await s.run(
++            [_mirror("D:\\cfg\\p\\s.jsonl", [{"type": "user"}]), _RESULT_MSG]
++        )
++        assert s.store.append_calls == []
++        assert [type(m) for m in seen] == [ResultMessage]
++
++    @pytest.mark.asyncio
++    async def test_trailing_separator_on_config_dir_does_not_change_key(
++        self, tmp_path: Path
++    ) -> None:
++        s = _Session(tmp_path)
++        await s.run(
++            [
++                _mirror(s.path("proj", "sess.jsonl"), [{"type": "user"}]),
++                _mirror(
++                    s.path("proj", "sess", "subagents", "a.jsonl"), [{"type": "user"}]
++                ),
++                _RESULT_MSG,
++            ],
++            env={"CLAUDE_CONFIG_DIR": str(s.config_dir) + os.sep},
++        )
++        assert [k for k, _ in s.store.append_calls] == [
++            {"project_key": "proj", "session_id": "sess"},
++            {"project_key": "proj", "session_id": "sess", "subpath": "subagents/a"},
++        ]
++
++
++class TestProjectsDirResolution:
++    """The mirror must write under the same configuration directory the
++    subprocess does, honouring an override supplied through ``options.env``
++    ahead of the ambient environment."""
++
++    @pytest.mark.asyncio
++    async def test_options_env_takes_precedence_over_ambient(
++        self, tmp_path: Path
++    ) -> None:
++        s = _Session(tmp_path)
++        ambient = tmp_path / "ambient"
++        (ambient / "projects").mkdir(parents=True)
++        with patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(ambient)}):
++            await s.run(
++                [_mirror(s.path("proj", "sess.jsonl"), [{"type": "user"}]), _RESULT_MSG]
++            )
++        assert [k for k, _ in s.store.append_calls] == [
++            {"project_key": "proj", "session_id": "sess"}
++        ]
++
++    @pytest.mark.asyncio
++    async def test_falls_back_to_ambient_environment(self, tmp_path: Path) -> None:
++        ambient = tmp_path / "cfg"
++        store = _RecordingStore()
++        path = str(ambient / "projects" / "proj" / "sess.jsonl")
++        with patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(ambient)}):
++            s = _Session(tmp_path, store=store)
++            await s.run([_mirror(path, [{"type": "user"}]), _RESULT_MSG], env={})
++        assert [k for k, _ in store.append_calls] == [
++            {"project_key": "proj", "session_id": "sess"}
++        ]
++
++    @pytest.mark.asyncio
++    async def test_empty_override_is_ignored(self, tmp_path: Path) -> None:
++        """An empty override is not a directory — it must not shadow the
++        ambient value and silently send every path off-target."""
++        ambient = tmp_path / "cfg"
++        store = _RecordingStore()
++        path = str(ambient / "projects" / "proj" / "sess.jsonl")
++        with patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(ambient)}):
++            s = _Session(tmp_path, store=store)
++            await s.run(
++                [_mirror(path, [{"type": "user"}]), _RESULT_MSG],
++                env={"CLAUDE_CONFIG_DIR": ""},
++            )
++        assert [k for k, _ in store.append_calls] == [
++            {"project_key": "proj", "session_id": "sess"}
++        ]
++
++
++# ---------------------------------------------------------------------------
++# Delivery to the adapter
++# ---------------------------------------------------------------------------
++
++
++class TestTranscriptMirrorBatching:
++    @pytest.mark.asyncio
++    async def test_delivery_contract(self, tmp_path: Path) -> None:
++        """One graded test for the whole delivery contract: path→key mapping
++        for main and subagent transcripts, per-transcript coalescing in order,
++        distinct keys for distinct transcripts, no phantom key for an empty
++        batch, mirroring invisible to the application, a modest backlog held
++        until the result, a backlog past the entry-count bound delivered
++        without waiting, and everything persisted before the result surfaces.
++        """
++        s = _Session(tmp_path)
++        main = s.path("proj", "sess.jsonl")
++        sub = s.path("proj", "sess", "subagents", "agent-x.jsonl")
++        other = s.path("proj", "other.jsonl")
++
++        at_assistant: list[int] = []
++        at_result: list[int] = []
++
++        def watch(m: Any) -> None:
++            if isinstance(m, AssistantMessage):
++                at_assistant.append(len(s.store.append_calls))
++            if isinstance(m, ResultMessage):
++                at_result.append(len(s.store.append_calls))
++
++        seen = await s.run(
++            [
++                _mirror(main, [{"type": "user", "n": 1}]),
++                _mirror(other, []),  # empty batch -> no phantom key
++                _mirror(sub, [{"type": "user", "n": 100}]),
++                _ASSISTANT_MSG,
++                _mirror(main, [{"type": "assistant", "n": 2}]),
++                _RESULT_MSG,
++            ],
++            on_message=watch,
++        )
++
++        # Mirroring is invisible to the application.
++        assert [type(m) for m in seen] == [AssistantMessage, ResultMessage]
++
++        # A modest backlog is still buffered when the assistant message lands.
++        assert at_assistant == [0]
++        # ...and everything pending is persisted before the result surfaces.
++        assert at_result and at_result[0] >= 1
++
++        by_key: dict[tuple, list[int]] = {}
++        for key, entries in s.store.append_calls:
++            by_key.setdefault(
++                (key["project_key"], key["session_id"], key.get("subpath")), []
++            ).extend(e["n"] for e in entries)
++
++        assert by_key == {
++            ("proj", "sess", None): [1, 2],
++            ("proj", "sess", "subagents/agent-x"): [100],
++        }, "coalesced per transcript, in order, with no phantom empty key"
++
++        # And the backlog must not grow without bound: past the entry-count
++        # bound and past the byte bound, delivery starts before anything asks
++        # for a flush — otherwise a long conversation buffers the whole
++        # transcript in memory and loses it if the process dies.
++        for label, entries in (
++            ("entry count", [{"type": "user", "n": i} for i in range(600)]),
++            ("byte size", [{"type": "user", "blob": "a" * (2 << 20)}]),
++        ):
++            big = _Session(tmp_path / label.replace(" ", "-"))
++            eager: list[int] = []
++            await big.run(
++                [
++                    _mirror(big.path("proj", "sess.jsonl"), entries),
++                    _ASSISTANT_MSG,
++                    _RESULT_MSG,
++                ],
++                on_message=lambda m: eager.append(len(big.store.append_calls))
++                if isinstance(m, AssistantMessage)
++                else None,
++            )
++            assert eager and eager[0] >= 1, (
++                f"backlog past the {label} bound should already be delivering"
++            )
++            delivered = [e for _, batch in big.store.append_calls for e in batch]
++            assert len(delivered) == len(entries), "and nothing may be lost"
++
++    @pytest.mark.asyncio
++    async def test_entries_for_one_transcript_arrive_once_in_order(
++        self, tmp_path: Path
++    ) -> None:
++        s = _Session(tmp_path)
++        p = s.path("proj", "sess.jsonl")
++        seen = await s.run(
++            [
++                _mirror(p, [{"type": "user", "n": 1}]),
++                _ASSISTANT_MSG,
++                _mirror(p, [{"type": "assistant", "n": 2}]),
++                _RESULT_MSG,
++            ]
++        )
++        # Mirroring is invisible to the application: the frames never surface
++        # as messages, only the real conversation does.
++        assert [type(m) for m in seen] == [AssistantMessage, ResultMessage]
++
++        assert len(s.store.append_calls) == 1, "should coalesce into one append"
++        key, entries = s.store.append_calls[0]
++        assert key == {"project_key": "proj", "session_id": "sess"}
++        assert [e["n"] for e in entries] == [1, 2]
++
++    @pytest.mark.asyncio
++    async def test_empty_batch_produces_no_append(self, tmp_path: Path) -> None:
++        """Adapters must never see a phantom key with no entries."""
++        s = _Session(tmp_path)
++        await s.run([_mirror(s.path("proj", "sess.jsonl"), []), _RESULT_MSG])
++        assert s.store.append_calls == []
++
++    @pytest.mark.asyncio
++    async def test_distinct_transcripts_get_distinct_appends(
++        self, tmp_path: Path
++    ) -> None:
++        s = _Session(tmp_path)
++        await s.run(
++            [
++                _mirror(s.path("p", "a.jsonl"), [{"type": "x", "n": 1}]),
++                _mirror(s.path("p", "b.jsonl"), [{"type": "x", "n": 2}]),
++                _mirror(s.path("p", "a.jsonl"), [{"type": "x", "n": 3}]),
++                _RESULT_MSG,
++            ]
++        )
++        by_session = {
++            k["session_id"]: [e["n"] for e in entries]
++            for k, entries in s.store.append_calls
++        }
++        assert by_session == {"a": [1, 3], "b": [2]}
++
++    @pytest.mark.asyncio
++    async def test_small_batch_is_buffered_until_the_result(
++        self, tmp_path: Path
++    ) -> None:
++        """Baseline for the threshold tests below: a modest batch must not
++        reach the adapter eagerly."""
++        s = _Session(tmp_path)
++        at_assistant: list[int] = []
++        await s.run(
++            [
++                _mirror(
++                    s.path("proj", "sess.jsonl"),
++                    [{"type": "user", "n": i} for i in range(10)],
++                ),
++                _ASSISTANT_MSG,
++                _RESULT_MSG,
++            ],
++            on_message=lambda m: at_assistant.append(len(s.store.append_calls))
++            if isinstance(m, AssistantMessage)
++            else None,
++        )
++        assert at_assistant == [0], "small batch should still be buffered"
++        assert len(s.store.append_calls) == 1, "and delivered by the result"
++
++    @pytest.mark.asyncio
++    async def test_large_entry_count_is_delivered_without_waiting(
++        self, tmp_path: Path
++    ) -> None:
++        """A backlog must not grow unbounded: past a maximum entry count,
++        delivery starts before anything asks for a flush."""
++        s = _Session(tmp_path)
++        at_assistant: list[int] = []
++        await s.run(
++            [
++                _mirror(
++                    s.path("proj", "sess.jsonl"),
++                    [{"type": "user", "n": i} for i in range(600)],
++                ),
++                _ASSISTANT_MSG,
++                _RESULT_MSG,
++            ],
++            on_message=lambda m: at_assistant.append(len(s.store.append_calls))
++            if isinstance(m, AssistantMessage)
++            else None,
++        )
++        assert at_assistant and at_assistant[0] >= 1, (
++            "600 buffered entries should have started delivering already"
++        )
++
++    @pytest.mark.asyncio
++    async def test_large_byte_size_is_delivered_without_waiting(
++        self, tmp_path: Path
++    ) -> None:
++        """Same bound expressed in bytes: a few very large entries must also
++        trigger delivery."""
++        s = _Session(tmp_path)
++        at_assistant: list[int] = []
++        await s.run(
++            [
++                _mirror(
++                    s.path("proj", "sess.jsonl"),
++                    [{"type": "user", "blob": "a" * (2 << 20)}],
++                ),
++                _ASSISTANT_MSG,
++                _RESULT_MSG,
++            ],
++            on_message=lambda m: at_assistant.append(len(s.store.append_calls))
++            if isinstance(m, AssistantMessage)
++            else None,
++        )
++        assert at_assistant and at_assistant[0] >= 1, (
++            "a >1MiB backlog should have started delivering already"
++        )
++
++    @pytest.mark.asyncio
++    async def test_every_entry_arrives_exactly_once_and_in_order(
++        self, tmp_path: Path
++    ) -> None:
++        """Whatever the interleaving of size-triggered deliveries and the
++        flush before the result, no entry may be duplicated, reordered or
++        lost."""
++        s = _Session(tmp_path)
++        p = s.path("proj", "sess.jsonl")
++        total = 0
++        frames: list[dict[str, Any]] = []
++        for _ in range(6):
++            frames.append(
++                _mirror(p, [{"type": "user", "n": total + i} for i in range(300)])
++            )
++            total += 300
++        frames.append(_RESULT_MSG)
++
++        await s.run(frames)
++
++        delivered = [e["n"] for _, entries in s.store.append_calls for e in entries]
++        assert delivered == list(range(total))
++
++    @pytest.mark.asyncio
++    async def test_late_frames_after_the_result_still_reach_the_store(
++        self, tmp_path: Path
++    ) -> None:
++        s = _Session(tmp_path)
++        p = s.path("proj", "sess.jsonl")
++        await s.run(
++            [
++                _mirror(p, [{"type": "user", "n": 1}]),
++                _RESULT_MSG,
++                _mirror(p, [{"type": "user", "n": 2}]),
++            ]
++        )
++        delivered = [e["n"] for _, entries in s.store.append_calls for e in entries]
++        assert delivered == [1, 2]
++
++    @pytest.mark.asyncio
++    async def test_everything_pending_is_stored_before_the_result_surfaces(
++        self, tmp_path: Path
++    ) -> None:
++        s = _Session(tmp_path)
++        at_result: list[int] = []
++        await s.run(
++            [
++                _mirror(s.path("proj", "sess.jsonl"), [{"type": "user", "n": 1}]),
++                _ASSISTANT_MSG,
++                _RESULT_MSG,
++            ],
++            on_message=lambda m: at_result.append(len(s.store.append_calls))
++            if isinstance(m, ResultMessage)
++            else None,
++        )
++        assert at_result == [1], "pending entries must be persisted before the result"
++
++    @pytest.mark.asyncio
++    async def test_frames_are_discarded_when_no_store_is_configured(
++        self, tmp_path: Path
++    ) -> None:
++        """Without a store there is nothing to mirror into, and the frames
++        still must not surface as application messages."""
++        mirror_frame = _mirror(
++            str(tmp_path / "projects" / "proj" / "sess.jsonl"), [{"type": "user"}]
++        )
++        with (
++            patch("claude_agent_sdk._internal.client.SubprocessCLITransport") as cls,
++            patch(
++                "claude_agent_sdk._internal.query.Query.initialize",
++                new_callable=AsyncMock,
++            ),
++        ):
++            cls.return_value = _mock_transport(
++                [mirror_frame, _ASSISTANT_MSG, _RESULT_MSG]
++            )
++            seen = [m async for m in query(prompt="Hello")]
++        assert [type(m) for m in seen] == [AssistantMessage, ResultMessage]
++
++
++class TestAdapterFailures:
++    @pytest.mark.asyncio
++    async def test_adapter_failure_and_timeout_surface_mirror_errors(
++        self, tmp_path: Path
++    ) -> None:
++        """A store is third-party code. Whether it raises or simply never
++        returns, the mirror must neither crash the stream nor silently drop
++        data: the conversation completes and the caller is told persistence
++        failed."""
++
++        class FailingStore(InMemorySessionStore):
++            async def append(self, key, entries):  # type: ignore[override]
++                raise RuntimeError("boom")
++
++        s = _Session(tmp_path / "raises", store=FailingStore())
++        seen = await s.run(
++            [
++                _mirror(s.path("proj", "sess.jsonl"), [{"type": "user"}]),
++                _ASSISTANT_MSG,
++                _RESULT_MSG,
++            ]
++        )
++        errors = [m for m in seen if isinstance(m, MirrorErrorMessage)]
++        assert len(errors) == 1
++        assert errors[0].subtype == "mirror_error"
++        assert errors[0].key == {"project_key": "proj", "session_id": "sess"}
++        assert "boom" in errors[0].error
++        assert any(isinstance(m, ResultMessage) for m in seen)
++
++        # A store that never returns must be bounded rather than stalling the
++        # conversation forever; the outer wait_for only catches a regression.
++        class HangingStore(InMemorySessionStore):
++            async def append(self, key, entries):  # type: ignore[override]
++                await asyncio.sleep(3600)
++
++        hung = _Session(tmp_path / "hangs", store=HangingStore())
++        task = asyncio.ensure_future(
++            hung.run(
++                [
++                    _mirror(hung.path("proj", "sess.jsonl"), [{"type": "user"}]),
++                    _RESULT_MSG,
++                ]
++            )
++        )
++        # asyncio.wait leaves the task alone on timeout, so this returns
++        # promptly whether or not the implementation bounds the append. A
++        # conversation that never finishes is the failure being tested for;
++        # it must not be able to stall the whole verifier run.
++        _done, pending = await asyncio.wait({task}, timeout=90)
++        if pending:
++            task.cancel()
++            pytest.fail(
++                "a hanging store.append must be bounded and reported; the "
++                "conversation never completed"
++            )
++        seen = task.result()
++        assert any(isinstance(m, MirrorErrorMessage) for m in seen), (
++            "a hanging append must time out and be reported, not stall silently"
++        )
++        assert any(isinstance(m, ResultMessage) for m in seen)
++
++
++# ---------------------------------------------------------------------------
++# CLI wiring
++# ---------------------------------------------------------------------------
++
++
++class TestMirrorFollowsResume:
++    @pytest.mark.asyncio
++    async def test_mirror_follows_staged_config_dir_on_resume(
++        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++    ) -> None:
++        """When a session is resumed from the store, the subprocess writes its
++        transcript under the staged configuration directory — so the mirror
++        must resolve paths against that directory, not the caller's."""
++        from claude_agent_sdk import ClaudeSDKClient, project_key_for_directory
++
++        home = tmp_path / "home"
++        (home / ".claude").mkdir(parents=True)
++        (home / ".claude" / ".credentials.json").write_text(
++            '{"claudeAiOauth": {"accessToken": "t"}}'
++        )
++        monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
++        monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
++
++        workdir = tmp_path / "project"
++        workdir.mkdir()
++        session_id = "550e8400-e29b-41d4-a716-446655440000"
++        pkey = project_key_for_directory(workdir)
++
++        store = _RecordingStore()
++        await store.append(
++            {"project_key": pkey, "session_id": session_id},
++            [{"type": "user", "uuid": "u1"}],
++        )
++        store.append_calls.clear()
++
++        captured: dict[str, Any] = {}
++
++        async def receive():
++            # Resolved lazily so the frame can point inside the directory the
++            # SDK staged for this run.
++            staged = Path(captured["options"].env["CLAUDE_CONFIG_DIR"])
++            yield _mirror(
++                str(staged / "projects" / pkey / f"{session_id}.jsonl"),
++                [{"type": "assistant", "uuid": "a1"}],
++            )
++            yield _RESULT_MSG
++
++        transport = _mock_transport([])
++        transport.read_messages = receive
++
++        def capture(*, prompt: Any, options: Any) -> Any:
++            captured["options"] = options
++            return transport
++
++        client = ClaudeSDKClient(
++            options=ClaudeAgentOptions(
++                cwd=workdir, session_store=store, resume=session_id
++            )
++        )
++        with (
++            patch(
++                "claude_agent_sdk._internal.transport.subprocess_cli."
++                "SubprocessCLITransport",
++                side_effect=capture,
++            ),
++            patch(
++                "claude_agent_sdk._internal.query.Query.initialize",
++                new_callable=AsyncMock,
++            ),
++        ):
++            await client.connect()
++            async for _ in client.receive_response():
++                pass
++            await client.disconnect()
++
++        assert [k for k, _ in store.append_calls] == [
++            {"project_key": pkey, "session_id": session_id}
++        ], "mirror did not follow the staged config dir"
++
++
++class TestSessionMirrorFlag:
++    @pytest.mark.asyncio
++    async def test_no_store_means_no_mirroring(self, tmp_path: Path) -> None:
++        """With no store there is nothing to mirror into: the SDK must not ask
++        the CLI for the traffic, and any that arrives anyway must be discarded
++        rather than stored or surfaced as an application message."""
++        mirror_frame = _mirror(
++            str(tmp_path / "projects" / "proj" / "sess.jsonl"), [{"type": "user"}]
++        )
++        with (
++            patch("claude_agent_sdk._internal.client.SubprocessCLITransport") as cls,
++            patch(
++                "claude_agent_sdk._internal.query.Query.initialize",
++                new_callable=AsyncMock,
++            ),
++        ):
++            cls.return_value = _mock_transport(
++                [mirror_frame, _ASSISTANT_MSG, _RESULT_MSG]
++            )
++            seen = [m async for m in query(prompt="Hello")]
++        assert [type(m) for m in seen] == [AssistantMessage, ResultMessage], (
++            "mirror frames must never surface as application messages"
++        )
++
++        # And the flag is present exactly when a store is configured.
++        with_store = SubprocessCLITransport(
++            prompt="hi",
++            options=ClaudeAgentOptions(
++                cli_path="/usr/bin/claude", session_store=InMemorySessionStore()
++            ),
++        )._build_command()
++        without_store = SubprocessCLITransport(
++            prompt="hi",
++            options=ClaudeAgentOptions(cli_path="/usr/bin/claude"),
++        )._build_command()
++        assert "--session-mirror" in with_store
++        assert "--session-mirror" not in without_store
++
++    def test_flag_tracks_session_store_option(self) -> None:
++        """The CLI only emits mirroring traffic when asked, so the flag must
++        be present exactly when a store is configured — asking for it with no
++        store wastes a stream, and omitting it with a store silently mirrors
++        nothing."""
++        with_store = SubprocessCLITransport(
++            prompt="hi",
++            options=ClaudeAgentOptions(
++                cli_path="/usr/bin/claude", session_store=InMemorySessionStore()
++            ),
++        )._build_command()
++        without_store = SubprocessCLITransport(
++            prompt="hi",
++            options=ClaudeAgentOptions(cli_path="/usr/bin/claude"),
++        )._build_command()
++
++        assert "--session-mirror" in with_store
++        assert "--session-mirror" not in without_store
++
++    def test_flag_present_when_session_store_set(self) -> None:
++        cmd = SubprocessCLITransport(
++            prompt="hi",
++            options=ClaudeAgentOptions(
++                cli_path="/usr/bin/claude", session_store=InMemorySessionStore()
++            ),
++        )._build_command()
++        assert "--session-mirror" in cmd
++
++    def test_flag_absent_when_session_store_unset(self) -> None:
++        cmd = SubprocessCLITransport(
++            prompt="hi",
++            options=ClaudeAgentOptions(cli_path="/usr/bin/claude"),
++        )._build_command()
++        assert "--session-mirror" not in cmd

@@ -1,0 +1,3 @@
+# Keep tracked upstream editor metadata available to the coding agent without
+# copying it into the task's runtime filesystem.
+repo/sif.code-workspace

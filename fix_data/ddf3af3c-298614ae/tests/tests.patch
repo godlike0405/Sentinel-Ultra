@@ -1,0 +1,420 @@
+diff --git a/Tests/VerifierOnly/UnityObjectNameComparerNaturalSortTests.cs b/Tests/VerifierOnly/UnityObjectNameComparerNaturalSortTests.cs
+new file mode 100644
+index 0000000..d05c441
+--- /dev/null
++++ b/Tests/VerifierOnly/UnityObjectNameComparerNaturalSortTests.cs
+@@ -0,0 +1,405 @@
++// MIT License - Copyright (c) 2025 wallstop
++// Full license text: https://github.com/wallstop/unity-helpers/blob/main/LICENSE
++
++// Fully-qualified test IDs in this fixture (for grader reference):
++// WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareOrdersByTrailingNumberNaturally
++// WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareOrdersZeroPaddedTrailingNumbersNaturally
++// WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareOrdersNameWithoutNumberBeforeNameWithNumber
++// WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareOrdersByDifferentLeadingPortions
++// WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareSamePrefixDifferentCaseOrdersByNumber
++// WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareNamesWithoutTrailingDigitsAreCaseInsensitive
++// WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareNullRightHandOperandOrdersAfter
++// WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareNullLeftHandOperandOrdersBefore
++// WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareObjectToItselfYieldsZero
++// WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareLargeTrailingNumberOrdersNaturally
++// WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareInternalDigitsNotTreatedAsNaturalSort
++// WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.ComparePureNumericNamesOrderNaturally
++// WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareNameEndingInLetterOrdersBeforeNameWithTrailingDigit
++// WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareOrdersAdditionalDigitWidthNaturally
++// WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareOrdersNinetyNineBeforeOneHundred
++// WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareOrdersZeroPaddedDifferentWidthsNaturally
++// WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareSamePrefixDifferentCaseAcrossDigitWidths
++// WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareVeryLargeTrailingNumbersWithoutOverflow
++// WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.SortByNameArrayUsesNaturalOrdering
++// WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.SortByNameListUsesNaturalOrdering
++// WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.SortByNameOtherIListUsesNaturalOrdering
++// WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareEqualNumericSuffixesUsesInstanceIdTieBreaker
++// WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareEqualNamesUsesAssetPathBeforeInstanceId
++
++namespace WallstopStudios.UnityHelpers.Tests.Utils
++{
++    using System.Collections.Generic;
++    using System.Collections.ObjectModel;
++    using NUnit.Framework;
++    using UnityEditor;
++    using UnityEngine;
++    using WallstopStudios.UnityHelpers.Core.Extension;
++    using WallstopStudios.UnityHelpers.Utils;
++
++    [TestFixture]
++    public sealed class UnityObjectNameComparerNaturalSortTests
++    {
++        private readonly List<GameObject> _spawned = new();
++
++        [TearDown]
++        public void Cleanup()
++        {
++            foreach (GameObject spawned in _spawned)
++            {
++                if (spawned == null)
++                {
++                    continue;
++                }
++
++                Object.DestroyImmediate(spawned);
++            }
++
++            _spawned.Clear();
++        }
++
++        private GameObject Create(string name)
++        {
++            GameObject go = new(name);
++            _spawned.Add(go);
++            return go;
++        }
++
++        [Test]
++        public void CompareOrdersByTrailingNumberNaturally()
++        {
++            GameObject item2 = Create("Item2");
++            GameObject item10 = Create("Item10");
++
++            // Natural numeric ordering: 2 should come before 10.
++            Assert.Less(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(item2, item10),
++                0
++            );
++            Assert.Greater(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(item10, item2),
++                0
++            );
++        }
++
++        [Test]
++        public void CompareOrdersZeroPaddedTrailingNumbersNaturally()
++        {
++            GameObject item001 = Create("Item001");
++            GameObject item10 = Create("Item10");
++
++            Assert.Less(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(item001, item10),
++                0
++            );
++        }
++
++        [Test]
++        public void CompareOrdersNameWithoutNumberBeforeNameWithNumber()
++        {
++            GameObject item = Create("Item");
++            GameObject item2 = Create("Item2");
++
++            Assert.Less(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(item, item2),
++                0
++            );
++        }
++
++        [Test]
++        public void CompareOrdersByDifferentLeadingPortions()
++        {
++            // Criterion 4: names with differing leading portions are ordered by that leading
++            // portion, even when both carry a trailing number.
++            // Alpha < Beta alphabetically, so Alpha2 must come before Beta1 regardless of
++            // the numeric values (2 > 1 would put Beta1 first if we sorted by number alone).
++            GameObject alpha2 = Create("Alpha2");
++            GameObject beta1 = Create("Beta1");
++
++            Assert.Less(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(alpha2, beta1),
++                0
++            );
++            Assert.Greater(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(beta1, alpha2),
++                0
++            );
++        }
++
++        [Test]
++        public void CompareSamePrefixDifferentCaseOrdersByNumber()
++        {
++            // Criterion 4: the leading-portion comparison is case-insensitive.
++            // "alpha" and "ALPHA" are the same prefix, so ordering falls through to the
++            // trailing number: 1 < 2.
++            GameObject alpha1 = Create("alpha1");
++            GameObject alpha2 = Create("ALPHA2");
++
++            Assert.Less(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(alpha1, alpha2),
++                0
++            );
++        }
++
++        [Test]
++        public void CompareNamesWithoutTrailingDigitsAreCaseInsensitive()
++        {
++            // Criterion 5: names with no trailing digits compare case-insensitively as before.
++            GameObject apple = Create("apple");
++            GameObject banana = Create("Banana");
++
++            Assert.Less(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(apple, banana),
++                0
++            );
++            Assert.Greater(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(banana, apple),
++                0
++            );
++        }
++
++        [Test]
++        public void CompareNullRightHandOperandOrdersAfter()
++        {
++            // Contract: a null right-hand operand orders after a non-null left-hand operand.
++            GameObject obj = Create("Item");
++
++            Assert.Greater(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(obj, null),
++                0
++            );
++        }
++
++        [Test]
++        public void CompareNullLeftHandOperandOrdersBefore()
++        {
++            // Contract: a null left-hand operand orders before a non-null right-hand operand.
++            GameObject obj = Create("Item");
++            Assert.Less(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(null, obj),
++                0
++            );
++        }
++
++        [Test]
++        public void CompareObjectToItselfYieldsZero()
++        {
++            // Contract: comparing an object to itself yields 0 — neither negative nor positive.
++            GameObject obj = Create("Item10");
++
++            int result = UnityObjectNameComparer<GameObject>.Instance.Compare(obj, obj);
++            Assert.Less(result, 1);    // not positive
++            Assert.Greater(result, -1); // not negative
++        }
++
++        [Test]
++        public void CompareLargeTrailingNumberOrdersNaturally()
++        {
++            // Numeric ordering must hold even when the gap between values is large.
++            // Lexicographic comparison of "Item9" vs "Item100" would put Item100 first
++            // because '1' < '9'; numeric ordering must put Item9 first (9 < 100).
++            GameObject item9 = Create("Item9");
++            GameObject item100 = Create("Item100");
++
++            Assert.Less(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(item9, item100),
++                0
++            );
++        }
++
++        [Test]
++        public void CompareInternalDigitsNotTreatedAsNaturalSort()
++        {
++            // Criterion 5: only TRAILING digits are subject to numeric comparison.
++            // Names whose digits appear in the middle (not at the end) have no trailing
++            // number and must compare as plain strings, case-insensitively.
++            // "Test123abc" vs "Test5def": both end in letters, so pure string comparison
++            // applies — '1' (from 123) < '5' in the fourth position → Test123abc comes first.
++            GameObject t123 = Create("Test123abc");
++            GameObject t5 = Create("Test5def");
++
++            Assert.Less(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(t123, t5),
++                0
++            );
++        }
++
++        [Test]
++        public void ComparePureNumericNamesOrderNaturally()
++        {
++            // When a name consists entirely of digits the prefix is empty and the whole
++            // name is treated as the trailing number.  Numeric ordering must still apply:
++            // 9 < 100, even though '9' > '1' lexicographically.
++            GameObject nine = Create("9");
++            GameObject hundred = Create("100");
++
++            Assert.Less(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(nine, hundred),
++                0
++            );
++            Assert.Greater(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(hundred, nine),
++                0
++            );
++        }
++
++        [Test]
++        public void CompareNameEndingInLetterOrdersBeforeNameWithTrailingDigit()
++        {
++            // Criterion 3: a name with no trailing number must order before a name that
++            // has one — even when the letter-suffixed name would sort later under pure
++            // string comparison.  "LevelZ" ends in 'Z' which is lexicographically higher
++            // than the digit '1', so a string comparer would put Level1 first; natural-sort
++            // must put LevelZ first because it has no trailing number.
++            GameObject levelZ = Create("LevelZ");
++            GameObject level1 = Create("Level1");
++
++            Assert.Less(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(levelZ, level1),
++                0
++            );
++            Assert.Greater(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(level1, levelZ),
++                0
++            );
++        }
++
++        [Test]
++        public void CompareOrdersAdditionalDigitWidthNaturally()
++        {
++            GameObject node2 = Create("Node2");
++            GameObject node11 = Create("Node11");
++
++            Assert.Less(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(node2, node11),
++                0
++            );
++        }
++
++        [Test]
++        public void CompareOrdersNinetyNineBeforeOneHundred()
++        {
++            GameObject frame99 = Create("Frame99");
++            GameObject frame100 = Create("Frame100");
++
++            Assert.Less(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(frame99, frame100),
++                0
++            );
++        }
++
++        [Test]
++        public void CompareOrdersZeroPaddedDifferentWidthsNaturally()
++        {
++            GameObject item02 = Create("Item02");
++            GameObject item0010 = Create("Item0010");
++
++            Assert.Less(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(item02, item0010),
++                0
++            );
++        }
++
++        [Test]
++        public void CompareSamePrefixDifferentCaseAcrossDigitWidths()
++        {
++            GameObject item2 = Create("entry2");
++            GameObject item10 = Create("ENTRY10");
++
++            Assert.Less(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(item2, item10),
++                0
++            );
++        }
++
++        [Test]
++        public void CompareVeryLargeTrailingNumbersWithoutOverflow()
++        {
++            // Create the greater value first so an implementation that collapses both
++            // values to one overflow sentinel cannot pass via the instance-id tie-breaker.
++            GameObject greater = Create("Huge100000000000000000000");
++            GameObject lesser = Create("Huge99999999999999999999");
++
++            Assert.Less(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(lesser, greater),
++                0
++            );
++            Assert.Greater(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(greater, lesser),
++                0
++            );
++        }
++
++        [Test]
++        public void SortByNameArrayUsesNaturalOrdering()
++        {
++            GameObject item10 = Create("ArrayItem10");
++            GameObject item2 = Create("ArrayItem2");
++            GameObject[] values = { item10, item2 };
++
++            values.SortByName();
++
++            Assert.AreSame(item2, values[0]);
++            Assert.AreSame(item10, values[1]);
++        }
++
++        [Test]
++        public void SortByNameListUsesNaturalOrdering()
++        {
++            GameObject item10 = Create("ListItem10");
++            GameObject item2 = Create("ListItem2");
++            var values = new List<GameObject> { item10, item2 };
++
++            values.SortByName();
++
++            Assert.AreSame(item2, values[0]);
++            Assert.AreSame(item10, values[1]);
++        }
++
++        [Test]
++        public void SortByNameOtherIListUsesNaturalOrdering()
++        {
++            GameObject item10 = Create("CollectionItem10");
++            GameObject item2 = Create("CollectionItem2");
++            IList<GameObject> values = new Collection<GameObject> { item10, item2 };
++
++            values.SortByName();
++
++            Assert.AreSame(item2, values[0]);
++            Assert.AreSame(item10, values[1]);
++        }
++
++        [Test]
++        public void CompareEqualNumericSuffixesUsesInstanceIdTieBreaker()
++        {
++            GameObject item1 = Create("Tie1");
++            GameObject item001 = Create("Tie001");
++
++            Assert.Less(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(item1, item001),
++                0
++            );
++            Assert.Greater(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(item001, item1),
++                0
++            );
++        }
++
++        [Test]
++        public void CompareEqualNamesUsesAssetPathBeforeInstanceId()
++        {
++            GameObject laterPath = Create("SharedName");
++            GameObject earlierPath = Create("SharedName");
++            AssetDatabase.SetAssetOrScenePath(laterPath, "Assets/Z.asset");
++            AssetDatabase.SetAssetOrScenePath(earlierPath, "Assets/A.asset");
++
++            Assert.Less(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(earlierPath, laterPath),
++                0
++            );
++            Assert.Greater(
++                UnityObjectNameComparer<GameObject>.Instance.Compare(laterPath, earlierPath),
++                0
++            );
++        }
++    }
++}
+diff --git a/Tests/VerifierOnly/UnityObjectNameComparerNaturalSortTests.cs.meta b/Tests/VerifierOnly/UnityObjectNameComparerNaturalSortTests.cs.meta
+new file mode 100644
+index 0000000..f59cfa7
+--- /dev/null
++++ b/Tests/VerifierOnly/UnityObjectNameComparerNaturalSortTests.cs.meta
+@@ -0,0 +1,3 @@
++fileFormatVersion: 2
++guid: 3f8a1c2b4d5e6f708192a3b4c5d6e7f8
++timeCreated: 1748619700

@@ -1,0 +1,36 @@
+{
+  "execution": {
+    "commands": [
+      "bash /tests/test.sh"
+    ],
+    "timeout_sec": 300
+  },
+  "grading": {
+    "fail_to_pass": [
+      "Microsoft.Azure.WebJobs.Script.Tests.TestHelpersTests.WaitForBlobAndGetStringAsyncTests.ContentAwareWaitHandlesInitiallyMissingBlob",
+      "Microsoft.Azure.WebJobs.Script.Tests.TestHelpersTests.WaitForBlobAndGetStringAsyncTests.ContentAwareWaitHandlesRepeatedlyMissingBlob",
+      "Microsoft.Azure.WebJobs.Script.Tests.TestHelpersTests.WaitForBlobAndGetStringAsyncTests.ContentAwareWaitReturnsAcceptedFirstDownload",
+      "Microsoft.Azure.WebJobs.Script.Tests.TestHelpersTests.WaitForBlobAndGetStringAsyncTests.ContentAwareWaitRetriesUntilContentIsAccepted",
+      "Microsoft.Azure.WebJobs.Script.Tests.TestHelpersTests.WaitForBlobAndGetStringAsyncTests.ContentAwareWaitEvaluatesEveryDownloadedValue",
+      "Microsoft.Azure.WebJobs.Script.Tests.TestHelpersTests.WaitForBlobAndGetStringAsyncTests.ContentAwareWaitHandlesTemporaryReadUnavailability",
+      "Microsoft.Azure.WebJobs.Script.Tests.TestHelpersTests.WaitForBlobAndGetStringAsyncTests.ContentAwareWaitDoesNotMaskPersistentReadFailure",
+      "Microsoft.Azure.WebJobs.Script.Tests.TestHelpersTests.WaitForBlobAndGetStringAsyncTests.ContentAwareWaitReturnsAcceptedContentAfterTemporaryFailureAndRejectedContent",
+      "Microsoft.Azure.WebJobs.Script.Tests.TestHelpersTests.WaitForBlobAndGetStringAsyncTests.ContentAwareWaitCanAcceptEmptyContent",
+      "Microsoft.Azure.WebJobs.Script.Tests.TestHelpersTests.WaitForBlobAndGetStringAsyncTests.ExistingCallersHandleTemporaryReadUnavailability",
+      "Microsoft.Azure.WebJobs.Script.Tests.TestHelpersTests.WaitForBlobAndGetStringAsyncTests.ContentAwareWaitPreservesUsefulTimeoutDiagnostics"
+    ],
+    "pass_to_pass": [
+      "Microsoft.Azure.WebJobs.Script.Tests.TestHelpersTests.WaitForBlobAndGetStringAsyncTests.ExistingOverloadStillAcceptsAnyContent",
+      "Microsoft.Azure.WebJobs.Script.Tests.UtilityTests.RemoveUTF8ByteOrderMark_RemovesBOM",
+      "Microsoft.Azure.WebJobs.Script.Tests.UtilityTests.RemoveUTF8ByteOrderMark_WithNoBOM_ReturnsOriginalString"
+    ],
+    "parser": {
+      "framework": "xunit",
+      "result_source": "trx"
+    }
+  },
+  "artifacts": {
+    "reward": "/logs/verifier/reward.txt",
+    "test_results": "/logs/verifier/test_results.json"
+  }
+}

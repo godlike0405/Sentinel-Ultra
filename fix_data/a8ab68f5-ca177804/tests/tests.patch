@@ -1,0 +1,786 @@
+diff --git a/tests/test_sentinel_a8ab68f5.py b/tests/test_sentinel_a8ab68f5.py
+new file mode 100644
+index 0000000..d6cd58c
+--- /dev/null
++++ b/tests/test_sentinel_a8ab68f5.py
+@@ -0,0 +1,780 @@
++"""Behavioral and ABI checks for the RPX newlib heap integration."""
++import functools
++import glob
++import os
++from pathlib import Path
++import re
++import shutil
++import subprocess
++import tempfile
++
++ROOT = Path(os.environ.get("SENTINEL_WORKSPACE", Path(__file__).resolve().parent.parent))
++MACHDEP = ["-DESPRESSO", "-mcpu=750", "-meabi", "-mhard-float"]
++INCLUDES = [
++    "-Iinclude",
++    "-Ilibraries/libwhb/include",
++    "-Ilibraries/libgfd/include",
++    "-I.",
++]
++CFLAGS = MACHDEP + ["-D__WIIU__", "-D__WUT__"] + INCLUDES + [
++    "-ffunction-sections",
++    "-fdata-sections",
++    "-Wall",
++    "-O2",
++    "-std=gnu11",
++]
++
++
++def tool(name):
++    found = shutil.which(name)
++    if found:
++        return found
++    dkppc = os.environ.get("DEVKITPPC", "/opt/devkitpro/devkitPPC")
++    candidate = os.path.join(dkppc, "bin", name)
++    assert os.path.exists(candidate), f"required tool is unavailable: {name}"
++    return candidate
++
++
++def run(command, *, cwd=ROOT, timeout=120):
++    return subprocess.run(
++        command,
++        cwd=cwd,
++        capture_output=True,
++        text=True,
++        timeout=timeout,
++    )
++
++
++@functools.lru_cache(maxsize=None)
++def compile_object(rel_src):
++    source = ROOT / rel_src
++    assert source.exists(), f"missing source: {rel_src}"
++    out_dir = Path(tempfile.gettempdir()) / "wut_heap_eval_objects"
++    out_dir.mkdir(exist_ok=True)
++    output = out_dir / (rel_src.replace("/", "_") + ".o")
++    proc = run([tool("powerpc-eabi-gcc"), "-c", rel_src, "-o", str(output)] + CFLAGS)
++    assert proc.returncode == 0, f"{rel_src} failed to compile:\n{proc.stderr}"
++    return output
++
++
++@functools.lru_cache(maxsize=None)
++def symbols_for_source(rel_src):
++    proc = run([tool("powerpc-eabi-nm"), str(compile_object(rel_src))])
++    assert proc.returncode == 0, proc.stderr
++    table = {}
++    for line in proc.stdout.splitlines():
++        parts = line.split()
++        if len(parts) == 2:
++            kind, name = parts
++        elif len(parts) == 3:
++            _, kind, name = parts
++        else:
++            continue
++        table[name] = kind
++    return table
++
++
++def defined_symbols(rel_src):
++    return {
++        name for name, kind in symbols_for_source(rel_src).items()
++        if kind in {"T", "W", "D", "B", "R"}
++    }
++
++
++def undefined_symbols(rel_src):
++    return {
++        name for name, kind in symbols_for_source(rel_src).items() if kind == "U"
++    }
++
++
++def library_sources():
++    return sorted(
++        str(path.relative_to(ROOT))
++        for path in (ROOT / "libraries").glob("**/*.c")
++    )
++
++
++@functools.lru_cache(maxsize=None)
++def default_heap_source():
++    required = {
++        "MEMAllocFromDefaultHeap",
++        "MEMAllocFromDefaultHeapEx",
++        "MEMFreeToDefaultHeap",
++        "malloc",
++        "memalign",
++        "free",
++    }
++    for source in library_sources():
++        text = (ROOT / source).read_text(encoding="utf-8", errors="ignore")
++        if not {"MEMAllocFromDefaultHeap", "MEMFreeToDefaultHeap"} <= set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", text)):
++            continue
++        if required <= undefined_symbols(source):
++            return source
++    return None
++
++
++@functools.lru_cache(maxsize=None)
++def newlib_source():
++    required = {"__syscall_sbrk_r", "__syscall_malloc_lock", "__syscall_malloc_unlock"}
++    for source in library_sources():
++        if required <= defined_symbols(source):
++            return source
++    return None
++
++
++@functools.lru_cache(maxsize=None)
++def sbrk_source():
++    source = newlib_source()
++    assert source, "newlib allocation syscall implementation was not found"
++    refs = undefined_symbols(source)
++    candidates = [item for item in library_sources() if refs & defined_symbols(item)]
++    for item in candidates:
++        if "__wut_sbrk_r" in defined_symbols(item):
++            return item
++    return None
++
++
++@functools.lru_cache(maxsize=None)
++def malloc_lock_source():
++    source = newlib_source()
++    assert source
++    lock_targets = wrapper_targets("__syscall_malloc_lock")
++    unlock_targets = wrapper_targets("__syscall_malloc_unlock")
++    for item in library_sources():
++        definitions = defined_symbols(item)
++        if definitions & lock_targets and definitions & unlock_targets:
++            return item
++    return None
++
++
++@functools.lru_cache(maxsize=None)
++def preinit_source():
++    for source in library_sources():
++        text = (ROOT / source).read_text(encoding="utf-8", errors="ignore")
++        if "__preinit_user" not in text:
++            continue
++        if symbols_for_source(source).get("__preinit_user") == "W":
++            return source
++    return None
++
++
++def component_entry_symbols(component_source):
++    preinit = preinit_source()
++    assert preinit, "weak RPX pre-initialization implementation was not found"
++    if component_source == preinit:
++        return set()
++    linked = undefined_symbols(preinit) & defined_symbols(component_source)
++    return linked
++
++
++def wrapper_targets(public_symbol):
++    source = newlib_source()
++    assert source
++    proc = run([tool("powerpc-eabi-objdump"), "-dr", str(compile_object(source))])
++    assert proc.returncode == 0, proc.stderr
++    match = re.search(
++        r"<%s>:(.*?)(?=\n[0-9a-f]+ <|\Z)" % re.escape(public_symbol),
++        proc.stdout,
++        re.S,
++    )
++    assert match, f"missing public wrapper {public_symbol}"
++    return set(re.findall(r"R_PPC_REL24\s+([A-Za-z_][A-Za-z0-9_]*)", match.group(1)))
++
++
++def wrapper_target(public_symbol, component_source):
++    linked = wrapper_targets(public_symbol) & defined_symbols(component_source)
++    assert len(linked) == 1, (public_symbol, sorted(linked))
++    return next(iter(linked))
++
++
++@functools.lru_cache(maxsize=None)
++def function_call_targets(rel_src, symbol):
++    proc = run([tool("powerpc-eabi-objdump"), "-dr", str(compile_object(rel_src))])
++    assert proc.returncode == 0, proc.stderr
++    if Path(rel_src).suffix.lower() == ".s":
++        return set(re.findall(r"R_PPC_REL24\s+([A-Za-z_][A-Za-z0-9_.$]*)", proc.stdout))
++    match = re.search(
++        r"<%s>:(.*?)(?=\n[0-9a-f]+ <|\Z)" % re.escape(symbol),
++        proc.stdout,
++        re.S,
++    )
++    assert match, f"missing function {symbol} in {rel_src}"
++    return set(re.findall(r"R_PPC_REL24\s+([A-Za-z_][A-Za-z0-9_.$]*)", match.group(1)))
++
++
++@functools.lru_cache(maxsize=None)
++def source_defining(symbol):
++    for source in library_sources():
++        if symbol in defined_symbols(source):
++            return source
++    return None
++
++
++def transitive_calls(start_source, start_symbol):
++    pending = [(start_source, start_symbol)]
++    visited = set()
++    reached = set()
++    while pending:
++        source, symbol = pending.pop()
++        if (source, symbol) in visited:
++            continue
++        visited.add((source, symbol))
++        for target in function_call_targets(source, symbol):
++            reached.add(target)
++            target_source = source if target in defined_symbols(source) else source_defining(target)
++            if target_source:
++                pending.append((target_source, target))
++    return reached
++
++
++def assert_rpx_setup_is_unreachable(start_source, start_symbol):
++    default_source = default_heap_source()
++    assert default_source, "RPX default-heap integration was not found"
++    forbidden = defined_symbols(default_source) | {"__preinit_user"}
++    overlap = forbidden & transitive_calls(start_source, start_symbol)
++    assert not overlap, (
++        f"{start_symbol} transitively reaches RPX-only setup: {sorted(overlap)}"
++    )
++
++
++def write_mock(path, content):
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(content, encoding="utf-8")
++
++
++@functools.lru_cache(maxsize=None)
++def built_library():
++    build = run(["make", "-j2"], timeout=720)
++    assert build.returncode == 0, build.stdout + build.stderr
++    archive = ROOT / "lib/libwut.a"
++    assert archive.is_file(), "make did not create libwut.a"
++    destination = Path(tempfile.mkdtemp(prefix="wut_install_"))
++    install = run(["make", "install", f"DESTDIR={destination}"], timeout=180)
++    assert install.returncode == 0, install.stdout + install.stderr
++    assert list(destination.glob("**/libwut.a")), "make install did not install libwut.a"
++    return archive
++
++
++@functools.lru_cache(maxsize=None)
++def default_heap_harness():
++    source = default_heap_source()
++    assert source, "no compiled component routes the default heap to newlib"
++    preinit = preinit_source()
++    assert preinit, "weak RPX pre-initialization implementation was not found"
++    stub_entries = set()
++    for component in (sbrk_source(), malloc_lock_source()):
++        if component:
++            stub_entries.update(component_entry_symbols(component))
++    work = Path(tempfile.mkdtemp(prefix="wut_defaultheap_runtime_"))
++    include = work / "include"
++    write_mock(include / "coreinit/memdefaultheap.h", r'''
++#pragma once
++#include <stdint.h>
++typedef void *MEMHeapHandle;
++typedef void *(*MEMAllocFromDefaultHeapFn)(uint32_t);
++typedef void *(*MEMAllocFromDefaultHeapExFn)(uint32_t, int32_t);
++typedef void (*MEMFreeToDefaultHeapFn)(void *);
++extern MEMAllocFromDefaultHeapFn MEMAllocFromDefaultHeap;
++extern MEMAllocFromDefaultHeapExFn MEMAllocFromDefaultHeapEx;
++extern MEMFreeToDefaultHeapFn MEMFreeToDefaultHeap;
++''')
++    write_mock(include / "malloc.h", r'''
++#pragma once
++#include <stddef.h>
++void *malloc(size_t size);
++void *memalign(size_t alignment, size_t size);
++void free(void *ptr);
++''')
++    harness = r'''
++#include <coreinit/memdefaultheap.h>
++#include <stdint.h>
++#include <string.h>
++
++MEMAllocFromDefaultHeapFn MEMAllocFromDefaultHeap;
++MEMAllocFromDefaultHeapExFn MEMAllocFromDefaultHeapEx;
++MEMFreeToDefaultHeapFn MEMFreeToDefaultHeap;
++static uint32_t seen_size;
++static uint32_t seen_alignment;
++static void *seen_free;
++static unsigned char token;
++
++void *tracked_malloc(size_t size) { seen_size = (uint32_t)size; return &token; }
++void *tracked_memalign(size_t alignment, size_t size) {
++    seen_alignment = (uint32_t)alignment;
++    seen_size = (uint32_t)size;
++    return &token;
++}
++void tracked_free(void *ptr) { seen_free = ptr; }
++%s
++extern void __preinit_user(MEMHeapHandle *, MEMHeapHandle *, MEMHeapHandle *);
++
++int main(int argc, char **argv) {
++    MEMHeapHandle mem1 = 0, foreground = 0, mem2 = 0;
++    if (argc != 2) return 90;
++    __preinit_user(&mem1, &foreground, &mem2);
++    if (!MEMAllocFromDefaultHeap || !MEMAllocFromDefaultHeapEx || !MEMFreeToDefaultHeap) return 91;
++    if (!strcmp(argv[1], "alloc")) {
++        return MEMAllocFromDefaultHeap(37) == &token && seen_size == 37 ? 0 : 1;
++    }
++    if (!strcmp(argv[1], "align")) {
++        return MEMAllocFromDefaultHeapEx(33, 64) == &token &&
++               seen_size == 33 && seen_alignment == 64 ? 0 : 2;
++    }
++    if (!strcmp(argv[1], "free")) {
++        MEMFreeToDefaultHeap(&token);
++        return seen_free == &token ? 0 : 3;
++    }
++    return 92;
++}
++''' % "\n".join(f"void {name}(void) {{}}" for name in sorted(stub_entries))
++    write_mock(work / "harness.c", harness)
++    source_obj = work / "component.o"
++    proc = run([
++        tool("gcc"), "-std=gnu11", "-Wall", "-Werror", "-I", str(include),
++        "-Dmalloc=tracked_malloc", "-Dmemalign=tracked_memalign",
++        "-Dfree=tracked_free", "-c", str(ROOT / source), "-o", str(source_obj),
++    ])
++    assert proc.returncode == 0, proc.stderr
++    objects = [source_obj]
++    if preinit != source:
++        preinit_obj = work / "preinit.o"
++        proc = run([
++            tool("gcc"), "-std=gnu11", "-Wall", "-Werror", "-I", str(include),
++            "-c", str(ROOT / preinit), "-o", str(preinit_obj),
++        ])
++        assert proc.returncode == 0, proc.stderr
++        objects.append(preinit_obj)
++    executable = work / "defaultheap_harness"
++    proc = run([
++        tool("gcc"), "-std=gnu11", "-Wall", "-Werror", "-I", str(include),
++        str(work / "harness.c"), *map(str, objects), "-o", str(executable),
++    ])
++    assert proc.returncode == 0, proc.stderr
++    return executable
++
++
++@functools.lru_cache(maxsize=None)
++def sbrk_harness():
++    source = sbrk_source()
++    assert source, "newlib heap storage implementation was not found"
++    preinit = preinit_source()
++    assert preinit
++    other_entries = set()
++    for component in (default_heap_source(), malloc_lock_source()):
++        if component:
++            other_entries.update(component_entry_symbols(component))
++    work = Path(tempfile.mkdtemp(prefix="wut_sbrk_runtime_"))
++    include = work / "include"
++    mock = r'''
++#pragma once
++#include <stddef.h>
++#include <stdint.h>
++#include <errno.h>
++typedef int BOOL;
++typedef void *MEMHeapHandle;
++struct _reent { int _errno; };
++BOOL OSCompareAndSwapAtomic(volatile uint32_t *, uint32_t, uint32_t);
++uint32_t MEMGetAllocatableSizeForExpHeapEx(MEMHeapHandle, int32_t);
++void *MEMAllocFromExpHeapEx(MEMHeapHandle, uint32_t, int32_t);
++void MEMFreeToExpHeap(MEMHeapHandle, void *);
++'''
++    write_mock(include / "mock_runtime.h", mock)
++    for header in ("atomic.h", "memheap.h", "memdefaultheap.h", "memexpheap.h"):
++        write_mock(include / "coreinit" / header, "#pragma once\n")
++    harness = r'''
++#include "mock_runtime.h"
++#include <stdint.h>
++
++    enum { CAPACITY = 192 * 1024 };
++    static unsigned char arena[CAPACITY + 16];
++static uint32_t requested_size;
++static MEMHeapHandle requested_heap;
++static void *freed_ptr;
++static MEMHeapHandle freed_heap;
++
++BOOL OSCompareAndSwapAtomic(volatile uint32_t *ptr, uint32_t old, uint32_t value) {
++    if (*ptr != old) return 0;
++    *ptr = value;
++    return 1;
++}
++uint32_t MEMGetAllocatableSizeForExpHeapEx(MEMHeapHandle heap, int32_t align) {
++    requested_heap = heap;
++        return align == 4 ? CAPACITY : 0;
++}
++void *MEMAllocFromExpHeapEx(MEMHeapHandle heap, uint32_t size, int32_t align) {
++    requested_heap = heap;
++    requested_size = size;
++    return align == 4 ? arena : 0;
++}
++void MEMFreeToExpHeap(MEMHeapHandle heap, void *ptr) {
++    freed_heap = heap;
++    freed_ptr = ptr;
++}
++    %s
++    extern void __preinit_user(MEMHeapHandle *, MEMHeapHandle *, MEMHeapHandle *);
++extern void *__wut_sbrk_r(struct _reent *, ptrdiff_t);
++extern void __fini_wut_sbrk_heap(void);
++
++int main(void) {
++    MEMHeapHandle heap = (MEMHeapHandle)(uintptr_t)0x1234;
++    struct _reent state = {0};
++        MEMHeapHandle mem1 = 0, foreground = 0, mem2 = heap;
++        __preinit_user(&mem1, &foreground, &mem2);
++        if (requested_heap != heap || requested_size != CAPACITY) return 1;
++        if (__wut_sbrk_r(&state, CAPACITY / 2) != arena) return 2;
++        if (__wut_sbrk_r(&state, CAPACITY / 2) != arena + CAPACITY / 2) return 3;
++    if (__wut_sbrk_r(&state, 1) != (void *)-1 || state._errno != ENOMEM) return 4;
++    __fini_wut_sbrk_heap();
++    if (freed_heap != heap || freed_ptr != arena) return 5;
++    return 0;
++}
++    ''' % "\n".join(f"void {name}(void) {{}}" for name in sorted(other_entries))
++    write_mock(work / "harness.c", harness)
++    source_obj = work / "sbrk.o"
++    proc = run([
++        tool("gcc"), "-std=gnu11", "-Wall", "-Werror", "-D__WUT_NEWLIB_H",
++        "-include", str(include / "mock_runtime.h"), "-I", str(include),
++        "-c", str(ROOT / source), "-o", str(source_obj),
++    ])
++    assert proc.returncode == 0, proc.stderr
++    preinit_obj = work / "preinit.o"
++    proc = run([
++        tool("gcc"), "-std=gnu11", "-Wall", "-Werror", "-D__WUT_NEWLIB_H",
++        "-include", str(include / "mock_runtime.h"), "-I", str(include),
++        "-c", str(ROOT / preinit), "-o", str(preinit_obj),
++    ])
++    assert proc.returncode == 0, proc.stderr
++    executable = work / "sbrk_harness"
++    proc = run([
++        tool("gcc"), "-std=gnu11", "-Wall", "-Werror", "-I", str(include),
++        str(work / "harness.c"), str(source_obj), str(preinit_obj), "-o", str(executable),
++    ])
++    assert proc.returncode == 0, proc.stderr
++    return executable
++
++
++@functools.lru_cache(maxsize=None)
++def runtime_teardown_harness():
++    source = newlib_source()
++    assert source, "newlib lifecycle implementation was not found"
++    work = Path(tempfile.mkdtemp(prefix="wut_runtime_teardown_"))
++    include = work / "include"
++    mock = r'''
++#pragma once
++#include <stddef.h>
++#include <stdlib.h>
++#include <sys/time.h>
++#include <time.h>
++struct _reent { int unused; };
++#define RPLWRAP(name) name
++void *__wut_sbrk_r(struct _reent *, ptrdiff_t);
++int __wut_lock_init(int *, int);
++int __wut_lock_close(int *);
++int __wut_lock_release(int *);
++int __wut_lock_acquire(int *);
++void __wut_malloc_lock(struct _reent *);
++void __wut_malloc_unlock(struct _reent *);
++int __wut_gettod_r(struct _reent *, struct timeval *, struct timezone *);
++int __wut_nanosleep(const struct timespec *, struct timespec *);
++int __wut_clock_gettime(clockid_t, struct timespec *);
++int __wut_clock_settime(clockid_t, const struct timespec *);
++int __wut_clock_getres(clockid_t, struct timespec *);
++void __fini_wut_sbrk_heap(void);
++'''
++    write_mock(include / "mock_newlib_runtime.h", mock)
++    write_mock(include / "coreinit/exit.h", "#pragma once\n")
++    newlib_obj = work / "newlib.o"
++    proc = run([
++        tool("gcc"), "-std=gnu11", "-Wall", "-Werror",
++        "-ffunction-sections", "-fdata-sections", "-D__WUT_NEWLIB_H",
++        "-include", str(include / "mock_newlib_runtime.h"), "-I", str(include),
++        "-c", str(ROOT / source), "-o", str(newlib_obj),
++    ])
++    assert proc.returncode == 0, proc.stderr
++    runtime_obj = work / "runtime.o"
++    proc = run([
++        tool("gcc"), "-std=gnu11", "-Wall", "-Werror",
++        "-ffunction-sections", "-fdata-sections",
++        "-c", str(ROOT / "libraries/wutcrt/wut_crt.c"), "-o", str(runtime_obj),
++    ])
++    assert proc.returncode == 0, proc.stderr
++    harness = r'''
++static int heap_releases;
++static int devoptab_finalizes;
++static int stdcpp_finalizes;
++static int socket_finalizes;
++void __fini_wut_sbrk_heap(void) { ++heap_releases; }
++void __fini_wut_devoptab(void) { ++devoptab_finalizes; }
++void __fini_wut_stdcpp(void) { ++stdcpp_finalizes; }
++void __fini_wut_socket(void) { ++socket_finalizes; }
++void __fini_wut_malloc(void) {}
++extern void __fini_wut(void);
++int main(void) {
++    __fini_wut();
++    return heap_releases == 1 && devoptab_finalizes == 1 &&
++           stdcpp_finalizes == 1 && socket_finalizes == 1 ? 0 : 1;
++}
++'''
++    write_mock(work / "harness.c", harness)
++    executable = work / "runtime_teardown_harness"
++    proc = run([
++        tool("gcc"), "-std=gnu11", "-Wall", "-Werror",
++        "-Wl,--gc-sections", str(work / "harness.c"),
++        str(runtime_obj), str(newlib_obj), "-o", str(executable),
++    ])
++    assert proc.returncode == 0, proc.stderr
++    return executable
++
++
++@functools.lru_cache(maxsize=None)
++def malloc_lock_harness():
++    source = malloc_lock_source()
++    assert source, "newlib malloc-lock implementation was not found"
++    preinit = preinit_source()
++    assert preinit, "weak RPX pre-initialization implementation was not found"
++    stub_entries = set()
++    for component in (default_heap_source(), sbrk_source()):
++        if component:
++            stub_entries.update(component_entry_symbols(component))
++    lock_symbol = wrapper_target("__syscall_malloc_lock", source)
++    unlock_symbol = wrapper_target("__syscall_malloc_unlock", source)
++    work = Path(tempfile.mkdtemp(prefix="wut_malloc_lock_runtime_"))
++    include = work / "include"
++    mock = r'''
++#pragma once
++#include <pthread.h>
++#include <signal.h>
++#include <stdint.h>
++typedef int BOOL;
++typedef void *MEMHeapHandle;
++struct _reent { int unused; };
++typedef struct { pthread_mutex_t value; } OSSpinLock;
++typedef struct { pthread_mutex_t value; } OSFastMutex;
++typedef struct { pthread_mutex_t value; } OSMutex;
++static _Thread_local sigset_t saved_interrupt_mask;
++static inline void block_test_interrupt(void) {
++    sigset_t set;
++    sigemptyset(&set);
++    sigaddset(&set, SIGUSR1);
++    pthread_sigmask(SIG_BLOCK, &set, &saved_interrupt_mask);
++}
++static inline void restore_test_interrupt(void) {
++    pthread_sigmask(SIG_SETMASK, &saved_interrupt_mask, 0);
++}
++static inline void OSInitSpinLock(OSSpinLock *lock) { pthread_mutex_init(&lock->value, 0); }
++static inline BOOL OSAcquireSpinLock(OSSpinLock *lock) { return pthread_mutex_lock(&lock->value) == 0; }
++static inline BOOL OSReleaseSpinLock(OSSpinLock *lock) { return pthread_mutex_unlock(&lock->value) == 0; }
++static inline BOOL OSUninterruptibleSpinLock_Acquire(OSSpinLock *lock) {
++    block_test_interrupt();
++    return pthread_mutex_lock(&lock->value) == 0;
++}
++static inline BOOL OSUninterruptibleSpinLock_Release(OSSpinLock *lock) {
++    BOOL ok = pthread_mutex_unlock(&lock->value) == 0;
++    restore_test_interrupt();
++    return ok;
++}
++static inline void OSFastMutex_Init(OSFastMutex *lock, const char *name) {
++    (void)name; pthread_mutex_init(&lock->value, 0);
++}
++static inline void OSFastMutex_Lock(OSFastMutex *lock) { pthread_mutex_lock(&lock->value); }
++static inline void OSFastMutex_Unlock(OSFastMutex *lock) { pthread_mutex_unlock(&lock->value); }
++static inline void OSInitMutex(OSMutex *lock) { pthread_mutex_init(&lock->value, 0); }
++static inline void OSLockMutex(OSMutex *lock) { pthread_mutex_lock(&lock->value); }
++static inline void OSUnlockMutex(OSMutex *lock) { pthread_mutex_unlock(&lock->value); }
++static inline BOOL OSCompareAndSwapAtomic(volatile uint32_t *ptr, uint32_t old, uint32_t value) {
++    return __sync_bool_compare_and_swap(ptr, old, value);
++}
++static inline BOOL OSDisableInterrupts(void) { block_test_interrupt(); return 1; }
++static inline BOOL OSRestoreInterrupts(BOOL enabled) {
++    (void)enabled; restore_test_interrupt(); return 1;
++}
++'''
++    write_mock(include / "mock_lock_runtime.h", mock)
++    for header in ("spinlock.h", "fastmutex.h", "mutex.h", "atomic.h", "interrupts.h"):
++        write_mock(include / "coreinit" / header, '#include "../mock_lock_runtime.h"\n')
++    write_mock(include / "coreinit/memdefaultheap.h", '#include "../mock_lock_runtime.h"\n')
++    harness = r'''
++#include "mock_lock_runtime.h"
++#include <sched.h>
++#include <signal.h>
++#include <stdlib.h>
++
++%s
++extern void __preinit_user(MEMHeapHandle *, MEMHeapHandle *, MEMHeapHandle *);
++extern void %s(struct _reent *);
++extern void %s(struct _reent *);
++static struct _reent state;
++static volatile long counter;
++static volatile sig_atomic_t interrupt_seen;
++
++static void *worker(void *unused) {
++    int i;
++    (void)unused;
++    for (i = 0; i < 2000; ++i) {
++        long value;
++        %s(&state);
++        value = counter;
++        sched_yield();
++        counter = value + 1;
++        %s(&state);
++    }
++    return 0;
++}
++
++static void interrupt_handler(int signal_number) {
++    (void)signal_number;
++    %s(&state);
++    ++interrupt_seen;
++    %s(&state);
++}
++
++int main(void) {
++    pthread_t threads[6];
++    MEMHeapHandle mem1 = 0, foreground = 0, mem2 = 0;
++    int i;
++    __preinit_user(&mem1, &foreground, &mem2);
++    for (i = 0; i < 6; ++i) if (pthread_create(&threads[i], 0, worker, 0)) return 1;
++    for (i = 0; i < 6; ++i) if (pthread_join(threads[i], 0)) return 2;
++    if (counter != 12000) return 3;
++    signal(SIGUSR1, interrupt_handler);
++    %s(&state);
++    raise(SIGUSR1);
++    if (interrupt_seen) return 4;
++    %s(&state);
++    for (i = 0; i < 10000 && !interrupt_seen; ++i) sched_yield();
++    return interrupt_seen == 1 ? 0 : 5;
++}
++''' % (
++        "\n".join(f"void {name}(void) {{}}" for name in sorted(stub_entries)),
++        lock_symbol, unlock_symbol,
++        lock_symbol, unlock_symbol, lock_symbol, unlock_symbol,
++        lock_symbol, unlock_symbol,
++    )
++    write_mock(work / "harness.c", harness)
++    source_obj = work / "lock.o"
++    proc = run([
++        tool("gcc"), "-std=gnu11", "-Wall", "-Werror", "-pthread",
++        "-D__WUT_NEWLIB_H", "-include", str(include / "mock_lock_runtime.h"),
++        "-I", str(include), "-c", str(ROOT / source), "-o", str(source_obj),
++    ])
++    assert proc.returncode == 0, proc.stderr
++    objects = [source_obj]
++    if preinit != source:
++        preinit_obj = work / "preinit.o"
++        proc = run([
++            tool("gcc"), "-std=gnu11", "-Wall", "-Werror", "-pthread",
++            "-D__WUT_NEWLIB_H", "-include", str(include / "mock_lock_runtime.h"),
++            "-I", str(include), "-c", str(ROOT / preinit), "-o", str(preinit_obj),
++        ])
++        assert proc.returncode == 0, proc.stderr
++        objects.append(preinit_obj)
++    executable = work / "malloc_lock_harness"
++    proc = run([
++        tool("gcc"), "-std=gnu11", "-Wall", "-Werror", "-pthread",
++        "-I", str(include), str(work / "harness.c"), *map(str, objects),
++        "-o", str(executable),
++    ])
++    assert proc.returncode == 0, proc.stderr
++    return executable
++
++
++def test_default_heap_component_is_built():
++    source = default_heap_source()
++    assert source, "no compiled component routes the CafeOS default heap to newlib"
++    proc = run([tool("powerpc-eabi-nm"), str(built_library())])
++    assert proc.returncode == 0, proc.stderr
++    built_symbols = set(re.findall(r"\b[TWDBR]\s+([A-Za-z_][A-Za-z0-9_]*)$", proc.stdout, re.M))
++    assert defined_symbols(source) & built_symbols, "default-heap behavior is absent from libwut.a"
++
++
++def test_default_heap_allocates_through_newlib():
++    proc = run([str(default_heap_harness()), "alloc"])
++    assert proc.returncode == 0, proc.stderr
++
++
++def test_default_heap_honors_alignment():
++    proc = run([str(default_heap_harness()), "align"])
++    assert proc.returncode == 0, proc.stderr
++
++
++def test_default_heap_releases_through_newlib():
++    proc = run([str(default_heap_harness()), "free"])
++    assert proc.returncode == 0, proc.stderr
++
++
++def test_preinit_hook_is_weak():
++    source = preinit_source()
++    assert source, "RPX pre-initialization implementation is missing or not weak"
++    assert symbols_for_source(source).get("__preinit_user") == "W"
++
++
++def test_preinit_initializes_allocator_behavior():
++    default_heap = run([str(default_heap_harness()), "alloc"])
++    assert default_heap.returncode == 0, default_heap.stderr
++    newlib_heap = run([str(sbrk_harness())])
++    assert newlib_heap.returncode == 0, newlib_heap.stderr
++
++
++def test_rpx_exports_preinit_user():
++    source = "libraries/wutcrt/crt0_rpx.s"
++    assert "__preinit_user" in undefined_symbols(source)
++    proc = run([
++        tool("powerpc-eabi-objdump"), "-s", "-j", ".fexports",
++        str(compile_object(source)),
++    ])
++    assert proc.returncode == 0, proc.stderr
++    assert "__preinit_user" in proc.stdout
++
++
++def test_rpl_keeps_legacy_allocator():
++    rpl_refs = undefined_symbols("libraries/wutcrt/crt0_rpl.s")
++    assert "__init_wut_malloc" in rpl_refs
++    assert_rpx_setup_is_unreachable("libraries/wutcrt/crt0_rpl.s", "__rpl_start")
++
++
++def test_common_runtime_does_not_force_legacy_allocator():
++    reached = transitive_calls("libraries/wutcrt/wut_crt.c", "__init_wut")
++    assert "__init_wut_malloc" not in reached
++    assert_rpx_setup_is_unreachable("libraries/wutcrt/wut_crt.c", "__init_wut")
++
++
++def test_legacy_limit_does_not_bound_newlib_heap():
++    proc = run([str(sbrk_harness())])
++    assert proc.returncode == 0, proc.stderr
++
++
++def test_sbrk_uses_full_capacity_and_releases_it():
++    proc = run([str(sbrk_harness())])
++    assert proc.returncode == 0, proc.stderr
++
++
++def test_newlib_allocation_syscall_abi_is_wired():
++    source = newlib_source()
++    assert source
++    symbols = symbols_for_source(source)
++    for syscall in (
++        "__syscall_sbrk_r",
++        "__syscall_malloc_lock",
++        "__syscall_malloc_unlock",
++    ):
++        assert symbols.get(syscall) == "T", f"missing newlib ABI entry point: {syscall}"
++    refs = undefined_symbols(source)
++    assert refs & defined_symbols(sbrk_source())
++    assert len(refs & defined_symbols(malloc_lock_source())) >= 2
++
++
++def test_newlib_teardown_finalizes_heap():
++    proc = run([str(runtime_teardown_harness())])
++    assert proc.returncode == 0, "normal runtime shutdown did not release the newlib heap"
++
++
++def test_malloc_lock_is_interrupt_safe_and_nonblocking():
++    try:
++        proc = run([str(malloc_lock_harness())], timeout=10)
++    except subprocess.TimeoutExpired:
++        assert False, "malloc lock deadlocked during thread or interrupt-sensitive execution"
++    assert proc.returncode == 0, proc.stderr
++
++
++def test_full_build_and_install():
++    assert built_library().is_file()

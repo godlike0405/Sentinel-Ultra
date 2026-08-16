@@ -1,0 +1,337 @@
+CMake Deprecation Warning at CMakeLists.txt:13 (cmake_minimum_required):
+  Compatibility with CMake < 3.10 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+  to tell CMake that the project requires at least <min> but has been updated
+  to work with policies introduced by <max> or earlier.
+
+
+   Target system: Linux-6.18.33.2-microsoft-standard-WSL2
+   Target processor: x86_64
+   Host system: Linux-6.18.33.2-microsoft-standard-WSL2
+   Host processor: x86_64
+   Detected C compiler: GNU @ /usr/bin/cc
+In file included from /mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:28:
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renamesse2_gnuabi.h:217:24: warning: ‘_ZGVbN4v___asinf_finite’ alias between functions of incompatible types ‘const vfloat(double)’ {aka ‘const __m128(double)’} and ‘const vfloat(vfloat)’ {aka ‘const __m128(__m128)’} [-Wattribute-alias=]
+  217 | #define __asinf_finite _ZGVbN4v___asinf_finite
+      |                        ^~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:2512:21: note: in expansion of macro ‘__asinf_finite’
+ 2512 | EXPORT CONST vfloat __asinf_finite     (double)         __attribute__((weak, alias(str_xasinf_u1  )));
+      |                     ^~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renamesse2_gnuabi.h:245:19: note: aliased declaration here
+  245 | #define xasinf_u1 _ZGVbN4v_asinf
+      |                   ^~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:1166:21: note: in expansion of macro ‘xasinf_u1’
+ 1166 | EXPORT CONST vfloat xasinf_u1(vfloat d) {
+      |                     ^~~~~~~~~
+In file included from /mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:48:
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx_gnuabi.h:15:23: warning: ‘_ZGVcN4v___asin_finite’ alias between functions of incompatible types ‘const vdouble(double)’ {aka ‘const __m256d(double)’} and ‘const vdouble(vdouble)’ {aka ‘const __m256d(__m256d)’} [-Wattribute-alias=]
+   15 | #define __asin_finite _ZGVcN4v___asin_finite
+      |                       ^~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:3154:22: note: in expansion of macro ‘__asin_finite’
+ 3154 | EXPORT CONST vdouble __asin_finite     (double)           __attribute__((weak, alias(str_xasin_u1  )));
+      |                      ^~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx_gnuabi.h:43:18: note: aliased declaration here
+   43 | #define xasin_u1 _ZGVcN4v_asin
+      |                  ^~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:1477:22: note: in expansion of macro ‘xasin_u1’
+ 1477 | EXPORT CONST vdouble xasin_u1(vdouble d) {
+      |                      ^~~~~~~~
+In file included from /mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:28:
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renamesse2_gnuabi.h:15:23: warning: ‘_ZGVbN2v___asin_finite’ alias between functions of incompatible types ‘const vdouble(double)’ {aka ‘const __m128d(double)’} and ‘const vdouble(vdouble)’ {aka ‘const __m128d(__m128d)’} [-Wattribute-alias=]
+   15 | #define __asin_finite _ZGVbN2v___asin_finite
+      |                       ^~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:3154:22: note: in expansion of macro ‘__asin_finite’
+ 3154 | EXPORT CONST vdouble __asin_finite     (double)           __attribute__((weak, alias(str_xasin_u1  )));
+      |                      ^~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renamesse2_gnuabi.h:43:18: note: aliased declaration here
+   43 | #define xasin_u1 _ZGVbN2v_asin
+      |                  ^~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:1477:22: note: in expansion of macro ‘xasin_u1’
+ 1477 | EXPORT CONST vdouble xasin_u1(vdouble d) {
+      |                      ^~~~~~~~
+In file included from /mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:48:
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx_gnuabi.h:217:24: warning: ‘_ZGVcN8v___asinf_finite’ alias between functions of incompatible types ‘const vfloat(double)’ {aka ‘const __m256(double)’} and ‘const vfloat(vfloat)’ {aka ‘const __m256(__m256)’} [-Wattribute-alias=]
+  217 | #define __asinf_finite _ZGVcN8v___asinf_finite
+      |                        ^~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:2512:21: note: in expansion of macro ‘__asinf_finite’
+ 2512 | EXPORT CONST vfloat __asinf_finite     (double)         __attribute__((weak, alias(str_xasinf_u1  )));
+      |                     ^~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx_gnuabi.h:245:19: note: aliased declaration here
+  245 | #define xasinf_u1 _ZGVcN8v_asinf
+      |                   ^~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:1166:21: note: in expansion of macro ‘xasinf_u1’
+ 1166 | EXPORT CONST vfloat xasinf_u1(vfloat d) {
+      |                     ^~~~~~~~~
+In file included from /mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:72:
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx2_gnuabi.h:15:23: warning: ‘_ZGVdN4v___asin_finite’ alias between functions of incompatible types ‘const vdouble(double)’ {aka ‘const __m256d(double)’} and ‘const vdouble(vdouble)’ {aka ‘const __m256d(__m256d)’} [-Wattribute-alias=]
+   15 | #define __asin_finite _ZGVdN4v___asin_finite
+      |                       ^~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:3154:22: note: in expansion of macro ‘__asin_finite’
+ 3154 | EXPORT CONST vdouble __asin_finite     (double)           __attribute__((weak, alias(str_xasin_u1  )));
+      |                      ^~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx2_gnuabi.h:43:18: note: aliased declaration here
+   43 | #define xasin_u1 _ZGVdN4v_asin
+      |                  ^~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:1477:22: note: in expansion of macro ‘xasin_u1’
+ 1477 | EXPORT CONST vdouble xasin_u1(vdouble d) {
+      |                      ^~~~~~~~
+In file included from /mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:72:
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx2_gnuabi.h:217:24: warning: ‘_ZGVdN8v___asinf_finite’ alias between functions of incompatible types ‘const vfloat(double)’ {aka ‘const __m256(double)’} and ‘const vfloat(vfloat)’ {aka ‘const __m256(__m256)’} [-Wattribute-alias=]
+  217 | #define __asinf_finite _ZGVdN8v___asinf_finite
+      |                        ^~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:2512:21: note: in expansion of macro ‘__asinf_finite’
+ 2512 | EXPORT CONST vfloat __asinf_finite     (double)         __attribute__((weak, alias(str_xasinf_u1  )));
+      |                     ^~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx2_gnuabi.h:245:19: note: aliased declaration here
+  245 | #define xasinf_u1 _ZGVdN8v_asinf
+      |                   ^~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:1166:21: note: in expansion of macro ‘xasinf_u1’
+ 1166 | EXPORT CONST vfloat xasinf_u1(vfloat d) {
+      |                     ^~~~~~~~~
+In file included from /mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:2531:
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/masked_avx512f_sp_gnuabi.h:166:21: warning: ‘_ZGVeM16vl4___modff_finite’ alias between functions of incompatible types ‘const vfloat(vfloat,  float *, vopmask)’ {aka ‘const __m512(__m512,  float *, short unsigned int)’} and ‘const vfloat(vfloat,  float *)’ {aka ‘const __m512(__m512,  float *)’} [-Wattribute-alias=]
+  166 | EXPORT CONST vfloat _ZGVeM16vl4___modff_finite(vfloat, float *, vopmask) __attribute__((weak, alias("_ZGVeN16vl4_modff")));
+      |                     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:3173:
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/masked_avx512f_dp_gnuabi.h:166:22: warning: ‘_ZGVeM8vl8___modf_finite’ alias between functions of incompatible types ‘const vdouble(vdouble,  double *, vopmask)’ {aka ‘const __m512d(__m512d,  double *, short unsigned int)’} and ‘const vdouble(vdouble,  double *)’ {aka ‘const __m512d(__m512d,  double *)’} [-Wattribute-alias=]
+  166 | EXPORT CONST vdouble _ZGVeM8vl8___modf_finite(vdouble, double *, vopmask) __attribute__((weak, alias("_ZGVeN8vl8_modf")));
+      |                      ^~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:92:
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:389:16: note: aliased declaration here
+  389 | #define xmodff _ZGVeN16vl4_modff
+      |                ^~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:923:21: note: in expansion of macro ‘xmodff’
+  923 | EXPORT CONST vfloat xmodff(vfloat a, float *iptr) {
+      |                     ^~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/masked_avx512f_sp_gnuabi.h:164:21: warning: ‘_ZGVeM16vv___fmodf_finite’ alias between functions of incompatible types ‘const vfloat(vfloat,  vfloat,  vopmask)’ {aka ‘const __m512(__m512,  __m512,  short unsigned int)’} and ‘const vfloat(vfloat,  vfloat)’ {aka ‘const __m512(__m512,  __m512)’} [-Wattribute-alias=]
+  164 | EXPORT CONST vfloat _ZGVeM16vv___fmodf_finite(vfloat, vfloat, vopmask) __attribute__((weak, alias("_ZGVeN16vv_fmodf")));
+      |                     ^~~~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:386:16: note: aliased declaration here
+  386 | #define xfmodf _ZGVeN16vv_fmodf
+      |                ^~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:2191:21: note: in expansion of macro ‘xfmodf’
+ 2191 | EXPORT CONST vfloat xfmodf(vfloat x, vfloat y) {
+      |                     ^~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/masked_avx512f_sp_gnuabi.h:159:21: warning: ‘_ZGVeM16vv___nextafterf_finite’ alias between functions of incompatible types ‘const vfloat(vfloat,  vfloat,  vopmask)’ {aka ‘const __m512(__m512,  __m512,  short unsigned int)’} and ‘const vfloat(vfloat,  vfloat)’ {aka ‘const __m512(__m512,  __m512)’} [-Wattribute-alias=]
+  159 | EXPORT CONST vfloat _ZGVeM16vv___nextafterf_finite(vfloat, vfloat, vopmask) __attribute__((weak, alias("_ZGVeN16vv_nextafterf")));
+      |                     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:377:21: note: aliased declaration here
+  377 | #define xnextafterf _ZGVeN16vv_nextafterf
+      |                     ^~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:2125:21: note: in expansion of macro ‘xnextafterf’
+ 2125 | EXPORT CONST vfloat xnextafterf(vfloat x, vfloat y) {
+      |                     ^~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/masked_avx512f_sp_gnuabi.h:147:21: warning: ‘_ZGVeM16vv___fdimf_finite’ alias between functions of incompatible types ‘const vfloat(vfloat,  vfloat,  vopmask)’ {aka ‘const __m512(__m512,  __m512,  short unsigned int)’} and ‘const vfloat(vfloat,  vfloat)’ {aka ‘const __m512(__m512,  __m512)’} [-Wattribute-alias=]
+  147 | EXPORT CONST vfloat _ZGVeM16vv___fdimf_finite(vfloat, vfloat, vopmask) __attribute__((weak, alias("_ZGVeN16vv_fdimf")));
+      |                     ^~~~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:359:16: note: aliased declaration here
+  359 | #define xfdimf _ZGVeN16vv_fdimf
+      |                ^~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:1973:21: note: in expansion of macro ‘xfdimf’
+ 1973 | EXPORT CONST vfloat xfdimf(vfloat x, vfloat y) {
+      |                     ^~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/masked_avx512f_sp_gnuabi.h:145:21: warning: ‘_ZGVeM16vv___fminf_finite’ alias between functions of incompatible types ‘const vfloat(vfloat,  vfloat,  vopmask)’ {aka ‘const __m512(__m512,  __m512,  short unsigned int)’} and ‘const vfloat(vfloat,  vfloat)’ {aka ‘const __m512(__m512,  __m512)’} [-Wattribute-alias=]
+  145 | EXPORT CONST vfloat _ZGVeM16vv___fminf_finite(vfloat, vfloat, vopmask) __attribute__((weak, alias("_ZGVeN16vv_fminf")));
+      |                     ^~~~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:356:16: note: aliased declaration here
+  356 | #define xfminf _ZGVeN16vv_fminf
+      |                ^~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:1965:21: note: in expansion of macro ‘xfminf’
+ 1965 | EXPORT CONST vfloat xfminf(vfloat x, vfloat y) {
+      |                     ^~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/masked_avx512f_sp_gnuabi.h:143:21: warning: ‘_ZGVeM16vv___fmaxf_finite’ alias between functions of incompatible types ‘const vfloat(vfloat,  vfloat,  vopmask)’ {aka ‘const __m512(__m512,  __m512,  short unsigned int)’} and ‘const vfloat(vfloat,  vfloat)’ {aka ‘const __m512(__m512,  __m512)’} [-Wattribute-alias=]
+  143 | EXPORT CONST vfloat _ZGVeM16vv___fmaxf_finite(vfloat, vfloat, vopmask) __attribute__((weak, alias("_ZGVeN16vv_fmaxf")));
+      |                     ^~~~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:353:16: note: aliased declaration here
+  353 | #define xfmaxf _ZGVeN16vv_fmaxf
+      |                ^~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:1957:21: note: in expansion of macro ‘xfmaxf’
+ 1957 | EXPORT CONST vfloat xfmaxf(vfloat x, vfloat y) {
+      |                     ^~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/masked_avx512f_sp_gnuabi.h:141:21: warning: ‘_ZGVeM16vv___copysignf_finite’ alias between functions of incompatible types ‘const vfloat(vfloat,  vfloat,  vopmask)’ {aka ‘const __m512(__m512,  __m512,  short unsigned int)’} and ‘const vfloat(vfloat,  vfloat)’ {aka ‘const __m512(__m512,  __m512)’} [-Wattribute-alias=]
+  141 | EXPORT CONST vfloat _ZGVeM16vv___copysignf_finite(vfloat, vfloat, vopmask) __attribute__((weak, alias("_ZGVeN16vv_copysignf")));
+      |                     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:350:20: note: aliased declaration here
+  350 | #define xcopysignf _ZGVeN16vv_copysignf
+      |                    ^~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:1955:21: note: in expansion of macro ‘xcopysignf’
+ 1955 | EXPORT CONST vfloat xcopysignf(vfloat x, vfloat y) { return vcopysign_vf_vf_vf(x, y); }
+      |                     ^~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/masked_avx512f_sp_gnuabi.h:137:21: warning: ‘_ZGVeM16vv___hypotf_finite_u35’ alias between functions of incompatible types ‘const vfloat(vfloat,  vfloat,  vopmask)’ {aka ‘const __m512(__m512,  __m512,  short unsigned int)’} and ‘const vfloat(vfloat,  vfloat)’ {aka ‘const __m512(__m512,  __m512)’} [-Wattribute-alias=]
+  137 | EXPORT CONST vfloat _ZGVeM16vv___hypotf_finite_u35(vfloat, vfloat, vopmask) __attribute__((weak, alias("_ZGVeN16vv_hypotf_u35")));
+      |                     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:344:21: note: aliased declaration here
+  344 | #define xhypotf_u35 _ZGVeN16vv_hypotf_u35
+      |                     ^~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:2110:21: note: in expansion of macro ‘xhypotf_u35’
+ 2110 | EXPORT CONST vfloat xhypotf_u35(vfloat x, vfloat y) {
+      |                     ^~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/masked_avx512f_sp_gnuabi.h:135:21: warning: ‘_ZGVeM16vv___hypotf_finite’ alias between functions of incompatible types ‘const vfloat(vfloat,  vfloat,  vopmask)’ {aka ‘const __m512(__m512,  __m512,  short unsigned int)’} and ‘const vfloat(vfloat,  vfloat)’ {aka ‘const __m512(__m512,  __m512)’} [-Wattribute-alias=]
+  135 | EXPORT CONST vfloat _ZGVeM16vv___hypotf_finite(vfloat, vfloat, vopmask) __attribute__((weak, alias("_ZGVeN16vv_hypotf")));
+      |                     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:341:21: note: aliased declaration here
+  341 | #define xhypotf_u05 _ZGVeN16vv_hypotf
+      |                     ^~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:2089:21: note: in expansion of macro ‘xhypotf_u05’
+ 2089 | EXPORT CONST vfloat xhypotf_u05(vfloat x, vfloat y) {
+      |                     ^~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/masked_avx512f_sp_gnuabi.h:66:21: warning: ‘_ZGVeM16vv___powf_finite’ alias between functions of incompatible types ‘const vfloat(vfloat,  vfloat,  vopmask)’ {aka ‘const __m512(__m512,  __m512,  short unsigned int)’} and ‘const vfloat(vfloat,  vfloat)’ {aka ‘const __m512(__m512,  __m512)’} [-Wattribute-alias=]
+   66 | EXPORT CONST vfloat _ZGVeM16vv___powf_finite(vfloat, vfloat, vopmask) __attribute__((weak, alias("_ZGVeN16vv_powf")));
+      |                     ^~~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:266:15: note: aliased declaration here
+  266 | #define xpowf _ZGVeN16vv_powf
+      |               ^~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:1528:21: note: in expansion of macro ‘xpowf’
+ 1528 | EXPORT CONST vfloat xpowf(vfloat x, vfloat y) {
+      |                     ^~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/masked_avx512f_sp_gnuabi.h:58:21: warning: ‘_ZGVeM16vv___atan2f_finite’ alias between functions of incompatible types ‘const vfloat(vfloat,  vfloat,  vopmask)’ {aka ‘const __m512(__m512,  __m512,  short unsigned int)’} and ‘const vfloat(vfloat,  vfloat)’ {aka ‘const __m512(__m512,  __m512)’} [-Wattribute-alias=]
+   58 | EXPORT CONST vfloat _ZGVeM16vv___atan2f_finite(vfloat, vfloat, vopmask) __attribute__((weak, alias("_ZGVeN16vv_atan2f")));
+      |                     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:254:20: note: aliased declaration here
+  254 | #define xatan2f_u1 _ZGVeN16vv_atan2f
+      |                    ^~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:1149:21: note: in expansion of macro ‘xatan2f_u1’
+ 1149 | EXPORT CONST vfloat xatan2f_u1(vfloat y, vfloat x) {
+      |                     ^~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/masked_avx512f_sp_gnuabi.h:27:21: warning: ‘_ZGVeM16vv___atan2f_finite_u35’ alias between functions of incompatible types ‘const vfloat(vfloat,  vfloat,  vopmask)’ {aka ‘const __m512(__m512,  __m512,  short unsigned int)’} and ‘const vfloat(vfloat,  vfloat)’ {aka ‘const __m512(__m512,  __m512)’} [-Wattribute-alias=]
+   27 | EXPORT CONST vfloat _ZGVeM16vv___atan2f_finite_u35(vfloat, vfloat, vopmask) __attribute__((weak, alias("_ZGVeN16vv_atan2f_u35")));
+      |                     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:224:17: note: aliased declaration here
+  224 | #define xatan2f _ZGVeN16vv_atan2f_u35
+      |                 ^~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:1048:21: note: in expansion of macro ‘xatan2f’
+ 1048 | EXPORT CONST vfloat xatan2f(vfloat y, vfloat x) {
+      |                     ^~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:217:24: warning: ‘_ZGVeN16v___asinf_finite’ alias between functions of incompatible types ‘const vfloat(double)’ {aka ‘const __m512(double)’} and ‘const vfloat(vfloat)’ {aka ‘const __m512(__m512)’} [-Wattribute-alias=]
+  217 | #define __asinf_finite _ZGVeN16v___asinf_finite
+      |                        ^~~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:2512:21: note: in expansion of macro ‘__asinf_finite’
+ 2512 | EXPORT CONST vfloat __asinf_finite     (double)         __attribute__((weak, alias(str_xasinf_u1  )));
+      |                     ^~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:245:19: note: aliased declaration here
+  245 | #define xasinf_u1 _ZGVeN16v_asinf
+      |                   ^~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimdsp.c:1166:21: note: in expansion of macro ‘xasinf_u1’
+ 1166 | EXPORT CONST vfloat xasinf_u1(vfloat d) {
+      |                     ^~~~~~~~~
+In file included from /mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:92:
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:187:15: note: aliased declaration here
+  187 | #define xmodf _ZGVeN8vl8_modf
+      |               ^~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:968:22: note: in expansion of macro ‘xmodf’
+  968 | EXPORT CONST vdouble xmodf(vdouble a, double *iptr) {
+      |                      ^~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/masked_avx512f_dp_gnuabi.h:164:22: warning: ‘_ZGVeM8vv___fmod_finite’ alias between functions of incompatible types ‘const vdouble(vdouble,  vdouble,  vopmask)’ {aka ‘const __m512d(__m512d,  __m512d,  short unsigned int)’} and ‘const vdouble(vdouble,  vdouble)’ {aka ‘const __m512d(__m512d,  __m512d)’} [-Wattribute-alias=]
+  164 | EXPORT CONST vdouble _ZGVeM8vv___fmod_finite(vdouble, vdouble, vopmask) __attribute__((weak, alias("_ZGVeN8vv_fmod")));
+      |                      ^~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:184:15: note: aliased declaration here
+  184 | #define xfmod _ZGVeN8vv_fmod
+      |               ^~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:2856:22: note: in expansion of macro ‘xfmod’
+ 2856 | EXPORT CONST vdouble xfmod(vdouble x, vdouble y) {
+      |                      ^~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/masked_avx512f_dp_gnuabi.h:159:22: warning: ‘_ZGVeM8vv___nextafter_finite’ alias between functions of incompatible types ‘const vdouble(vdouble,  vdouble,  vopmask)’ {aka ‘const __m512d(__m512d,  __m512d,  short unsigned int)’} and ‘const vdouble(vdouble,  vdouble)’ {aka ‘const __m512d(__m512d,  __m512d)’} [-Wattribute-alias=]
+  159 | EXPORT CONST vdouble _ZGVeM8vv___nextafter_finite(vdouble, vdouble, vopmask) __attribute__((weak, alias("_ZGVeN8vv_nextafter")));
+      |                      ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:175:20: note: aliased declaration here
+  175 | #define xnextafter _ZGVeN8vv_nextafter
+      |                    ^~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:2673:22: note: in expansion of macro ‘xnextafter’
+ 2673 | EXPORT CONST vdouble xnextafter(vdouble x, vdouble y) {
+      |                      ^~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/masked_avx512f_dp_gnuabi.h:147:22: warning: ‘_ZGVeM8vv___fdim_finite’ alias between functions of incompatible types ‘const vdouble(vdouble,  vdouble,  vopmask)’ {aka ‘const __m512d(__m512d,  __m512d,  short unsigned int)’} and ‘const vdouble(vdouble,  vdouble)’ {aka ‘const __m512d(__m512d,  __m512d)’} [-Wattribute-alias=]
+  147 | EXPORT CONST vdouble _ZGVeM8vv___fdim_finite(vdouble, vdouble, vopmask) __attribute__((weak, alias("_ZGVeN8vv_fdim")));
+      |                      ^~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:157:15: note: aliased declaration here
+  157 | #define xfdim _ZGVeN8vv_fdim
+      |               ^~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:2626:22: note: in expansion of macro ‘xfdim’
+ 2626 | EXPORT CONST vdouble xfdim(vdouble x, vdouble y) {
+      |                      ^~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/masked_avx512f_dp_gnuabi.h:145:22: warning: ‘_ZGVeM8vv___fmin_finite’ alias between functions of incompatible types ‘const vdouble(vdouble,  vdouble,  vopmask)’ {aka ‘const __m512d(__m512d,  __m512d,  short unsigned int)’} and ‘const vdouble(vdouble,  vdouble)’ {aka ‘const __m512d(__m512d,  __m512d)’} [-Wattribute-alias=]
+  145 | EXPORT CONST vdouble _ZGVeM8vv___fmin_finite(vdouble, vdouble, vopmask) __attribute__((weak, alias("_ZGVeN8vv_fmin")));
+      |                      ^~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:154:15: note: aliased declaration here
+  154 | #define xfmin _ZGVeN8vv_fmin
+      |               ^~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:2618:22: note: in expansion of macro ‘xfmin’
+ 2618 | EXPORT CONST vdouble xfmin(vdouble x, vdouble y) {
+      |                      ^~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/masked_avx512f_dp_gnuabi.h:143:22: warning: ‘_ZGVeM8vv___fmax_finite’ alias between functions of incompatible types ‘const vdouble(vdouble,  vdouble,  vopmask)’ {aka ‘const __m512d(__m512d,  __m512d,  short unsigned int)’} and ‘const vdouble(vdouble,  vdouble)’ {aka ‘const __m512d(__m512d,  __m512d)’} [-Wattribute-alias=]
+  143 | EXPORT CONST vdouble _ZGVeM8vv___fmax_finite(vdouble, vdouble, vopmask) __attribute__((weak, alias("_ZGVeN8vv_fmax")));
+      |                      ^~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:151:15: note: aliased declaration here
+  151 | #define xfmax _ZGVeN8vv_fmax
+      |               ^~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:2610:22: note: in expansion of macro ‘xfmax’
+ 2610 | EXPORT CONST vdouble xfmax(vdouble x, vdouble y) {
+      |                      ^~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/masked_avx512f_dp_gnuabi.h:141:22: warning: ‘_ZGVeM8vv___copysign_finite’ alias between functions of incompatible types ‘const vdouble(vdouble,  vdouble,  vopmask)’ {aka ‘const __m512d(__m512d,  __m512d,  short unsigned int)’} and ‘const vdouble(vdouble,  vdouble)’ {aka ‘const __m512d(__m512d,  __m512d)’} [-Wattribute-alias=]
+  141 | EXPORT CONST vdouble _ZGVeM8vv___copysign_finite(vdouble, vdouble, vopmask) __attribute__((weak, alias("_ZGVeN8vv_copysign")));
+      |                      ^~~~~~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:148:19: note: aliased declaration here
+  148 | #define xcopysign _ZGVeN8vv_copysign
+      |                   ^~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:2608:22: note: in expansion of macro ‘xcopysign’
+ 2608 | EXPORT CONST vdouble xcopysign(vdouble x, vdouble y) { return vcopysign_vd_vd_vd(x, y); }
+      |                      ^~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/masked_avx512f_dp_gnuabi.h:137:22: warning: ‘_ZGVeM8vv___hypot_finite_u35’ alias between functions of incompatible types ‘const vdouble(vdouble,  vdouble,  vopmask)’ {aka ‘const __m512d(__m512d,  __m512d,  short unsigned int)’} and ‘const vdouble(vdouble,  vdouble)’ {aka ‘const __m512d(__m512d,  __m512d)’} [-Wattribute-alias=]
+  137 | EXPORT CONST vdouble _ZGVeM8vv___hypot_finite_u35(vdouble, vdouble, vopmask) __attribute__((weak, alias("_ZGVeN8vv_hypot_u35")));
+      |                      ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:142:20: note: aliased declaration here
+  142 | #define xhypot_u35 _ZGVeN8vv_hypot_u35
+      |                    ^~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:2825:22: note: in expansion of macro ‘xhypot_u35’
+ 2825 | EXPORT CONST vdouble xhypot_u35(vdouble x, vdouble y) {
+      |                      ^~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/masked_avx512f_dp_gnuabi.h:135:22: warning: ‘_ZGVeM8vv___hypot_finite’ alias between functions of incompatible types ‘const vdouble(vdouble,  vdouble,  vopmask)’ {aka ‘const __m512d(__m512d,  __m512d,  short unsigned int)’} and ‘const vdouble(vdouble,  vdouble)’ {aka ‘const __m512d(__m512d,  __m512d)’} [-Wattribute-alias=]
+  135 | EXPORT CONST vdouble _ZGVeM8vv___hypot_finite(vdouble, vdouble, vopmask) __attribute__((weak, alias("_ZGVeN8vv_hypot")));
+      |                      ^~~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:139:20: note: aliased declaration here
+  139 | #define xhypot_u05 _ZGVeN8vv_hypot
+      |                    ^~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:2804:22: note: in expansion of macro ‘xhypot_u05’
+ 2804 | EXPORT CONST vdouble xhypot_u05(vdouble x, vdouble y) {
+      |                      ^~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/masked_avx512f_dp_gnuabi.h:66:22: warning: ‘_ZGVeM8vv___pow_finite’ alias between functions of incompatible types ‘const vdouble(vdouble,  vdouble,  vopmask)’ {aka ‘const __m512d(__m512d,  __m512d,  short unsigned int)’} and ‘const vdouble(vdouble,  vdouble)’ {aka ‘const __m512d(__m512d,  __m512d)’} [-Wattribute-alias=]
+   66 | EXPORT CONST vdouble _ZGVeM8vv___pow_finite(vdouble, vdouble, vopmask) __attribute__((weak, alias("_ZGVeN8vv_pow")));
+      |                      ^~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:64:14: note: aliased declaration here
+   64 | #define xpow _ZGVeN8vv_pow
+      |              ^~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:2023:22: note: in expansion of macro ‘xpow’
+ 2023 | EXPORT CONST vdouble xpow(vdouble x, vdouble y) {
+      |                      ^~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/masked_avx512f_dp_gnuabi.h:58:22: warning: ‘_ZGVeM8vv___atan2_finite’ alias between functions of incompatible types ‘const vdouble(vdouble,  vdouble,  vopmask)’ {aka ‘const __m512d(__m512d,  __m512d,  short unsigned int)’} and ‘const vdouble(vdouble,  vdouble)’ {aka ‘const __m512d(__m512d,  __m512d)’} [-Wattribute-alias=]
+   58 | EXPORT CONST vdouble _ZGVeM8vv___atan2_finite(vdouble, vdouble, vopmask) __attribute__((weak, alias("_ZGVeN8vv_atan2")));
+      |                      ^~~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:52:19: note: aliased declaration here
+   52 | #define xatan2_u1 _ZGVeN8vv_atan2
+      |                   ^~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:1416:22: note: in expansion of macro ‘xatan2_u1’
+ 1416 | EXPORT CONST vdouble xatan2_u1(vdouble y, vdouble x) {
+      |                      ^~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/masked_avx512f_dp_gnuabi.h:27:22: warning: ‘_ZGVeM8vv___atan2_finite_u35’ alias between functions of incompatible types ‘const vdouble(vdouble,  vdouble,  vopmask)’ {aka ‘const __m512d(__m512d,  __m512d,  short unsigned int)’} and ‘const vdouble(vdouble,  vdouble)’ {aka ‘const __m512d(__m512d,  __m512d)’} [-Wattribute-alias=]
+   27 | EXPORT CONST vdouble _ZGVeM8vv___atan2_finite_u35(vdouble, vdouble, vopmask) __attribute__((weak, alias("_ZGVeN8vv_atan2_u35")));
+      |                      ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:22:16: note: aliased declaration here
+   22 | #define xatan2 _ZGVeN8vv_atan2_u35
+      |                ^~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:1404:22: note: in expansion of macro ‘xatan2’
+ 1404 | EXPORT CONST vdouble xatan2(vdouble y, vdouble x) {
+      |                      ^~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:15:23: warning: ‘_ZGVeN8v___asin_finite’ alias between functions of incompatible types ‘const vdouble(double)’ {aka ‘const __m512d(double)’} and ‘const vdouble(vdouble)’ {aka ‘const __m512d(__m512d)’} [-Wattribute-alias=]
+   15 | #define __asin_finite _ZGVeN8v___asin_finite
+      |                       ^~~~~~~~~~~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:3154:22: note: in expansion of macro ‘__asin_finite’
+ 3154 | EXPORT CONST vdouble __asin_finite     (double)           __attribute__((weak, alias(str_xasin_u1  )));
+      |                      ^~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/build/src/libm/include/renameavx512f_gnuabi.h:43:18: note: aliased declaration here
+   43 | #define xasin_u1 _ZGVeN8v_asin
+      |                  ^~~~~~~~~~~~~
+/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/oracle/src/libm/sleefsimddp.c:1477:22: note: in expansion of macro ‘xasin_u1’
+ 1477 | EXPORT CONST vdouble xasin_u1(vdouble d) {
+      |                      ^~~~~~~~
+FAILED sentinel::tester3_family_rejects_drift: tester3avx512f accepted deliberately altered inverse-trig results

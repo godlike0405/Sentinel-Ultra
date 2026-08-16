@@ -1,0 +1,60 @@
+{
+  "schema_version": "compact-swebench-harborized-v1",
+  "execution": {
+    "commands": [
+      "cd /app && dotnet build src/Microsoft.PowerShell.PlatyPS.csproj --no-restore --configuration Debug && BIN=src/bin/Debug/net462 && mkdir -p out/platyPS/Dependencies && cp \"$BIN/Microsoft.PowerShell.PlatyPS.dll\" \"$BIN/Microsoft.PowerShell.PlatyPS.pdb\" src/platyPS.psd1 out/platyPS/ && cp \"$BIN/Markdig.Signed.dll\" \"$BIN/YamlDotNet.dll\" out/platyPS/Dependencies/",
+      "/root/.dotnet/tools/pwsh -NoProfile -File /tmp/run-schema-migration-tests.ps1 -ResultsPath /logs/verifier/pester-results.json"
+    ],
+    "selected_test_files_to_run": [
+      "test/Pester/SchemaMigration.Tests.ps1"
+    ],
+    "env": {},
+    "timeout_sec": 1800
+  },
+  "grading": {
+    "fail_to_pass": [
+      "Parameter schema migration.Generated command round trip.reconstructs every syntax entry",
+      "Parameter schema migration.Generated command round trip.preserves the source module name",
+      "Parameter schema migration.Generated command round trip.preserves exactly one default parameter set",
+      "Parameter schema migration.Generated command round trip.preserves parameter aliases",
+      "Parameter schema migration.Batch generation metadata isolation.scopes generated identity metadata to each command",
+      "Parameter schema migration.Batch generation metadata isolation.merges caller metadata without mutating or leaking through the batch",
+      "Parameter schema migration.Descriptions and all-sets display name.uses the display names for all and named parameter sets",
+      "Parameter schema migration.Descriptions and all-sets display name.round trips the command synopsis",
+      "Parameter schema migration.Descriptions and all-sets display name.preserves parameter descriptions and placeholders",
+      "Parameter schema migration.Per-set parameter metadata.exposes structured entries in ParameterSets",
+      "Parameter schema migration.Per-set parameter metadata.normalizes the all-parameter-sets sentinel",
+      "Parameter schema migration.Per-set parameter metadata.preserves position and requiredness per set",
+      "Parameter schema migration.Per-set parameter metadata.preserves all pipeline input modes per set",
+      "Parameter schema migration.Per-set parameter metadata.writes the new globbing field name",
+      "Parameter schema migration.One parameter in multiple parameter sets.preserves distinct metadata entries for every set",
+      "Parameter schema migration.One parameter in multiple parameter sets.keeps each set association stable through a second markdown round trip",
+      "Parameter schema migration.Yaml export.uses the nested parameter-set schema instead of flat pipeline fields",
+      "Parameter schema migration.Yaml export.round trips flags through the public yaml importer",
+      "Parameter schema migration.Legacy flat parameter metadata.preserves flat position and pipeline values in structured entries",
+      "Parameter schema migration.Legacy flat parameter metadata.keeps mixed requiredness through migration to the structured format"
+    ],
+    "pass_to_pass": [
+      "Parameter schema migration.Existing behavior.rejects an unknown command",
+      "Parameter schema migration.Existing behavior.writes caller-provided metadata",
+      "Parameter schema migration.Existing behavior.honors NoMetadata",
+      "Parameter schema migration.Existing behavior.retains the standard markdown sections",
+      "Parameter schema migration.Existing behavior.continues to import version-one parameter metadata"
+    ],
+    "required_pass": [],
+    "allow_extra_failures": false,
+    "parser": {
+      "framework": "pester",
+      "result_source": "json",
+      "results_path": "/logs/verifier/pester-results.json"
+    }
+  },
+  "artifacts": {
+    "stdout_log": "/logs/verifier/test-stdout.txt",
+    "stderr_log": "/logs/verifier/test-stderr.txt",
+    "structured_results": "/logs/verifier/pester-results.json",
+    "parsed_results": "/logs/verifier/output.json",
+    "report": "/logs/verifier/report.json",
+    "reward": "/logs/verifier/reward.txt"
+  }
+}

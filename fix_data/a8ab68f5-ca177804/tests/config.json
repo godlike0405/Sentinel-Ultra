@@ -1,0 +1,48 @@
+{
+  "schema_version": "compact-swebench-harborized-v1",
+  "execution": {
+    "commands": [
+      "cd /tmp/sentinel-a8ab-verifier-tests && env -u PYTHONPATH PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -I -m pytest -v --junitxml=/logs/verifier/pytest-results.xml --rootdir=/tmp/sentinel-a8ab-verifier-tests --confcutdir=/tmp/sentinel-a8ab-verifier-tests ${TEST_FILES}"
+    ],
+    "selected_test_files_to_run": [
+      "test_sentinel_a8ab68f5.py"
+    ],
+    "env": {},
+    "timeout_sec": 900
+  },
+  "grading": {
+    "fail_to_pass": [
+      "test_sentinel_a8ab68f5.py::test_default_heap_component_is_built",
+      "test_sentinel_a8ab68f5.py::test_default_heap_allocates_through_newlib",
+      "test_sentinel_a8ab68f5.py::test_default_heap_honors_alignment",
+      "test_sentinel_a8ab68f5.py::test_default_heap_releases_through_newlib",
+      "test_sentinel_a8ab68f5.py::test_preinit_hook_is_weak",
+      "test_sentinel_a8ab68f5.py::test_preinit_initializes_allocator_behavior",
+      "test_sentinel_a8ab68f5.py::test_rpx_exports_preinit_user",
+      "test_sentinel_a8ab68f5.py::test_rpl_keeps_legacy_allocator",
+      "test_sentinel_a8ab68f5.py::test_common_runtime_does_not_force_legacy_allocator",
+      "test_sentinel_a8ab68f5.py::test_legacy_limit_does_not_bound_newlib_heap",
+      "test_sentinel_a8ab68f5.py::test_sbrk_uses_full_capacity_and_releases_it",
+      "test_sentinel_a8ab68f5.py::test_newlib_allocation_syscall_abi_is_wired",
+      "test_sentinel_a8ab68f5.py::test_newlib_teardown_finalizes_heap",
+      "test_sentinel_a8ab68f5.py::test_malloc_lock_is_interrupt_safe_and_nonblocking"
+    ],
+    "pass_to_pass": [
+      "test_sentinel_a8ab68f5.py::test_full_build_and_install"
+    ],
+    "required_pass": [],
+    "allow_extra_failures": false,
+    "parser": {
+      "framework": "pytest",
+      "result_source": "junit_xml"
+    }
+  },
+  "artifacts": {
+    "stdout_log": "/logs/verifier/test-stdout.txt",
+    "stderr_log": "/logs/verifier/test-stderr.txt",
+    "parsed_results": "/logs/verifier/output.json",
+    "structured_results": "/logs/verifier/pytest-results.xml",
+    "report": "/logs/verifier/report.json",
+    "reward": "/logs/verifier/reward.txt"
+  }
+}

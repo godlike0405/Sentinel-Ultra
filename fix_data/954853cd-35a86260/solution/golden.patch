@@ -1,0 +1,325 @@
+diff --git a/test/WebJobs.Script.Tests.Shared/TestHelpers.cs b/test/WebJobs.Script.Tests.Shared/TestHelpers.cs
+index 65200c209..128107c86 100644
+--- a/test/WebJobs.Script.Tests.Shared/TestHelpers.cs
++++ b/test/WebJobs.Script.Tests.Shared/TestHelpers.cs
+@@ -13,6 +13,7 @@
+ using System.Text;
+ using System.Threading;
+ using System.Threading.Tasks;
++using Azure;
+ using Azure.Storage.Blobs;
+ using Azure.Storage.Blobs.Models;
+ using Azure.Storage.Sas;
+@@ -159,10 +160,52 @@ public static async Task RetryFailedTest(Func<Task> test, int retries, ITestOutp
+ 
+         public static async Task<string> WaitForBlobAndGetStringAsync(BlobClient blob, Func<string> userMessageCallback = null)
+         {
+-            await WaitForBlobAsync(blob, userMessageCallback: userMessageCallback);
++            return await WaitForBlobAndGetStringAsync(blob, static _ => true, userMessageCallback);
++        }
++
++        public static async Task<string> WaitForBlobAndGetStringAsync(BlobClient blob, Func<string, bool> contentPredicate, Func<string> userMessageCallback = null)
++        {
++            ArgumentNullException.ThrowIfNull(contentPredicate);
++
++            StringBuilder sb = new();
++            string result = null;
++
++            await TestHelpers.Await(
++                async () =>
++                {
++                    bool exists = await blob.ExistsAsync();
++                    sb.AppendLine($"{blob.Name} exists: {exists}.");
++                    if (!exists)
++                    {
++                        return false;
++                    }
+ 
+-            BlobDownloadResult downloadResult = await blob.DownloadContentAsync();
+-            string result = downloadResult.Content.ToString();
++                    try
++                    {
++                        BlobDownloadResult downloadResult = await blob.DownloadContentAsync();
++                        result = downloadResult.Content.ToString();
++                    }
++                    catch (RequestFailedException ex) when (ex.Status == (int)HttpStatusCode.NotFound)
++                    {
++                        sb.AppendLine($"{blob.Name} download failed with transient status {ex.Status}. ErrorCode: {ex.ErrorCode}.");
++                        return false;
++                    }
++
++                    bool contentMatches = contentPredicate(result);
++                    sb.AppendLine($"{blob.Name} content length: {result.Length}. Content matches predicate: {contentMatches}.");
++
++                    return contentMatches;
++                },
++                pollingInterval: 500,
++                userMessageCallback: () =>
++                {
++                    if (userMessageCallback != null)
++                    {
++                        sb.AppendLine().Append(userMessageCallback());
++                    }
++
++                    return sb.ToString();
++                });
+ 
+             return result;
+         }
+
+diff --git a/test/WebJobs.Script.Tests.Integration/CosmosDB/CosmosDBEndToEndTestsBase.cs b/test/WebJobs.Script.Tests.Integration/CosmosDB/CosmosDBEndToEndTestsBase.cs
+index 6f4c8339a..6ed964bfa 100644
+--- a/test/WebJobs.Script.Tests.Integration/CosmosDB/CosmosDBEndToEndTestsBase.cs
++++ b/test/WebJobs.Script.Tests.Integration/CosmosDB/CosmosDBEndToEndTestsBase.cs
+@@ -38,8 +38,10 @@ await _fixture.CosmosClient.GetContainer(dbName, "ItemCollection")
+                 .CreateItemAsync(documentToTest, new PartitionKey(id));
+ 
+             // now wait for function to be invoked
+-            string result = await TestHelpers.WaitForBlobAndGetStringAsync(resultBlob,
+-                () => string.Join(Environment.NewLine, _fixture.Host.GetScriptHostLogMessages()));
++            string result = await TestHelpers.WaitForBlobAndGetStringAsync(
++                resultBlob,
++                content => !string.IsNullOrEmpty(content),
++                userMessageCallback: () => string.Join(Environment.NewLine, _fixture.Host.GetScriptHostLogMessages()));
+ 
+             Assert.False(string.IsNullOrEmpty(result));
+ 
+diff --git a/test/WebJobs.Script.Tests.Integration/EventHubs/EventHubsEndToEndTestsBase.cs b/test/WebJobs.Script.Tests.Integration/EventHubs/EventHubsEndToEndTestsBase.cs
+index ba38700ca..cb3e8fc22 100644
+--- a/test/WebJobs.Script.Tests.Integration/EventHubs/EventHubsEndToEndTestsBase.cs
++++ b/test/WebJobs.Script.Tests.Integration/EventHubs/EventHubsEndToEndTestsBase.cs
+@@ -39,7 +39,9 @@ public async Task EventHub()
+             // Second, there's an EventHub trigger listener on the events which will write a blob.
+             // Once the blob is written, we know both sender & listener are working.
+             var resultBlob = _fixture.TestOutputContainer.GetBlobClient(testData);
+-            string result = await TestHelpers.WaitForBlobAndGetStringAsync(resultBlob,
++            string result = await TestHelpers.WaitForBlobAndGetStringAsync(
++                resultBlob,
++                content => content.Contains(testData, StringComparison.Ordinal),
+                 userMessageCallback: _fixture.Host.GetLog);
+ 
+             var payload = JObject.Parse(result);
+diff --git a/test/WebJobs.Script.Tests.Integration/Storage/StorageEndToEndTests.cs b/test/WebJobs.Script.Tests.Integration/Storage/StorageEndToEndTests.cs
+index 7e96bbc55..7445a473d 100644
+--- a/test/WebJobs.Script.Tests.Integration/Storage/StorageEndToEndTests.cs
++++ b/test/WebJobs.Script.Tests.Integration/Storage/StorageEndToEndTests.cs
+@@ -28,8 +28,11 @@ public async Task QueueTriggerToBlobRich()
+             await _fixture.TestQueue.SendMessageAsync(messageContent);
+ 
+             var resultBlob = _fixture.TestOutputContainer.GetBlobClient(id);
+-            string result = await TestHelpers.WaitForBlobAndGetStringAsync(resultBlob);
+-            Assert.Equal(TestHelpers.RemoveByteOrderMarkAndWhitespace(messageContent), TestHelpers.RemoveByteOrderMarkAndWhitespace(result));
++            string expectedContent = TestHelpers.RemoveByteOrderMarkAndWhitespace(messageContent);
++            string result = await TestHelpers.WaitForBlobAndGetStringAsync(
++                resultBlob,
++                content => string.Equals(expectedContent, TestHelpers.RemoveByteOrderMarkAndWhitespace(content), StringComparison.Ordinal));
++            Assert.Equal(expectedContent, TestHelpers.RemoveByteOrderMarkAndWhitespace(result));
+         }
+ 
+         public class StorageTestFixture : EndToEndTestFixture
+diff --git a/test/WebJobs.Script.Tests.Integration/WebHostEndToEnd/CSharpEndToEndTests.cs b/test/WebJobs.Script.Tests.Integration/WebHostEndToEnd/CSharpEndToEndTests.cs
+index f61ca6d79..0acacb274 100644
+--- a/test/WebJobs.Script.Tests.Integration/WebHostEndToEnd/CSharpEndToEndTests.cs
++++ b/test/WebJobs.Script.Tests.Integration/WebHostEndToEnd/CSharpEndToEndTests.cs
+@@ -242,22 +242,27 @@ public async Task MultipleOutputs()
+ 
+             // verify all 3 output blobs were written
+             var blob = Fixture.TestOutputContainer.GetBlobClient(id1);
+-            await TestHelpers.WaitForBlobAsync(blob);
+-            var blobDownload = await blob.DownloadContentAsync();
+-            string blobContent = blobDownload.Value.Content.ToString();
++            string blobContent = await TestHelpers.WaitForBlobAndGetStringAsync(
++                blob,
++                content => IsExpectedBlobContent(content, "Test Blob 1"));
+             Assert.Equal("Test Blob 1", Utility.RemoveUtf8ByteOrderMark(blobContent));
+ 
+             blob = Fixture.TestOutputContainer.GetBlobClient(id2);
+-            await TestHelpers.WaitForBlobAsync(blob);
+-            blobDownload = await blob.DownloadContentAsync();
+-            blobContent = blobDownload.Value.Content.ToString();
++            blobContent = await TestHelpers.WaitForBlobAndGetStringAsync(
++                blob,
++                content => IsExpectedBlobContent(content, "Test Blob 2"));
+             Assert.Equal("Test Blob 2", Utility.RemoveUtf8ByteOrderMark(blobContent));
+ 
+             blob = Fixture.TestOutputContainer.GetBlobClient(id3);
+-            await TestHelpers.WaitForBlobAsync(blob);
+-            blobDownload = await blob.DownloadContentAsync();
+-            blobContent = blobDownload.Value.Content.ToString();
++            blobContent = await TestHelpers.WaitForBlobAndGetStringAsync(
++                blob,
++                content => IsExpectedBlobContent(content, "Test Blob 3"));
+             Assert.Equal("Test Blob 3", Utility.RemoveUtf8ByteOrderMark(blobContent));
++
++            static bool IsExpectedBlobContent(string content, string expected)
++            {
++                return string.Equals(expected, Utility.RemoveUtf8ByteOrderMark(content), StringComparison.Ordinal);
++            }
+         }
+ 
+         [Fact]
+@@ -450,7 +455,9 @@ public async Task HttpTriggerToBlob()
+             // verify blob was written
+             string blobName = $"TestPrefix-{id}-TestSuffix-BBB";
+             var outBlob = Fixture.TestOutputContainer.GetBlobClient(blobName);
+-            string result = await TestHelpers.WaitForBlobAndGetStringAsync(outBlob);
++            string result = await TestHelpers.WaitForBlobAndGetStringAsync(
++                outBlob,
++                content => string.Equals(expectedValue, Utility.RemoveUtf8ByteOrderMark(content), StringComparison.Ordinal));
+             Assert.Equal(expectedValue, Utility.RemoveUtf8ByteOrderMark(result));
+         }
+ 
+diff --git a/test/WebJobs.Script.Tests.Integration/WebHostEndToEnd/EndToEndTestsBase.cs b/test/WebJobs.Script.Tests.Integration/WebHostEndToEnd/EndToEndTestsBase.cs
+index 5f594d8b4..329702bab 100644
+--- a/test/WebJobs.Script.Tests.Integration/WebHostEndToEnd/EndToEndTestsBase.cs
++++ b/test/WebJobs.Script.Tests.Integration/WebHostEndToEnd/EndToEndTestsBase.cs
+@@ -163,8 +163,11 @@ public async Task QueueTriggerToBlobTest()
+             await Fixture.TestQueue.SendMessageAsync(messageContent);
+ 
+             var resultBlob = Fixture.TestOutputContainer.GetBlobClient(id);
+-            string result = await TestHelpers.WaitForBlobAndGetStringAsync(resultBlob);
+-            Assert.Equal(TestHelpers.RemoveByteOrderMarkAndWhitespace(messageContent), TestHelpers.RemoveByteOrderMarkAndWhitespace(result));
++            string expectedContent = TestHelpers.RemoveByteOrderMarkAndWhitespace(messageContent);
++            string result = await TestHelpers.WaitForBlobAndGetStringAsync(
++                resultBlob,
++                content => string.Equals(expectedContent, TestHelpers.RemoveByteOrderMarkAndWhitespace(content), StringComparison.Ordinal));
++            Assert.Equal(expectedContent, TestHelpers.RemoveByteOrderMarkAndWhitespace(result));
+ 
+             string userCategory = LogCategories.CreateFunctionUserCategory("QueueTriggerToBlob");
+             LogMessage traceEvent = await WaitForTraceAsync(p => p?.FormattedMessage != null && p.FormattedMessage.Contains(id) && string.Equals(p.Category, userCategory, StringComparison.Ordinal));
+diff --git a/test/WebJobs.Script.Tests.Integration/WebHostEndToEnd/NodeEndToEndTests.cs b/test/WebJobs.Script.Tests.Integration/WebHostEndToEnd/NodeEndToEndTests.cs
+index c47ecc424..199e4f6e9 100644
+--- a/test/WebJobs.Script.Tests.Integration/WebHostEndToEnd/NodeEndToEndTests.cs
++++ b/test/WebJobs.Script.Tests.Integration/WebHostEndToEnd/NodeEndToEndTests.cs
+@@ -316,7 +316,9 @@ public async Task HttpTriggerToBlob()
+             // verify blob was written
+             string blobName = $"TestPrefix-{id}-TestSuffix-BBB";
+             var outBlob = Fixture.TestOutputContainer.GetBlobClient(blobName);
+-            string result = await TestHelpers.WaitForBlobAndGetStringAsync(outBlob);
++            string result = await TestHelpers.WaitForBlobAndGetStringAsync(
++                outBlob,
++                content => string.Equals(expectedValue, content, StringComparison.Ordinal));
+             Assert.Equal(expectedValue, result);
+         }
+ 
+@@ -792,23 +794,29 @@ public async Task MultipleOutputs()
+ 
+             // verify all 3 output blobs were written
+             var blob = Fixture.TestOutputContainer.GetBlobClient(id1);
+-            await TestHelpers.WaitForBlobAsync(blob, Fixture.Host.GetLog);
+-            var blobDownload = await blob.DownloadContentAsync();
+-            string blobContent = blobDownload.Value.Content.ToString();
++            string blobContent = await TestHelpers.WaitForBlobAndGetStringAsync(
++                blob,
++                content => IsExpectedBlobContent(content, "Test Blob 1"),
++                userMessageCallback: Fixture.Host.GetLog);
+             // TODO: why required?
+             Assert.Equal("Test Blob 1", blobContent.TrimEnd('\0').Trim('"'));
+ 
+             blob = Fixture.TestOutputContainer.GetBlobClient(id2);
+-            await TestHelpers.WaitForBlobAsync(blob);
+-            blobDownload = await blob.DownloadContentAsync();
+-            blobContent = blobDownload.Value.Content.ToString();
++            blobContent = await TestHelpers.WaitForBlobAndGetStringAsync(
++                blob,
++                content => IsExpectedBlobContent(content, "Test Blob 2"));
+             Assert.Equal("Test Blob 2", blobContent.TrimEnd('\0').Trim('"'));
+ 
+             blob = Fixture.TestOutputContainer.GetBlobClient(id3);
+-            await TestHelpers.WaitForBlobAsync(blob);
+-            blobDownload = await blob.DownloadContentAsync();
+-            blobContent = blobDownload.Value.Content.ToString();
++            blobContent = await TestHelpers.WaitForBlobAndGetStringAsync(
++                blob,
++                content => IsExpectedBlobContent(content, "Test Blob 3"));
+             Assert.Equal("Test Blob 3", blobContent.TrimEnd('\0').Trim('"'));
++
++            static bool IsExpectedBlobContent(string content, string expected)
++            {
++                return string.Equals(expected, content.TrimEnd('\0').Trim('"'), StringComparison.Ordinal);
++            }
+         }
+ 
+         [Fact]
+@@ -827,9 +835,9 @@ public async Task MultipleInputs()
+ 
+             // verify the correct output blob was written
+             var blob = Fixture.TestOutputContainer.GetBlobClient(id);
+-            await TestHelpers.WaitForBlobAsync(blob);
+-            var blobDownload = await blob.DownloadContentAsync();
+-            var blobContent = blobDownload.Value.Content.ToString();
++            var blobContent = await TestHelpers.WaitForBlobAndGetStringAsync(
++                blob,
++                content => string.Equals("Test Entity 1, Test Entity 2", Utility.RemoveUtf8ByteOrderMark(content.Trim()), StringComparison.Ordinal));
+             Assert.Equal("Test Entity 1, Test Entity 2", Utility.RemoveUtf8ByteOrderMark(blobContent.Trim()));
+         }
+ 
+diff --git a/test/WebJobs.Script.Tests.Integration/WebHostEndToEnd/SamplesEndToEndTests_CSharp.cs b/test/WebJobs.Script.Tests.Integration/WebHostEndToEnd/SamplesEndToEndTests_CSharp.cs
+index 2e46fc105..ce46cac6c 100644
+--- a/test/WebJobs.Script.Tests.Integration/WebHostEndToEnd/SamplesEndToEndTests_CSharp.cs
++++ b/test/WebJobs.Script.Tests.Integration/WebHostEndToEnd/SamplesEndToEndTests_CSharp.cs
+@@ -903,7 +903,9 @@ public async Task ManualTrigger_Invoke_Succeeds()
+ 
+                 // wait for completion
+                 var outputBlob = outputContainer.GetBlobClient(outId);
+-                string result = await TestHelpers.WaitForBlobAndGetStringAsync(outputBlob);
++                string result = await TestHelpers.WaitForBlobAndGetStringAsync(
++                    outputBlob,
++                    content => string.Equals("Hello C#!", Utility.RemoveUtf8ByteOrderMark(content), StringComparison.Ordinal));
+                 Assert.Equal("Hello C#!", Utility.RemoveUtf8ByteOrderMark(result));
+             }
+         }
+@@ -940,7 +942,9 @@ public async Task HttpTrigger_Poco_Post_Succeeds()
+                 // wait for function to execute and produce its result blob
+                 var outputContainer = _fixture.BlobServiceClient.GetBlobContainerClient("samples-output");
+                 var outputBlob = outputContainer.GetBlobClient(id);
+-                string result = await TestHelpers.WaitForBlobAndGetStringAsync(outputBlob);
++                string result = await TestHelpers.WaitForBlobAndGetStringAsync(
++                    outputBlob,
++                    content => string.Equals("Testing", TestHelpers.RemoveByteOrderMarkAndWhitespace(content), StringComparison.Ordinal));
+ 
+                 Assert.Equal("Testing", TestHelpers.RemoveByteOrderMarkAndWhitespace(result));
+             }
+@@ -1060,7 +1064,9 @@ public async Task HttpTrigger_Poco_Get_Succeeds()
+                 // wait for function to execute and produce its result blob
+                 var outputContainer = _fixture.BlobServiceClient.GetBlobContainerClient("samples-output");
+                 var outputBlob = outputContainer.GetBlobClient(id);
+-                string result = await TestHelpers.WaitForBlobAndGetStringAsync(outputBlob);
++                string result = await TestHelpers.WaitForBlobAndGetStringAsync(
++                    outputBlob,
++                    content => string.Equals("Testing", TestHelpers.RemoveByteOrderMarkAndWhitespace(content), StringComparison.Ordinal));
+ 
+                 Assert.Equal("Testing", TestHelpers.RemoveByteOrderMarkAndWhitespace(result));
+             }
+diff --git a/test/WebJobs.Script.Tests.Integration/WebHostEndToEnd/SamplesEndToEndTests_Node.cs b/test/WebJobs.Script.Tests.Integration/WebHostEndToEnd/SamplesEndToEndTests_Node.cs
+index 502c9695c..e42007d7e 100644
+--- a/test/WebJobs.Script.Tests.Integration/WebHostEndToEnd/SamplesEndToEndTests_Node.cs
++++ b/test/WebJobs.Script.Tests.Integration/WebHostEndToEnd/SamplesEndToEndTests_Node.cs
+@@ -63,7 +63,9 @@ public async Task ManualTrigger_Invoke_Succeeds()
+ 
+             // wait for completion
+             var outputBlob = outputContainer.GetBlobClient(outId);
+-            string result = await TestHelpers.WaitForBlobAndGetStringAsync(outputBlob);
++            string result = await TestHelpers.WaitForBlobAndGetStringAsync(
++                outputBlob,
++                content => string.Equals("Mathew Charles", content, StringComparison.Ordinal));
+             Assert.Equal("Mathew Charles", result);
+         }
+ 
+@@ -221,10 +223,14 @@ public async Task HttpTrigger_CustomRoute_Post_ReturnsExpectedResponse()
+             var outputContainer = _fixture.BlobServiceClient.GetBlobContainerClient("samples-output");
+             string path = $"housewares/{id}";
+             var outputBlob = outputContainer.GetBlobClient(path);
+-            string result = await TestHelpers.WaitForBlobAndGetStringAsync(outputBlob);
++            string expectedName = (string)product["name"];
++            string result = await TestHelpers.WaitForBlobAndGetStringAsync(
++                outputBlob,
++                content => content.Contains(id, StringComparison.Ordinal)
++                    && content.Contains(expectedName, StringComparison.Ordinal));
+             JObject resultProduct = JObject.Parse(Utility.RemoveUtf8ByteOrderMark(result));
+             Assert.Equal(id, (string)resultProduct["id"]);
+-            Assert.Equal((string)product["name"], (string)resultProduct["name"]);
++            Assert.Equal(expectedName, (string)resultProduct["name"]);
+         }
+ 
+         [Fact]

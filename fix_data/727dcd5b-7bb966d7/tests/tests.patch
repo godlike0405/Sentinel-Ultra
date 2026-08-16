@@ -1,0 +1,298 @@
+diff --git a/.sentinel-tests/test_tester3_contract.py b/.sentinel-tests/test_tester3_contract.py
+new file mode 100755
+index 0000000..2a68952
+--- /dev/null
++++ b/.sentinel-tests/test_tester3_contract.py
+@@ -0,0 +1,292 @@
++#!/usr/bin/env python3
++from __future__ import annotations
++
++import argparse
++import json
++import os
++from pathlib import Path
++import re
++import shutil
++import subprocess
++import sys
++import tempfile
++from typing import Callable
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--workspace", required=True)
++    parser.add_argument("--build-dir", required=True)
++    parser.add_argument("--results", required=True)
++    parser.add_argument("--cmake", default="cmake")
++    parser.add_argument("--ctest", default="ctest")
++    parser.add_argument("--cc", default="cc")
++    args = parser.parse_args()
++
++    workspace = Path(args.workspace).resolve()
++    build_dir = Path(args.build_dir).resolve()
++    results: list[dict[str, str]] = []
++
++    def run(
++        command: list[str],
++        *,
++        timeout: int = 600,
++        extra_env: dict[str, str] | None = None,
++    ) -> subprocess.CompletedProcess[str]:
++        env = os.environ.copy()
++        env.update({"LC_ALL": "C", "LANG": "C"})
++        if extra_env:
++            env.update(extra_env)
++        return subprocess.run(
++            command,
++            cwd=workspace,
++            env=env,
++            text=True,
++            stdout=subprocess.PIPE,
++            stderr=subprocess.PIPE,
++            timeout=timeout,
++            check=False,
++        )
++
++    def require_success(completed: subprocess.CompletedProcess[str], context: str) -> None:
++        if completed.returncode != 0:
++            output = (completed.stdout + "\n" + completed.stderr)[-6000:]
++            raise AssertionError(f"{context} failed with {completed.returncode}:\n{output}")
++
++    def record(name: str, check: Callable[[], None]) -> None:
++        try:
++            check()
++        except Exception as exc:
++            results.append({"name": name, "status": "FAILED", "detail": str(exc)[-6000:]})
++            print(f"FAILED {name}: {exc}", file=sys.stderr)
++        else:
++            results.append({"name": name, "status": "PASSED", "detail": ""})
++            print(f"PASSED {name}")
++
++    def run_ctest(
++        test_name: str,
++        *,
++        extra_env: dict[str, str] | None = None,
++    ) -> subprocess.CompletedProcess[str]:
++        return run(
++            [
++                args.ctest,
++                "--test-dir",
++                str(build_dir),
++                "--output-on-failure",
++                "-R",
++                f"^{re.escape(test_name)}$",
++            ],
++            timeout=900,
++            extra_env=extra_env,
++        )
++
++    def build_and_run_ctest(target: str, test_name: str | None = None) -> None:
++        test_name = test_name or target
++        built = run(
++            [args.cmake, "--build", str(build_dir), "--parallel", "4", "--target", target],
++            timeout=900,
++        )
++        require_success(built, f"building {target}")
++        listing = run([args.ctest, "--test-dir", str(build_dir), "-N", "-R", f"^{re.escape(test_name)}$"])
++        require_success(listing, f"listing {test_name}")
++        if not re.search(r"Total Tests:\s*1\s*$", listing.stdout, re.MULTILINE):
++            raise AssertionError(f"CTest did not register exactly one {test_name} test:\n{listing.stdout[-4000:]}")
++        for attempt in range(2):
++            executed = run_ctest(test_name)
++            require_success(executed, f"running CTest {test_name} (attempt {attempt + 1})")
++
++    record(
++        "sentinel::existing_gnuabi_sse2",
++        lambda: build_and_run_ctest("gnuabi_compatibility_SSE2"),
++    )
++    record(
++        "sentinel::existing_gnuabi_avx2",
++        lambda: build_and_run_ctest("gnuabi_compatibility_AVX2"),
++    )
++
++    tester3_targets = [
++        "tester3purec_scalar",
++        "tester3purecfma_scalar",
++        "tester3sse2",
++        "tester3sse4",
++        "tester3avx",
++        "tester3avx2128",
++        "tester3avx2",
++        "tester3avx512f",
++        "tester3avx512fnofma",
++    ]
++    for target in tester3_targets:
++        record(
++            f"sentinel::target_{target}",
++            lambda target=target: build_and_run_ctest(target),
++        )
++
++    purec_binary = build_dir / "bin" / "tester3purec_scalar"
++
++    def imported_inverse_trig_symbols(binary: Path) -> set[str]:
++        symbols = run(["nm", "-D", str(binary)])
++        require_success(symbols, "inspecting tester3's dynamic imports")
++        imported: set[str] = set()
++        for line in symbols.stdout.splitlines():
++            match = re.search(r"\bU\s+(Sleef_[A-Za-z0-9_]+)\s*$", line)
++            if match and ("asin" in match.group(1) or "acos" in match.group(1)):
++                imported.add(match.group(1))
++        required_shapes = ("asind", "acosd", "asinf", "acosf")
++        missing_shapes = [shape for shape in required_shapes if not any(shape in name for name in imported)]
++        if missing_shapes:
++            raise AssertionError(
++                f"tester3 does not exercise all inverse-trig precision variants {missing_shapes}: "
++                f"{sorted(imported)}"
++            )
++        return imported
++
++    def check_deterministic_acos_abi() -> None:
++        imported = imported_inverse_trig_symbols(purec_binary)
++        asin_symbols = {name for name in imported if "asin" in name}
++        expected_acos = {name.replace("asin", "acos", 1) for name in asin_symbols}
++        missing_imports = sorted(expected_acos - imported)
++        if missing_imports:
++            raise AssertionError(f"tester3 does not use deterministic acos counterparts {missing_imports}")
++        library = build_dir / "lib" / "libsleef.so"
++        exports = run(["nm", "-D", "--defined-only", str(library)])
++        require_success(exports, "inspecting libsleef's dynamic exports")
++        exported_names = {line.split()[-1] for line in exports.stdout.splitlines() if line.split()}
++        missing_exports = sorted(expected_acos - exported_names)
++        if missing_exports:
++            raise AssertionError(f"libsleef does not export deterministic acos counterparts {missing_exports}")
++
++    record("sentinel::deterministic_acos_abi", check_deterministic_acos_abi)
++
++    def check_tester3_family_rejects_drift() -> None:
++        for target in tester3_targets:
++            binary = build_dir / "bin" / target
++            imported = imported_inverse_trig_symbols(binary)
++            with tempfile.TemporaryDirectory(prefix=f"sentinel-{target}-interpose-") as tmp:
++                temp_dir = Path(tmp)
++                source = temp_dir / "interpose.s"
++                marker_source = temp_dir / "marker.c"
++                marker = temp_dir / "called"
++                library = temp_dir / "interpose.so"
++                assembly = [".text"]
++                for name in sorted(imported):
++                    assembly.extend(
++                        [
++                            f".globl {name}",
++                            f".type {name}, @function",
++                            f"{name}:",
++                            "  mov sentinel_called@GOTPCREL(%rip), %rax",
++                            "  movl $1, (%rax)",
++                            "  ret",
++                        ]
++                    )
++                assembly.append('.section .note.GNU-stack,"",@progbits')
++                source.write_text("\n".join(assembly) + "\n", encoding="ascii")
++                marker_source.write_text(
++                    "#include <fcntl.h>\n"
++                    "#include <unistd.h>\n"
++                    "volatile int sentinel_called = 0;\n"
++                    "__attribute__((destructor)) static void sentinel_done(void) {\n"
++                    "  if (sentinel_called) {\n"
++                    f"    int fd = open({json.dumps(str(marker))}, O_WRONLY | O_CREAT, 0600);\n"
++                    "    if (fd >= 0) close(fd);\n"
++                    "  }\n"
++                    "}\n",
++                    encoding="ascii",
++                )
++                compiled = run(
++                    [args.cc, "-shared", "-fPIC", str(source), str(marker_source), "-o", str(library)]
++                )
++                require_success(compiled, f"building the public-ABI result interposer for {target}")
++                executed = run_ctest(target, extra_env={"LD_PRELOAD": str(library)})
++                altered_results_were_used = marker.exists()
++            if altered_results_were_used and executed.returncode == 0:
++                raise AssertionError(f"{target} accepted deliberately altered inverse-trig results")
++            if not altered_results_were_used and executed.returncode != 0:
++                raise AssertionError(
++                    f"{target} failed before reaching the altered public math calls:\n"
++                    f"{(executed.stdout + executed.stderr)[-4000:]}"
++                )
++
++    record("sentinel::tester3_family_rejects_drift", check_tester3_family_rejects_drift)
++
++    def check_mpfr_free_runtime() -> None:
++        completed = run(["ldd", str(purec_binary)])
++        require_success(completed, "inspecting tester3 runtime dependencies")
++        dependency_text = (completed.stdout + completed.stderr).lower()
++        forbidden = [name for name in ("libmpfr", "libgmp") if name in dependency_text]
++        if forbidden:
++            raise AssertionError(f"tester3 has forbidden runtime dependencies {forbidden}:\n{dependency_text}")
++
++    record("sentinel::tester3_is_mpfr_free", check_mpfr_free_runtime)
++
++    def check_cross_target_matrix(
++        toolchain_name: str,
++        expected_targets: list[str],
++        cache_overrides: list[str],
++    ) -> None:
++        compiler = shutil.which(args.cc)
++        if compiler is None:
++            raise AssertionError(f"could not resolve C compiler {args.cc!r}")
++        with tempfile.TemporaryDirectory(prefix="sentinel-cross-config-") as tmp:
++            cross_build = Path(tmp) / "build"
++            command = [
++                args.cmake,
++                "-S",
++                str(workspace),
++                "-B",
++                str(cross_build),
++                f"-DCMAKE_TOOLCHAIN_FILE={workspace / 'travis' / toolchain_name}",
++                f"-DCMAKE_C_COMPILER={compiler}",
++                "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
++                f"-DNATIVE_BUILD_DIR={build_dir}",
++                *cache_overrides,
++            ]
++            configured = run(command, timeout=180)
++            require_success(configured, f"configuring with {toolchain_name}")
++            target_help = run(
++                [args.cmake, "--build", str(cross_build), "--target", "help"],
++                timeout=60,
++            )
++            require_success(target_help, f"listing targets for {toolchain_name}")
++            words = set(re.findall(r"[A-Za-z0-9_]+", target_help.stdout))
++            missing_targets = [target for target in expected_targets if target not in words]
++            if missing_targets:
++                raise AssertionError(
++                    f"{toolchain_name} did not expose tester targets {missing_targets}:\n"
++                    f"{target_help.stdout[-6000:]}"
++                )
++
++    record(
++        "sentinel::arm32_target_matrix",
++        lambda: check_cross_target_matrix(
++            "toolchain-armhf.cmake",
++            ["tester3purec_scalar", "tester3purecfma_scalar"],
++            [],
++        ),
++    )
++    record(
++        "sentinel::aarch64_target_matrix",
++        lambda: check_cross_target_matrix(
++            "toolchain-aarch64.cmake",
++            ["tester3advsimd", "tester3advsimdnofma", "tester3sve", "tester3svenofma"],
++            ["-DCOMPILER_SUPPORTS_SVE=1"],
++        ),
++    )
++    record(
++        "sentinel::ppc64_target_matrix",
++        lambda: check_cross_target_matrix(
++            "toolchain-ppc64el.cmake",
++            ["tester3vsx", "tester3vsxnofma"],
++            ["-DCOMPILER_SUPPORTS_VSX=1"],
++        ),
++    )
++
++    results_path = Path(args.results)
++    results_path.parent.mkdir(parents=True, exist_ok=True)
++    results_path.write_text(json.dumps({"tests": results}, indent=2), encoding="utf-8")
++    return 0 if all(result["status"] == "PASSED" for result in results) else 1
++
++
++if __name__ == "__main__":
++    sys.exit(main())

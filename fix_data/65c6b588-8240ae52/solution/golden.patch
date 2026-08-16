@@ -1,0 +1,2903 @@
+diff --git a/pyproject.toml b/pyproject.toml
+index 661501f..c150b6f 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
+ 
+ [project]
+ name = "claude-agent-sdk"
+-version = "0.1.62"
++version = "0.1.63"
+ description = "Python SDK for Claude Code"
+ readme = "README.md"
+ requires-python = ">=3.10"
+diff --git a/src/claude_agent_sdk/__init__.py b/src/claude_agent_sdk/__init__.py
+index 6403415..0ff4fb4 100644
+--- a/src/claude_agent_sdk/__init__.py
++++ b/src/claude_agent_sdk/__init__.py
+@@ -28,16 +28,26 @@ from ._errors import (
+ from ._internal.session_mutations import (
+     ForkSessionResult,
+     delete_session,
++    delete_session_via_store,
+     fork_session,
++    fork_session_via_store,
+     rename_session,
++    rename_session_via_store,
+     tag_session,
++    tag_session_via_store,
+ )
++from ._internal.session_store import InMemorySessionStore, project_key_for_directory
+ from ._internal.sessions import (
+     get_session_info,
++    get_session_info_from_store,
+     get_session_messages,
++    get_session_messages_from_store,
+     get_subagent_messages,
++    get_subagent_messages_from_store,
+     list_sessions,
++    list_sessions_from_store,
+     list_subagents,
++    list_subagents_from_store,
+ )
+ from ._internal.transport import Transport
+ from ._version import __version__
+@@ -67,6 +77,7 @@ from .types import (
+     McpToolAnnotations,
+     McpToolInfo,
+     Message,
++    MirrorErrorMessage,
+     NotificationHookInput,
+     NotificationHookSpecificOutput,
+     PermissionMode,
+@@ -92,7 +103,12 @@ from .types import (
+     SdkBeta,
+     SdkPluginConfig,
+     SDKSessionInfo,
++    SessionKey,
++    SessionListSubkeysKey,
+     SessionMessage,
++    SessionStore,
++    SessionStoreEntry,
++    SessionStoreListEntry,
+     SettingSource,
+     StopHookInput,
+     StreamEvent,
+@@ -581,12 +597,32 @@ __all__ = [
+     "get_subagent_messages",
+     "SDKSessionInfo",
+     "SessionMessage",
++    # Session store
++    "SessionKey",
++    "SessionStore",
++    "SessionStoreEntry",
++    "SessionStoreListEntry",
++    "SessionListSubkeysKey",
++    "InMemorySessionStore",
++    "MirrorErrorMessage",
++    "project_key_for_directory",
++    # Session listing (SessionStore-backed async variants)
++    "list_sessions_from_store",
++    "get_session_info_from_store",
++    "get_session_messages_from_store",
++    "list_subagents_from_store",
++    "get_subagent_messages_from_store",
+     # Session mutations
+     "rename_session",
+     "tag_session",
+     "delete_session",
+     "fork_session",
+     "ForkSessionResult",
++    # Session mutations (SessionStore-backed async variants)
++    "rename_session_via_store",
++    "tag_session_via_store",
++    "delete_session_via_store",
++    "fork_session_via_store",
+     # Beta support
+     "SdkBeta",
+     # Sandbox support
+diff --git a/src/claude_agent_sdk/_cli_version.py b/src/claude_agent_sdk/_cli_version.py
+index 72eb6d6..a71ebf1 100644
+--- a/src/claude_agent_sdk/_cli_version.py
++++ b/src/claude_agent_sdk/_cli_version.py
+@@ -1,3 +1,3 @@
+ """Bundled Claude Code CLI version."""
+ 
+-__cli_version__ = "2.1.113"
++__cli_version__ = "2.1.114"
+diff --git a/src/claude_agent_sdk/_internal/client.py b/src/claude_agent_sdk/_internal/client.py
+index d6b787f..2d0029a 100644
+--- a/src/claude_agent_sdk/_internal/client.py
++++ b/src/claude_agent_sdk/_internal/client.py
+@@ -2,7 +2,7 @@
+ 
+ import json
+ import os
+-from collections.abc import AsyncIterable, AsyncIterator
++from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
+ from dataclasses import asdict, replace
+ from typing import Any
+ 
+@@ -14,6 +14,13 @@ from ..types import (
+ )
+ from .message_parser import parse_message
+ from .query import Query
++from .session_resume import (
++    MaterializedResume,
++    apply_materialized_options,
++    build_mirror_batcher,
++    materialize_resume_session,
++)
++from .session_store_validation import validate_session_store_options
+ from .transport import Transport
+ from .transport.subprocess_cli import SubprocessCLITransport
+ 
+@@ -50,6 +57,44 @@ class InternalClient:
+     ) -> AsyncIterator[Message]:
+         """Process a query through transport and Query."""
+ 
++        # Fail fast on invalid session_store option combinations before
++        # spawning the subprocess.
++        validate_session_store_options(options)
++
++        # resume/continue + session_store: load the session from the store
++        # into a temp CLAUDE_CONFIG_DIR for the subprocess to resume from.
++        # Skipped when a custom transport was supplied — the materialized
++        # options never reach a pre-constructed transport, so loading the
++        # store and writing .credentials.json to a temp dir would be wasted.
++        materialized = (
++            await materialize_resume_session(options) if transport is None else None
++        )
++        inner = self._process_query_inner(prompt, options, transport, materialized)
++        try:
++            async for msg in inner:
++                yield msg
++        finally:
++            # ``async for`` does NOT close its iterator when the loop body
++            # raises (PEP 533 was deferred). Explicitly aclose the inner
++            # generator first so its ``finally: await query.close()`` runs —
++            # i.e. the subprocess is terminated — *before* we remove the temp
++            # CLAUDE_CONFIG_DIR it is reading/writing.
++            try:
++                await inner.aclose()
++            finally:
++                # The temp dir holds a .credentials.json copy — remove it on
++                # every exit path, including transport spawn failure before
++                # the inner try/finally is reached.
++                if materialized is not None:
++                    await materialized.cleanup()
++
++    async def _process_query_inner(
++        self,
++        prompt: str | AsyncIterable[dict[str, Any]],
++        options: ClaudeAgentOptions,
++        transport: Transport | None,
++        materialized: MaterializedResume | None,
++    ) -> AsyncGenerator[Message, None]:
+         # Validate and configure permission settings (matching TypeScript SDK logic)
+         configured_options = options
+         if options.can_use_tool:
+@@ -70,6 +115,11 @@ class InternalClient:
+             # Automatically set permission_prompt_tool_name to "stdio" for control protocol
+             configured_options = replace(options, permission_prompt_tool_name="stdio")
+ 
++        if materialized is not None:
++            configured_options = apply_materialized_options(
++                configured_options, materialized
++            )
++
+         # Use provided transport or create subprocess transport
+         if transport is not None:
+             chosen_transport = transport
+@@ -131,6 +181,20 @@ class InternalClient:
+             skills=configured_options.skills,
+         )
+ 
++        if configured_options.session_store is not None:
++
++            async def _on_mirror_error(key: Any, error: str) -> None:
++                query.report_mirror_error(key, error)
++
++            query.set_transcript_mirror_batcher(
++                build_mirror_batcher(
++                    store=configured_options.session_store,
++                    materialized=materialized,
++                    env=configured_options.env,
++                    on_error=_on_mirror_error,
++                )
++            )
++
+         try:
+             # Start reading messages
+             await query.start()
+diff --git a/src/claude_agent_sdk/_internal/message_parser.py b/src/claude_agent_sdk/_internal/message_parser.py
+index 2363bb3..b43dbd8 100644
+--- a/src/claude_agent_sdk/_internal/message_parser.py
++++ b/src/claude_agent_sdk/_internal/message_parser.py
+@@ -8,6 +8,7 @@ from ..types import (
+     AssistantMessage,
+     ContentBlock,
+     Message,
++    MirrorErrorMessage,
+     RateLimitEvent,
+     RateLimitInfo,
+     ResultMessage,
+@@ -183,6 +184,14 @@ def parse_message(data: dict[str, Any]) -> Message | None:
+                             tool_use_id=data.get("tool_use_id"),
+                             usage=data.get("usage"),
+                         )
++                    case "mirror_error":
++                        # SDK-synthesized via report_mirror_error — never emitted by the CLI subprocess.
++                        return MirrorErrorMessage(
++                            subtype=subtype,
++                            data=data,
++                            key=data.get("key"),
++                            error=data.get("error", ""),
++                        )
+                     case _:
+                         return SystemMessage(
+                             subtype=subtype,
+diff --git a/src/claude_agent_sdk/_internal/query.py b/src/claude_agent_sdk/_internal/query.py
+index 30ad225..d0241ce 100644
+--- a/src/claude_agent_sdk/_internal/query.py
++++ b/src/claude_agent_sdk/_internal/query.py
+@@ -4,6 +4,7 @@ import asyncio
+ import json
+ import logging
+ import os
++import uuid
+ from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
+ from contextlib import suppress
+ from typing import TYPE_CHECKING, Any, Literal
+@@ -30,6 +31,9 @@ from .transport import Transport
+ if TYPE_CHECKING:
+     from mcp.server import Server as McpServer
+ 
++    from ..types import SessionKey
++    from .transcript_mirror_batcher import TranscriptMirrorBatcher
++
+ logger = logging.getLogger(__name__)
+ 
+ 
+@@ -125,6 +129,39 @@ class Query:
+         # Track first result for proper stream closure with SDK MCP servers
+         self._first_result_event = anyio.Event()
+ 
++        # SessionStore mirroring (set via set_transcript_mirror_batcher)
++        self._transcript_mirror_batcher: TranscriptMirrorBatcher | None = None
++
++    def set_transcript_mirror_batcher(self, batcher: "TranscriptMirrorBatcher") -> None:
++        """Attach a batcher that receives ``transcript_mirror`` frames.
++
++        When set, the read loop peels ``transcript_mirror`` frames off stdout
++        (they are not yielded to consumers), enqueues them on the batcher, and
++        flushes before yielding each ``result`` message.
++        """
++        self._transcript_mirror_batcher = batcher
++
++    def report_mirror_error(self, key: "SessionKey | None", error: str) -> None:
++        """Surface a :meth:`SessionStore.append` failure as a system message.
++
++        Called from the batcher's ``on_error``; the dropped batch is not
++        retried (at-most-once delivery), so this is the consumer's only signal.
++        Non-blocking — if the message buffer is full the error is logged and
++        dropped rather than back-pressuring the read loop.
++        """
++        msg: dict[str, Any] = {
++            "type": "system",
++            "subtype": "mirror_error",
++            "error": error,
++            "key": key,
++            "uuid": str(uuid.uuid4()),
++            "session_id": key.get("session_id", "") if key else "",
++        }
++        try:
++            self._message_send.send_nowait(msg)
++        except Exception as e:  # pragma: no cover - buffer-full edge case
++            logger.warning("Dropping mirror_error message (buffer full): %s", e)
++
+     async def initialize(self) -> dict[str, Any] | None:
+         """Initialize control protocol if in streaming mode.
+ 
+@@ -242,8 +279,22 @@ class Query:
+                             inflight.cancel()
+                     continue
+ 
++                elif msg_type == "transcript_mirror":
++                    # SessionStore write path: peel mirror frames off stdout
++                    # and hand to the batcher; do NOT yield to consumers.
++                    if self._transcript_mirror_batcher is not None:
++                        self._transcript_mirror_batcher.enqueue(
++                            message["filePath"], message["entries"]
++                        )
++                    continue
++
+                 # Track results for proper stream closure
+                 if msg_type == "result":
++                    # Flush pending transcript mirror entries before yielding
++                    # result so consumers observing the result can rely on the
++                    # SessionStore being up to date for this turn.
++                    if self._transcript_mirror_batcher is not None:
++                        await self._transcript_mirror_batcher.flush()
+                     self._first_result_event.set()
+ 
+                 # Regular SDK messages go to the stream
+@@ -263,6 +314,11 @@ class Query:
+             # Put error in stream so iterators can handle it
+             await self._message_send.send({"type": "error", "error": str(e)})
+         finally:
++            # Flush any remaining transcript mirror entries before closing so
++            # an early stdout EOF or transport error doesn't drop entries
++            # batched this turn. flush() never raises.
++            if self._transcript_mirror_batcher is not None:
++                await self._transcript_mirror_batcher.flush()
+             # Unblock any waiters (e.g. string-prompt path waiting for first
+             # result) so they don't stall for the full timeout on early exit.
+             self._first_result_event.set()
+@@ -744,6 +800,10 @@ class Query:
+     async def close(self) -> None:
+         """Close the query and transport."""
+         self._closed = True
++        # Final-flush mirror entries before tearing down so .return()/break
++        # don't drop the current turn when the process exits immediately.
++        if self._transcript_mirror_batcher is not None:
++            await self._transcript_mirror_batcher.close()
+         for task in list(self._child_tasks):
+             task.cancel()
+         if self._read_task is not None and not self._read_task.done():
+diff --git a/src/claude_agent_sdk/_internal/session_mutations.py b/src/claude_agent_sdk/_internal/session_mutations.py
+index 7d68d3c..55a7f21 100644
+--- a/src/claude_agent_sdk/_internal/session_mutations.py
++++ b/src/claude_agent_sdk/_internal/session_mutations.py
+@@ -25,11 +25,14 @@ import re
+ import shutil
+ import unicodedata
+ import uuid as uuid_mod
++from collections.abc import Callable
+ from dataclasses import dataclass
+ from datetime import datetime, timezone
+ from pathlib import Path
+-from typing import Any
++from typing import Any, cast
+ 
++from ..types import SessionKey, SessionStore, SessionStoreEntry
++from .session_store_validation import _store_implements
+ from .sessions import (
+     LITE_READ_BUF_SIZE,
+     _canonicalize_path,
+@@ -39,6 +42,7 @@ from .sessions import (
+     _get_projects_dir,
+     _get_worktree_paths,
+     _validate_uuid,
++    project_key_for_directory,
+ )
+ 
+ # ---------------------------------------------------------------------------
+@@ -69,6 +73,10 @@ def rename_session(
+             is empty/whitespace-only.
+         FileNotFoundError: If the session file cannot be found.
+ 
++    See Also:
++        :func:`rename_session_via_store` for the :class:`SessionStore`-backed
++        async variant.
++
+     Example:
+         Rename a session in a specific project::
+ 
+@@ -131,6 +139,10 @@ def tag_session(
+             empty/whitespace-only after sanitization.
+         FileNotFoundError: If the session file cannot be found.
+ 
++    See Also:
++        :func:`tag_session_via_store` for the :class:`SessionStore`-backed
++        async variant.
++
+     Example:
+         Tag a session::
+ 
+@@ -189,6 +201,10 @@ def delete_session(
+         ValueError: If ``session_id`` is not a valid UUID.
+         FileNotFoundError: If the session file cannot be found.
+ 
++    See Also:
++        :func:`delete_session_via_store` for the :class:`SessionStore`-backed
++        async variant.
++
+     Example:
+         Delete a session::
+ 
+@@ -257,6 +273,10 @@ def fork_session(
+         ValueError: If the session has no messages to fork, or if
+             ``up_to_message_id`` is not found in the transcript.
+ 
++    See Also:
++        :func:`fork_session_via_store` for the :class:`SessionStore`-backed
++        async variant.
++
+     Example:
+         Fork a session::
+ 
+@@ -289,6 +309,60 @@ def fork_session(
+ 
+     transcript, content_replacements = _parse_fork_transcript(content, session_id)
+ 
++    def _derive_title() -> str | None:
++        buf_len = len(content)
++        head = content[: min(buf_len, LITE_READ_BUF_SIZE)].decode(
++            "utf-8", errors="replace"
++        )
++        tail = content[max(0, buf_len - LITE_READ_BUF_SIZE) :].decode(
++            "utf-8", errors="replace"
++        )
++        return (
++            _extract_last_json_string_field(tail, "customTitle")
++            or _extract_last_json_string_field(head, "customTitle")
++            or _extract_last_json_string_field(tail, "aiTitle")
++            or _extract_last_json_string_field(head, "aiTitle")
++            or _extract_first_prompt_from_head(head)
++            or None
++        )
++
++    forked_session_id, lines = _build_fork_lines(
++        transcript,
++        content_replacements,
++        session_id,
++        up_to_message_id,
++        title,
++        _derive_title,
++    )
++
++    fork_path = project_dir / f"{forked_session_id}.jsonl"
++    fd = os.open(fork_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
++    try:
++        os.write(fd, ("\n".join(lines) + "\n").encode("utf-8"))
++    finally:
++        os.close(fd)
++
++    return ForkSessionResult(session_id=forked_session_id)
++
++
++def _build_fork_lines(
++    transcript: list[dict[str, Any]],
++    content_replacements: list[Any],
++    session_id: str,
++    up_to_message_id: str | None,
++    title: str | None,
++    derive_title: Callable[[], str | None],
++) -> tuple[str, list[str]]:
++    """Core fork transform — remap UUIDs and produce serialized JSONL lines.
++
++    Shared by the filesystem and SessionStore-backed paths. Returns
++    ``(forked_session_id, lines)`` where each line is a compact JSON string
++    without a trailing newline.
++
++    ``derive_title`` is invoked only when no explicit ``title`` is given,
++    so the disk path's head/tail byte scan and the store path's entry scan
++    only run when needed.
++    """
+     # Filter out sidechains (subagent sessions with separate parentUuid
+     # graphs). Keep isMeta entries — they're interleaved in the main chain.
+     transcript = [e for e in transcript if not e.get("isSidechain")]
+@@ -380,30 +454,19 @@ def fork_session(
+                     "type": "content-replacement",
+                     "sessionId": forked_session_id,
+                     "replacements": content_replacements,
++                    "uuid": str(uuid_mod.uuid4()),
++                    "timestamp": now,
+                 },
+                 separators=(",", ":"),
+             )
+         )
+ 
+-    # Derive title: explicit > original customTitle/aiTitle > first prompt.
++    # Derive title: explicit > original customTitle > original aiTitle > first
++    # prompt. Suffix with " (fork)" for derived titles. listSessions reads the
++    # LAST custom-title from the tail, so this entry is what surfaces.
+     fork_title = title.strip() if title else None
+     if not fork_title:
+-        buf_len = len(content)
+-        head = content[: min(buf_len, LITE_READ_BUF_SIZE)].decode(
+-            "utf-8", errors="replace"
+-        )
+-        tail = content[max(0, buf_len - LITE_READ_BUF_SIZE) :].decode(
+-            "utf-8", errors="replace"
+-        )
+-        base = (
+-            _extract_last_json_string_field(tail, "customTitle")
+-            or _extract_last_json_string_field(head, "customTitle")
+-            or _extract_last_json_string_field(tail, "aiTitle")
+-            or _extract_last_json_string_field(head, "aiTitle")
+-            or _extract_first_prompt_from_head(head)
+-            or "Forked session"
+-        )
+-        fork_title = f"{base} (fork)"
++        fork_title = f"{derive_title() or 'Forked session'} (fork)"
+ 
+     lines.append(
+         json.dumps(
+@@ -411,19 +474,14 @@ def fork_session(
+                 "type": "custom-title",
+                 "sessionId": forked_session_id,
+                 "customTitle": fork_title,
++                "uuid": str(uuid_mod.uuid4()),
++                "timestamp": now,
+             },
+             separators=(",", ":"),
+         )
+     )
+ 
+-    fork_path = project_dir / f"{forked_session_id}.jsonl"
+-    fd = os.open(fork_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+-    try:
+-        os.write(fd, ("\n".join(lines) + "\n").encode("utf-8"))
+-    finally:
+-        os.close(fd)
+-
+-    return ForkSessionResult(session_id=forked_session_id)
++    return forked_session_id, lines
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -501,6 +559,34 @@ def _find_session_file_with_dir(
+ _TRANSCRIPT_TYPES = frozenset({"user", "assistant", "attachment", "system", "progress"})
+ 
+ 
++def _derive_title_from_entries(raw: list[Any]) -> str | None:
++    """Mirror the disk path's head/tail title scan over parsed entry objects.
++
++    Precedence matches ``_extract_last_json_string_field`` semantics: last
++    occurrence wins for both ``customTitle`` and ``aiTitle``; ``customTitle``
++    beats ``aiTitle``; first user prompt is the final fallback.
++    """
++    custom: str | None = None
++    ai: str | None = None
++    for e in raw:
++        if not isinstance(e, dict):
++            continue
++        ct = e.get("customTitle")
++        if isinstance(ct, str) and ct:
++            custom = ct
++        at = e.get("aiTitle")
++        if isinstance(at, str) and at:
++            ai = at
++    if custom:
++        return custom
++    if ai:
++        return ai
++    # First-prompt fallback — reuse the head extractor over a re-serialized
++    # JSONL string so skip-patterns/truncation match the disk path exactly.
++    jsonl = "\n".join(json.dumps(e, separators=(",", ":")) for e in raw) + "\n"
++    return _extract_first_prompt_from_head(jsonl) or None
++
++
+ def _parse_fork_transcript(
+     content: bytes, session_id: str
+ ) -> tuple[list[dict[str, Any]], list[Any]]:
+@@ -669,3 +755,208 @@ def _sanitize_unicode(value: str) -> str:
+         if current == previous:
+             break
+     return current
++
++
++# ---------------------------------------------------------------------------
++# SessionStore-backed implementations
++# ---------------------------------------------------------------------------
++
++
++def _iso_now() -> str:
++    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
++
++
++async def rename_session_via_store(
++    session_store: SessionStore,
++    session_id: str,
++    title: str,
++    directory: str | None = None,
++) -> None:
++    """Rename a session by appending a custom-title entry to a :class:`SessionStore`.
++
++    Async, store-backed counterpart to :func:`rename_session`.
++
++    Args:
++        session_store: The store to write to.
++        session_id: UUID of the session to rename.
++        title: New session title. Leading/trailing whitespace is stripped.
++            Must be non-empty after stripping.
++        directory: Project directory used to compute the ``project_key``.
++            Defaults to the current working directory.
++
++    Raises:
++        ValueError: If ``session_id`` is not a valid UUID, or if ``title``
++            is empty/whitespace-only.
++    """
++    if not _validate_uuid(session_id):
++        raise ValueError(f"Invalid session_id: {session_id}")
++    stripped = title.strip()
++    if not stripped:
++        raise ValueError("title must be non-empty")
++    project_key = project_key_for_directory(directory)
++    key: SessionKey = {"project_key": project_key, "session_id": session_id}
++    entry: dict[str, Any] = {
++        "type": "custom-title",
++        "customTitle": stripped,
++        "sessionId": session_id,
++        "uuid": str(uuid_mod.uuid4()),
++        "timestamp": _iso_now(),
++    }
++    # SessionStoreEntry is a structural supertype ({type: str, ...}); the
++    # extra fields are opaque pass-through for adapters.
++    await session_store.append(key, [cast(SessionStoreEntry, entry)])
++
++
++async def tag_session_via_store(
++    session_store: SessionStore,
++    session_id: str,
++    tag: str | None,
++    directory: str | None = None,
++) -> None:
++    """Tag a session by appending a tag entry to a :class:`SessionStore`.
++
++    Async, store-backed counterpart to :func:`tag_session`. Pass ``None`` to
++    clear the tag. Tags are Unicode-sanitized before storing.
++
++    Args:
++        session_store: The store to write to.
++        session_id: UUID of the session to tag.
++        tag: Tag string, or ``None`` to clear.
++        directory: Project directory used to compute the ``project_key``.
++            Defaults to the current working directory.
++
++    Raises:
++        ValueError: If ``session_id`` is not a valid UUID, or if ``tag`` is
++            empty/whitespace-only after sanitization.
++    """
++    if not _validate_uuid(session_id):
++        raise ValueError(f"Invalid session_id: {session_id}")
++    if tag is not None:
++        sanitized = _sanitize_unicode(tag).strip()
++        if not sanitized:
++            raise ValueError("tag must be non-empty (use None to clear)")
++        tag = sanitized
++    project_key = project_key_for_directory(directory)
++    key: SessionKey = {"project_key": project_key, "session_id": session_id}
++    entry: dict[str, Any] = {
++        "type": "tag",
++        "tag": tag if tag is not None else "",
++        "sessionId": session_id,
++        "uuid": str(uuid_mod.uuid4()),
++        "timestamp": _iso_now(),
++    }
++    await session_store.append(key, [cast(SessionStoreEntry, entry)])
++
++
++async def delete_session_via_store(
++    session_store: SessionStore,
++    session_id: str,
++    directory: str | None = None,
++) -> None:
++    """Delete a session from a :class:`SessionStore`.
++
++    Async, store-backed counterpart to :func:`delete_session`. If the store
++    does not implement :meth:`SessionStore.delete`, deletion is a no-op
++    (appropriate for WORM/append-only backends — matches the
++    :class:`SessionStore` contract).
++
++    Whether subagent transcripts under the session are also removed depends
++    on the store's ``delete({session_id})`` semantics —
++    :class:`InMemorySessionStore` cascades; custom stores may not.
++
++    Args:
++        session_store: The store to delete from.
++        session_id: UUID of the session to delete.
++        directory: Project directory used to compute the ``project_key``.
++            Defaults to the current working directory.
++
++    Raises:
++        ValueError: If ``session_id`` is not a valid UUID.
++    """
++    if not _validate_uuid(session_id):
++        raise ValueError(f"Invalid session_id: {session_id}")
++    if not _store_implements(session_store, "delete"):
++        return
++    project_key = project_key_for_directory(directory)
++    key: SessionKey = {"project_key": project_key, "session_id": session_id}
++    await session_store.delete(key)
++
++
++async def fork_session_via_store(
++    session_store: SessionStore,
++    session_id: str,
++    directory: str | None = None,
++    up_to_message_id: str | None = None,
++    title: str | None = None,
++) -> ForkSessionResult:
++    """Fork a session into a new branch with fresh UUIDs via a :class:`SessionStore`.
++
++    Async, store-backed counterpart to :func:`fork_session`. Runs the fork
++    transform directly over the objects returned by ``session_store.load()`` —
++    no JSONL round-trip. A storage-layer copy (e.g. S3 CopyObject) is NOT
++    sufficient: the transform remaps every UUID, rewrites ``sessionId`` on
++    each entry, and stamps ``forkedFrom``, so the data must pass through
++    this process once.
++
++    Args:
++        session_store: The store to read the source from and write the fork
++            to.
++        session_id: UUID of the source session to fork.
++        directory: Project directory used to compute the ``project_key``.
++            Defaults to the current working directory.
++        up_to_message_id: Slice transcript up to this message UUID
++            (inclusive). If omitted, copies the full transcript.
++        title: Custom title for the fork. If omitted, derives from the
++            original title + " (fork)".
++
++    Returns:
++        ``ForkSessionResult`` with the new session's UUID.
++
++    Raises:
++        ValueError: If ``session_id`` or ``up_to_message_id`` is not a
++            valid UUID, or if the session has no messages to fork.
++        FileNotFoundError: If the source session is not found in the store.
++    """
++    if not _validate_uuid(session_id):
++        raise ValueError(f"Invalid session_id: {session_id}")
++    if up_to_message_id and not _validate_uuid(up_to_message_id):
++        raise ValueError(f"Invalid up_to_message_id: {up_to_message_id}")
++    project_key = project_key_for_directory(directory)
++    src_key: SessionKey = {"project_key": project_key, "session_id": session_id}
++    loaded = await session_store.load(src_key)
++    if not loaded:
++        raise FileNotFoundError(f"Session {session_id} not found")
++
++    # Partition into transcript entries (with uuid) and content-replacement
++    # records, mirroring _parse_fork_transcript for the already-parsed path.
++    # SessionStoreEntry is a minimal structural supertype — widen to a plain
++    # dict for field access.
++    raw: list[dict[str, Any]] = cast("list[dict[str, Any]]", loaded)
++    transcript: list[dict[str, Any]] = []
++    content_replacements: list[Any] = []
++    for entry in raw:
++        entry_type = entry.get("type")
++        if entry_type in _TRANSCRIPT_TYPES and isinstance(entry.get("uuid"), str):
++            transcript.append(entry)
++        elif (
++            entry_type == "content-replacement"
++            and entry.get("sessionId") == session_id
++            and isinstance(entry.get("replacements"), list)
++        ):
++            content_replacements.extend(entry["replacements"])
++
++    forked_session_id, lines = _build_fork_lines(
++        transcript,
++        content_replacements,
++        session_id,
++        up_to_message_id,
++        title,
++        lambda: _derive_title_from_entries(raw),
++    )
++
++    dst_key: SessionKey = {"project_key": project_key, "session_id": forked_session_id}
++    # _build_fork_lines emits compact JSON strings; re-parse to objects so the
++    # store receives the same shape it would from the mirror path. All entries
++    # satisfy the SessionStoreEntry structural supertype ({type: str, ...}).
++    await session_store.append(dst_key, [json.loads(line) for line in lines])
++    return ForkSessionResult(session_id=forked_session_id)
+diff --git a/src/claude_agent_sdk/_internal/session_resume.py b/src/claude_agent_sdk/_internal/session_resume.py
+new file mode 100644
+index 0000000..1bbace3
+--- /dev/null
++++ b/src/claude_agent_sdk/_internal/session_resume.py
+@@ -0,0 +1,522 @@
++"""Materialize a :class:`SessionStore`-backed resume into a temp ``CLAUDE_CONFIG_DIR``.
++
++When ``options.resume`` (or ``options.continue_conversation``) is paired with
++``options.session_store``, the session JSONL almost certainly does not exist on
++local disk — it lives in the external store. The CLI subprocess only knows how
++to resume from a local file. This module bridges the gap: it loads the session
++from the store, writes it to a temporary directory laid out exactly like
++``~/.claude/``, and returns the path so the caller can point the subprocess at
++it via ``CLAUDE_CONFIG_DIR``.
++
++Mirrors the behavior of the TypeScript SDK.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import errno
++import getpass
++import json
++import logging
++import ntpath
++import os
++import platform
++import re
++import shutil
++import subprocess
++import tempfile
++from collections.abc import Awaitable, Callable
++from contextlib import suppress
++from dataclasses import dataclass, replace
++from pathlib import Path
++from typing import Any
++
++from ..types import ClaudeAgentOptions, SessionKey, SessionStore
++from .session_store_validation import _store_implements
++from .sessions import _get_projects_dir, _validate_uuid, project_key_for_directory
++from .transcript_mirror_batcher import TranscriptMirrorBatcher
++
++logger = logging.getLogger(__name__)
++
++# Default macOS Keychain service name for OAuth credentials when
++# CLAUDE_CONFIG_DIR is unset (production OAUTH_FILE_SUFFIX is empty).
++_KEYCHAIN_SERVICE_NAME = "Claude Code-credentials"
++
++
++@dataclass
++class MaterializedResume:
++    """Result of :func:`materialize_resume_session`.
++
++    Attributes:
++        config_dir: Temporary directory laid out like ``~/.claude/`` —
++            point the subprocess at it via ``CLAUDE_CONFIG_DIR``.
++        resume_session_id: Session ID to pass as ``--resume``. When the
++            input was ``continue_conversation``, this is the most-recent
++            session resolved via :meth:`SessionStore.list_sessions`.
++        cleanup: Coroutine that removes ``config_dir`` (best-effort).
++            Call it after the subprocess exits.
++    """
++
++    config_dir: Path
++    resume_session_id: str
++    cleanup: Callable[[], Awaitable[None]]
++
++
++def apply_materialized_options(
++    options: ClaudeAgentOptions, materialized: MaterializedResume
++) -> ClaudeAgentOptions:
++    """Return a copy of ``options`` repointed at a materialized temp config dir.
++
++    Sets ``CLAUDE_CONFIG_DIR`` in ``env``, ``resume`` to the materialized
++    session id, and clears ``continue_conversation`` (already resolved to a
++    concrete session id during materialization).
++    """
++    return replace(
++        options,
++        env={
++            **options.env,
++            "CLAUDE_CONFIG_DIR": str(materialized.config_dir),
++        },
++        resume=materialized.resume_session_id,
++        continue_conversation=False,
++    )
++
++
++def build_mirror_batcher(
++    store: SessionStore,
++    materialized: MaterializedResume | None,
++    env: dict[str, str] | None,
++    on_error: Callable[[SessionKey | None, str], Awaitable[None]],
++) -> TranscriptMirrorBatcher:
++    """Construct the :class:`TranscriptMirrorBatcher` for a session.
++
++    Resolves ``projects_dir`` to the materialized temp dir when present
++    (so file_path → key resolution matches what the subprocess writes),
++    otherwise to the standard projects directory under the effective
++    ``CLAUDE_CONFIG_DIR``.
++    """
++    projects_dir = (
++        str(materialized.config_dir / "projects")
++        if materialized is not None
++        else str(_get_projects_dir(env))
++    )
++    return TranscriptMirrorBatcher(
++        store=store,
++        projects_dir=projects_dir,
++        on_error=on_error,
++    )
++
++
++async def materialize_resume_session(
++    options: ClaudeAgentOptions,
++) -> MaterializedResume | None:
++    """Load a session from ``options.session_store`` and write it to a temp dir.
++
++    Returns ``None`` when no materialization is needed (no store, no
++    resume/continue, store has no entries, or the resolved session ID is not a
++    valid UUID) — caller falls through to the normal (no-store) resume/spawn
++    path. For ``continue_conversation`` this means a fresh session; for an
++    explicit ``resume`` value the CLI receives it unchanged.
++
++    Raises ``RuntimeError`` if a store call fails or times out.
++    """
++    store = options.session_store
++    if store is None:
++        return None
++    if options.resume is None and not options.continue_conversation:
++        return None
++
++    timeout_s = options.load_timeout_ms / 1000
++    project_key = project_key_for_directory(options.cwd)
++
++    # Resolve the session ID — explicit resume wins; otherwise pick the
++    # most-recently-modified non-sidechain session from the store. Empty
++    # list_sessions() → fresh session (matches CLI --continue with no history).
++    if options.resume is not None:
++        # session_id is used as a path component below; reject anything that
++        # isn't a UUID to prevent traversal and match every other resume path.
++        if _validate_uuid(options.resume) is None:
++            return None
++        resolved = await _load_candidate(store, project_key, options.resume, timeout_s)
++    else:
++        resolved = await _resolve_continue_candidate(store, project_key, timeout_s)
++    if resolved is None:
++        return None
++    session_id, entries = resolved
++
++    tmp_base = Path(tempfile.mkdtemp(prefix="claude-resume-"))
++    try:
++        project_dir = tmp_base / "projects" / project_key
++        project_dir.mkdir(parents=True, exist_ok=True)
++        _write_jsonl(project_dir / f"{session_id}.jsonl", entries)
++
++        # The subprocess will run with CLAUDE_CONFIG_DIR=tmp_base. Copy auth
++        # config from the caller's effective config locations so it can
++        # authenticate. Missing files are fine (API-key auth, etc.).
++        _copy_auth_files(tmp_base, options.env)
++
++        # Materialize subagent transcripts if the store can enumerate them.
++        if _store_implements(store, "list_subkeys"):
++            await _materialize_subkeys(
++                store, tmp_base, project_dir, project_key, session_id, timeout_s
++            )
++    except BaseException:
++        # Any failure after mkdtemp leaves tmp_base (which may already
++        # contain a .credentials.json copy) on disk with no path for the
++        # caller to clean it up. Remove it before rethrowing. BaseException
++        # so asyncio.CancelledError (BaseException since 3.8) also triggers
++        # cleanup — callers can't compensate because the assignment raises
++        # before completing.
++        await _rmtree_with_retry(tmp_base)
++        raise
++
++    async def cleanup() -> None:
++        await _rmtree_with_retry(tmp_base)
++
++    return MaterializedResume(
++        config_dir=tmp_base,
++        resume_session_id=session_id,
++        cleanup=cleanup,
++    )
++
++
++# ---------------------------------------------------------------------------
++# Helpers
++# ---------------------------------------------------------------------------
++
++# OSError errnos that indicate a transiently-held handle (Windows AV/indexer
++# scanning a freshly-written file) rather than a permanent failure.
++_RETRYABLE_RMTREE_ERRNOS = frozenset(
++    {
++        errno.EBUSY,
++        errno.EMFILE,
++        errno.ENFILE,
++        errno.ENOTEMPTY,
++        errno.EPERM,
++        errno.EACCES,
++    }
++)
++
++
++async def _rmtree_with_retry(
++    path: Path, *, retries: int = 4, delay: float = 0.1
++) -> None:
++    """Best-effort ``shutil.rmtree`` with retries on transient lock errors.
++
++    On Windows, AV/indexer can briefly hold a handle on freshly-written
++    files (notably ``.credentials.json``), causing rmtree to fail with
++    EBUSY/EPERM. Retry a few times with a short backoff; after exhausting
++    retries, fall back to ``ignore_errors=True`` (matches the previous
++    behavior, but gives the handle a chance to release first so the access
++    token doesn't leak in temp). Never raises.
++    """
++    if not path.exists():
++        return
++    for _ in range(retries):
++        try:
++            shutil.rmtree(path)
++            return
++        except OSError as e:
++            if e.errno not in _RETRYABLE_RMTREE_ERRNOS and not isinstance(
++                e, PermissionError
++            ):
++                break
++        try:
++            await asyncio.sleep(delay)
++        except asyncio.CancelledError:
++            # Best-effort final sweep before propagating cancellation so a
++            # cancelled connect() doesn't leak the temp dir.
++            shutil.rmtree(path, ignore_errors=True)
++            raise
++    shutil.rmtree(path, ignore_errors=True)
++
++
++async def _load_candidate(
++    store: SessionStore, project_key: str, session_id: str, timeout_s: float
++) -> tuple[str, list[Any]] | None:
++    """Load entries for ``session_id``; return ``None`` if empty/missing."""
++    entries = await _with_timeout(
++        store.load({"project_key": project_key, "session_id": session_id}),
++        timeout_s,
++        f"SessionStore.load() for session {session_id}",
++    )
++    if not entries:
++        return None
++    return session_id, entries
++
++
++async def _resolve_continue_candidate(
++    store: SessionStore, project_key: str, timeout_s: float
++) -> tuple[str, list[Any]] | None:
++    """Pick the most-recently-modified non-sidechain session.
++
++    Sidechain transcripts are mirrored as ordinary top-level keys and often
++    have the highest mtime (their append lands after the main session's in
++    the same flush). Walk newest→oldest, loading each candidate (the load is
++    needed anyway) and skipping sidechains so ``--continue`` resumes the
++    user's conversation, not a subagent's. Matches the CLI's own
++    ``--continue`` filter and ``list_sessions_from_store()``.
++    """
++    sessions = await _with_timeout(
++        store.list_sessions(project_key),
++        timeout_s,
++        "SessionStore.list_sessions()",
++    )
++    if not sessions:
++        return None
++    for cand in sorted(sessions, key=lambda s: s["mtime"], reverse=True):
++        sid = cand["session_id"]
++        if _validate_uuid(sid) is None:
++            continue
++        loaded = await _load_candidate(store, project_key, sid, timeout_s)
++        if loaded is None:
++            continue
++        first = loaded[1][0]
++        if isinstance(first, dict) and first.get("isSidechain") is True:
++            continue
++        return loaded
++    return None
++
++
++async def _with_timeout(coro: Awaitable[Any], timeout_s: float, what: str) -> Any:
++    """Await ``coro`` with a timeout, re-raising as ``RuntimeError`` with context."""
++    try:
++        return await asyncio.wait_for(coro, timeout=timeout_s)
++    except asyncio.TimeoutError as e:
++        raise RuntimeError(
++            f"{what} timed out after {int(timeout_s * 1000)}ms during resume "
++            f"materialization"
++        ) from e
++    except Exception as e:  # noqa: BLE001 - surface adapter failures with context
++        raise RuntimeError(f"{what} failed during resume materialization: {e}") from e
++
++
++def _write_jsonl(path: Path, entries: list[Any]) -> None:
++    """Stream-write ``entries`` as one JSON line each to ``path`` (mode 0o600)."""
++    path.parent.mkdir(parents=True, exist_ok=True)
++    with path.open("w", encoding="utf-8") as f:
++        for e in entries:
++            f.write(json.dumps(e, separators=(",", ":")))
++            f.write("\n")
++    with suppress(OSError):
++        path.chmod(0o600)
++
++
++def _copy_auth_files(tmp_base: Path, opt_env: dict[str, str]) -> None:
++    """Copy ``.credentials.json`` (refreshToken redacted) and ``.claude.json``.
++
++    Source resolution mirrors the CLI:
++    - ``.credentials.json`` lives under the config dir (default ``~/.claude/``)
++    - ``.claude.json`` lives at ``$CLAUDE_CONFIG_DIR/.claude.json`` when set,
++      else ``~/.claude.json`` (NOT ``~/.claude/.claude.json``)
++    """
++    caller_config_dir = opt_env.get("CLAUDE_CONFIG_DIR") or os.environ.get(
++        "CLAUDE_CONFIG_DIR"
++    )
++    source_config_dir = (
++        Path(caller_config_dir) if caller_config_dir else Path.home() / ".claude"
++    )
++
++    creds_json: str | None = None
++    creds_path = source_config_dir / ".credentials.json"
++    with suppress(FileNotFoundError):
++        creds_json = creds_path.read_text(encoding="utf-8")
++
++    # macOS default setup keeps OAuth tokens in the Keychain, not a file.
++    # Redirecting CLAUDE_CONFIG_DIR changes the Keychain service-name suffix,
++    # so the subprocess's lookup misses and falls back to plainTextStorage at
++    # ${tmp_base}/.credentials.json. Populate that file from the parent's
++    # Keychain so the resumed subprocess can auth. Skipped when env-based
++    # auth or a custom config dir is already in play.
++    if (
++        caller_config_dir is None
++        and not (
++            opt_env.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
++        )
++        and not (
++            opt_env.get("CLAUDE_CODE_OAUTH_TOKEN")
++            or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
++        )
++    ):
++        keychain = _read_keychain_credentials()
++        if keychain is not None:
++            creds_json = keychain
++
++    _write_redacted_credentials(creds_json, tmp_base / ".credentials.json")
++
++    claude_json_src = (
++        Path(caller_config_dir) / ".claude.json"
++        if caller_config_dir
++        else Path.home() / ".claude.json"
++    )
++    _copy_if_present(claude_json_src, tmp_base / ".claude.json")
++
++
++def _write_redacted_credentials(creds_json: str | None, dst: Path) -> None:
++    """Write ``creds_json`` with ``claudeAiOauth.refreshToken`` removed.
++
++    The resumed subprocess runs under a redirected ``CLAUDE_CONFIG_DIR``; if it
++    refreshed, the single-use refresh token would be consumed server-side and
++    the new tokens written to a location the parent never reads back — leaving
++    the parent's stored creds revoked. With no ``refreshToken``, the
++    subprocess's refresh check short-circuits.
++    """
++    if creds_json is None:
++        return
++    out = creds_json
++    try:
++        data = json.loads(creds_json)
++        oauth = data.get("claudeAiOauth") if isinstance(data, dict) else None
++        if isinstance(oauth, dict) and "refreshToken" in oauth:
++            del oauth["refreshToken"]
++            out = json.dumps(data)
++    except (json.JSONDecodeError, ValueError):
++        # Unparseable — write through; subprocess will fail to parse it too.
++        pass
++    dst.write_text(out, encoding="utf-8")
++    with suppress(OSError):
++        dst.chmod(0o600)
++
++
++def _copy_if_present(src: Path, dst: Path) -> None:
++    with suppress(FileNotFoundError):
++        shutil.copyfile(src, dst)
++
++
++def _read_keychain_credentials() -> str | None:
++    """Read OAuth credentials JSON from the macOS Keychain (default service name).
++
++    Best-effort — returns ``None`` on any error or non-macOS platforms.
++    """
++    # platform.system() (not sys.platform) so mypy doesn't narrow the rest
++    # of the function to unreachable on the typecheck host.
++    if platform.system() != "Darwin":
++        return None
++    try:
++        user = os.environ.get("USER") or getpass.getuser()
++    except Exception:
++        user = "claude-code-user"
++    try:
++        result = subprocess.run(
++            [
++                "security",
++                "find-generic-password",
++                "-a",
++                user,
++                "-w",
++                "-s",
++                _KEYCHAIN_SERVICE_NAME,
++            ],
++            capture_output=True,
++            text=True,
++            timeout=5,
++            check=False,
++        )
++    except Exception:
++        return None
++    if result.returncode != 0:
++        return None
++    out = result.stdout.strip()
++    return out or None
++
++
++async def _materialize_subkeys(
++    store: SessionStore,
++    tmp_base: Path,
++    project_dir: Path,
++    project_key: str,
++    session_id: str,
++    timeout_s: float,
++) -> None:
++    """Load and write all subagent transcripts/metadata under ``session_id``."""
++    session_dir = project_dir / session_id
++    subkeys = await _with_timeout(
++        store.list_subkeys({"project_key": project_key, "session_id": session_id}),
++        timeout_s,
++        f"SessionStore.list_subkeys() for session {session_id}",
++    )
++    for subpath in subkeys:
++        # Subpaths come from an external store and are used as filesystem path
++        # components below. Reject anything that would escape the session
++        # directory. Empty string is rejected explicitly: '' + '.jsonl' →
++        # '.jsonl', a hidden dotfile that passes a naive prefix check.
++        if not _is_safe_subpath(subpath, session_dir):
++            logger.warning(
++                "[SessionStore] skipping unsafe subpath from list_subkeys: %r", subpath
++            )
++            continue
++
++        sub_key: SessionKey = {
++            "project_key": project_key,
++            "session_id": session_id,
++            "subpath": subpath,
++        }
++        sub_entries = await _with_timeout(
++            store.load(sub_key),
++            timeout_s,
++            f"SessionStore.load() for session {session_id} subpath {subpath}",
++        )
++        if not sub_entries:
++            continue
++
++        # Partition: agent_metadata entries describe the .meta.json sidecar;
++        # everything else is a transcript line.
++        metadata: list[dict[str, Any]] = []
++        transcript: list[Any] = []
++        for e in sub_entries:
++            if isinstance(e, dict) and e.get("type") == "agent_metadata":
++                metadata.append(e)
++            else:
++                transcript.append(e)
++
++        sub_file = (session_dir / subpath).with_name(
++            (session_dir / subpath).name + ".jsonl"
++        )
++        if transcript:
++            _write_jsonl(sub_file, transcript)
++
++        if metadata:
++            # Last metadata entry wins; strip the synthetic ``type`` field.
++            meta_content = {k: v for k, v in metadata[-1].items() if k != "type"}
++            meta_file = sub_file.with_name(
++                sub_file.name[: -len(".jsonl")] + ".meta.json"
++            )
++            meta_file.parent.mkdir(parents=True, exist_ok=True)
++            meta_file.write_text(json.dumps(meta_content), encoding="utf-8")
++            with suppress(OSError):
++                meta_file.chmod(0o600)
++
++
++def _is_safe_subpath(subpath: str, session_dir: Path) -> bool:
++    """Reject subpaths that are empty, absolute, contain ``..``, or escape
++    ``session_dir`` after resolution."""
++    if not subpath:
++        return False
++    # PurePosixPath/PureWindowsPath both checked — subpaths are store keys
++    # that may use either separator regardless of host OS.
++    if Path(subpath).is_absolute() or subpath.startswith(("/", "\\")):
++        return False
++    # Drive-prefixed (``C:foo``) and UNC subpaths are never legitimate store
++    # keys. ``ntpath.splitdrive`` is used regardless of host OS so a Windows
++    # consumer is protected even if the store was populated elsewhere; on
++    # POSIX this also rejects ``C:foo``, which is acceptable since the only
++    # subpaths we ever emit are ``subagents/...``.
++    if ntpath.splitdrive(subpath)[0]:
++        return False
++    if any(p in (".", "..") for p in re.split(r"[\\/]", subpath)):
++        return False
++    if "\x00" in subpath:
++        return False
++    # Resolve the .jsonl target — using the same expression as the writer in
++    # _materialize_subkeys so the validated path can't drift from the written
++    # one — and confirm it stays under session_dir. Both ``.resolve()`` calls
++    # can raise (e.g. ValueError on embedded NUL, OSError on broken symlink
++    # chains); treat any resolution failure as unsafe so the subpath is
++    # skipped with a warning rather than aborting the whole resume.
++    target = session_dir / subpath
++    try:
++        sub_file = target.with_name(target.name + ".jsonl").resolve()
++        sub_file.relative_to(session_dir.resolve())
++    except (ValueError, OSError):
++        return False
++    return True
+diff --git a/src/claude_agent_sdk/_internal/session_store.py b/src/claude_agent_sdk/_internal/session_store.py
+new file mode 100644
+index 0000000..0d5a0e9
+--- /dev/null
++++ b/src/claude_agent_sdk/_internal/session_store.py
+@@ -0,0 +1,153 @@
++"""In-memory reference implementation of :class:`SessionStore`."""
++
++from __future__ import annotations
++
++import os
++import time
++from pathlib import Path
++
++from ..types import (
++    SessionKey,
++    SessionListSubkeysKey,
++    SessionStore,
++    SessionStoreEntry,
++    SessionStoreListEntry,
++)
++from .sessions import project_key_for_directory
++
++__all__ = [
++    "InMemorySessionStore",
++    "file_path_to_session_key",
++    "project_key_for_directory",
++]
++
++
++def _key_to_string(key: SessionKey) -> str:
++    parts = [key["project_key"], key["session_id"]]
++    subpath = key.get("subpath")
++    if subpath:
++        parts.append(subpath)
++    return "/".join(parts)
++
++
++class InMemorySessionStore(SessionStore):
++    """In-memory :class:`SessionStore` implementation for testing and development.
++
++    Stores entries in a ``dict`` keyed by a composite ``project_key/session_id``
++    string (with an optional ``/subpath`` suffix). Not suitable for production —
++    data is lost when the process exits.
++    """
++
++    def __init__(self) -> None:
++        self._store: dict[str, list[SessionStoreEntry]] = {}
++        self._mtimes: dict[str, int] = {}
++
++    async def append(self, key: SessionKey, entries: list[SessionStoreEntry]) -> None:
++        k = _key_to_string(key)
++        self._store.setdefault(k, []).extend(entries)
++        self._mtimes[k] = int(time.time() * 1000)
++
++    async def load(self, key: SessionKey) -> list[SessionStoreEntry] | None:
++        entries = self._store.get(_key_to_string(key))
++        return None if entries is None else list(entries)
++
++    async def list_sessions(self, project_key: str) -> list[SessionStoreListEntry]:
++        results: list[SessionStoreListEntry] = []
++        prefix = project_key + "/"
++        for k in self._store:
++            if k.startswith(prefix):
++                rest = k[len(prefix) :]
++                # Only include main transcripts (no subpath, so no second '/')
++                if "/" not in rest:
++                    results.append(
++                        {"session_id": rest, "mtime": self._mtimes.get(k, 0)}
++                    )
++        return results
++
++    async def delete(self, key: SessionKey) -> None:
++        k = _key_to_string(key)
++        self._store.pop(k, None)
++        self._mtimes.pop(k, None)
++        # Deleting the main transcript cascades to its subkeys (subagent
++        # transcripts, metadata) so they aren't orphaned. A targeted delete
++        # with an explicit subpath removes only that one entry.
++        if key.get("subpath") is None:
++            prefix = f"{key['project_key']}/{key['session_id']}/"
++            for store_key in [sk for sk in self._store if sk.startswith(prefix)]:
++                self._store.pop(store_key, None)
++                self._mtimes.pop(store_key, None)
++
++    async def list_subkeys(self, key: SessionListSubkeysKey) -> list[str]:
++        prefix = f"{key['project_key']}/{key['session_id']}/"
++        return [k[len(prefix) :] for k in self._store if k.startswith(prefix)]
++
++    # ------------------------------------------------------------------
++    # Test helpers
++    # ------------------------------------------------------------------
++
++    def get_entries(self, key: SessionKey) -> list[SessionStoreEntry]:
++        """Test helper — get all entries for a key (empty list if absent)."""
++        return list(self._store.get(_key_to_string(key), []))
++
++    @property
++    def size(self) -> int:
++        """Test helper — number of stored sessions (main transcripts only)."""
++        count = 0
++        for k in self._store:
++            first_slash = k.find("/")
++            if first_slash != -1 and "/" not in k[first_slash + 1 :]:
++                count += 1
++        return count
++
++    def clear(self) -> None:
++        """Test helper — clear all stored data."""
++        self._store.clear()
++        self._mtimes.clear()
++
++
++def file_path_to_session_key(file_path: str, projects_dir: str) -> SessionKey | None:
++    """Derive a :class:`SessionKey` from an absolute transcript file path.
++
++    Main transcripts: ``<projects_dir>/<project_key>/<session_id>.jsonl``
++    Subagent transcripts: ``<projects_dir>/<project_key>/<session_id>/subagents/agent-<id>.jsonl``
++
++    Returns ``None`` if ``file_path`` is not under ``projects_dir`` or has an
++    unrecognized shape.
++    """
++    try:
++        rel = os.path.relpath(file_path, projects_dir)
++    except ValueError:
++        # Windows: relpath raises when the paths are on different drives.
++        # Treat as "not under projects_dir" so the batcher drops the frame
++        # with a warning instead of letting the exception escape _drain().
++        return None
++    rel_path = Path(rel)
++    parts = list(rel_path.parts)
++    if not parts or parts[0] == ".." or rel_path.is_absolute():
++        return None
++
++    if len(parts) < 2:
++        return None
++
++    project_key = parts[0]
++    second = parts[1]
++
++    # Main transcript: <project_key>/<session_id>.jsonl
++    if len(parts) == 2 and second.endswith(".jsonl"):
++        return {"project_key": project_key, "session_id": second[: -len(".jsonl")]}
++
++    # Subagent transcript: <project_key>/<session_id>/subagents/.../agent-<id>.jsonl
++    if len(parts) >= 4:
++        subpath_parts = parts[2:]
++        last = subpath_parts[-1]
++        if last.endswith(".jsonl"):
++            subpath_parts[-1] = last[: -len(".jsonl")]
++        # Subpaths are always /-joined regardless of os.sep so keys are
++        # portable across platforms.
++        return {
++            "project_key": project_key,
++            "session_id": second,
++            "subpath": "/".join(subpath_parts),
++        }
++
++    return None
+diff --git a/src/claude_agent_sdk/_internal/session_store_validation.py b/src/claude_agent_sdk/_internal/session_store_validation.py
+new file mode 100644
+index 0000000..16addd2
+--- /dev/null
++++ b/src/claude_agent_sdk/_internal/session_store_validation.py
+@@ -0,0 +1,45 @@
++"""Pre-flight validation for ``ClaudeAgentOptions.session_store`` combinations."""
++
++from __future__ import annotations
++
++from ..types import ClaudeAgentOptions, SessionStore
++
++
++def _store_implements(store: SessionStore, method: str) -> bool:
++    """True if ``store`` overrides ``method`` rather than inheriting the
++    Protocol default that raises :class:`NotImplementedError`."""
++    impl = getattr(store, method, None)
++    if impl is None:
++        return False
++    default = getattr(SessionStore, method, None)
++    return getattr(type(store), method, None) is not default
++
++
++def validate_session_store_options(options: ClaudeAgentOptions) -> None:
++    """Raise :class:`ValueError` for invalid ``session_store`` option combinations.
++
++    Called before subprocess spawn so misconfiguration fails fast instead of
++    surfacing as a confusing runtime error mid-session.
++    """
++    store = options.session_store
++    if store is None:
++        return
++
++    if (
++        options.continue_conversation
++        and options.resume is None
++        and not _store_implements(store, "list_sessions")
++    ):
++        # When resume is explicitly set, list_sessions() is provably never
++        # called (resume wins over continue), so a minimal store is fine.
++        raise ValueError(
++            "continue_conversation with session_store requires the store to "
++            "implement list_sessions()"
++        )
++
++    if options.enable_file_checkpointing:
++        raise ValueError(
++            "session_store cannot be combined with enable_file_checkpointing "
++            "(checkpoints are local-disk only and would diverge from the "
++            "mirrored transcript)"
++        )
+diff --git a/src/claude_agent_sdk/_internal/sessions.py b/src/claude_agent_sdk/_internal/sessions.py
+index 8631a9b..dbd07d3 100644
+--- a/src/claude_agent_sdk/_internal/sessions.py
++++ b/src/claude_agent_sdk/_internal/sessions.py
+@@ -6,17 +6,20 @@ extracts metadata from stat + head/tail reads without full JSONL parsing.
+ 
+ from __future__ import annotations
+ 
++import asyncio
+ import json
+ import os
+ import re
+ import subprocess
+ import sys
++import time
+ import unicodedata
+ from datetime import datetime
+ from pathlib import Path
+ from typing import Any
+ 
+-from ..types import SDKSessionInfo, SessionMessage
++from ..types import SDKSessionInfo, SessionKey, SessionMessage, SessionStore
++from .session_store_validation import _store_implements
+ 
+ # ---------------------------------------------------------------------------
+ # Constants
+@@ -25,6 +28,11 @@ from ..types import SDKSessionInfo, SessionMessage
+ # Size of the head/tail buffer for lite metadata reads.
+ LITE_READ_BUF_SIZE = 65536
+ 
++# Upper bound on concurrent ``store.load()`` calls issued by
++# ``list_sessions_from_store``. Keeps large project listings from exhausting
++# adapter connection pools or tripping backend rate limits.
++_STORE_LIST_LOAD_CONCURRENCY = 16
++
+ # Maximum length for a single filesystem path component. Most filesystems
+ # limit individual components to 255 bytes. We use 200 to leave room for
+ # the hash suffix and separator.
+@@ -115,7 +123,17 @@ def _get_claude_config_home_dir() -> Path:
+     return Path(unicodedata.normalize("NFC", str(Path.home() / ".claude")))
+ 
+ 
+-def _get_projects_dir() -> Path:
++def _get_projects_dir(env_override: dict[str, str] | None = None) -> Path:
++    """Returns the projects directory.
++
++    ``env_override`` is consulted before ``os.environ`` so callers that pass
++    ``CLAUDE_CONFIG_DIR`` to the subprocess via ``options.env`` resolve the
++    same directory the subprocess will write to.
++    """
++    if env_override:
++        override = env_override.get("CLAUDE_CONFIG_DIR")
++        if override:
++            return Path(unicodedata.normalize("NFC", override)) / "projects"
+     return _get_claude_config_home_dir() / "projects"
+ 
+ 
+@@ -679,6 +697,10 @@ def list_sessions(
+     Returns:
+         List of ``SDKSessionInfo`` sorted by ``last_modified`` descending.
+ 
++    See Also:
++        :func:`list_sessions_from_store` for the :class:`SessionStore`-backed
++        async variant.
++
+     Example:
+         List sessions for a specific project::
+ 
+@@ -727,6 +749,10 @@ def get_session_info(
+         ``SDKSessionInfo`` for the session, or ``None`` if the session file
+         is not found, is a sidechain session, or has no extractable summary.
+ 
++    See Also:
++        :func:`get_session_info_from_store` for the
++        :class:`SessionStore`-backed async variant.
++
+     Example:
+         Look up a session in a specific project::
+ 
+@@ -1040,6 +1066,10 @@ def get_session_messages(
+         an empty list if the session is not found, the session_id is not a
+         valid UUID, or the transcript contains no visible messages.
+ 
++    See Also:
++        :func:`get_session_messages_from_store` for the
++        :class:`SessionStore`-backed async variant.
++
+     Example:
+         Read all messages from a session::
+ 
+@@ -1064,6 +1094,18 @@ def get_session_messages(
+         return []
+ 
+     entries = _parse_transcript_entries(content)
++    return _entries_to_session_messages(entries, limit, offset)
++
++
++def _entries_to_session_messages(
++    entries: list[_TranscriptEntry],
++    limit: int | None,
++    offset: int,
++) -> list[SessionMessage]:
++    """Builds the conversation chain from parsed entries and applies paging.
++
++    Shared by the filesystem and SessionStore-backed paths.
++    """
+     chain = _build_conversation_chain(entries)
+     visible = [e for e in chain if _is_visible_message(e)]
+     messages = [_to_session_message(e) for e in visible]
+@@ -1248,6 +1290,10 @@ def list_subagents(
+         is not found, the session_id is not a valid UUID, or the session
+         has no subagents.
+ 
++    See Also:
++        :func:`list_subagents_from_store` for the :class:`SessionStore`-backed
++        async variant.
++
+     Example:
+         List subagent IDs for a session::
+ 
+@@ -1293,6 +1339,10 @@ def get_subagent_messages(
+         session_id is not a valid UUID, or the transcript contains no
+         user/assistant messages.
+ 
++    See Also:
++        :func:`get_subagent_messages_from_store` for the
++        :class:`SessionStore`-backed async variant.
++
+     Example:
+         Read all messages from a subagent::
+ 
+@@ -1329,6 +1379,18 @@ def get_subagent_messages(
+         return []
+ 
+     entries = _parse_transcript_entries(content)
++    return _entries_to_subagent_messages(entries, limit, offset)
++
++
++def _entries_to_subagent_messages(
++    entries: list[_TranscriptEntry],
++    limit: int | None,
++    offset: int,
++) -> list[SessionMessage]:
++    """Builds the subagent chain from parsed entries and applies paging.
++
++    Shared by the filesystem and SessionStore-backed paths.
++    """
+     chain = _build_subagent_chain(entries)
+     messages = [
+         _to_session_message(e) for e in chain if e.get("type") in ("user", "assistant")
+@@ -1339,3 +1401,398 @@ def get_subagent_messages(
+     if offset > 0:
+         return messages[offset:]
+     return messages
++
++
++# ---------------------------------------------------------------------------
++# SessionStore-backed implementations
++# ---------------------------------------------------------------------------
++
++
++def project_key_for_directory(directory: str | Path | None = None) -> str:
++    """Derive the :class:`SessionStore` ``project_key`` for a directory.
++
++    Defaults to the current working directory. Uses the same realpath + NFC
++    normalization + djb2-hashed sanitization the CLI uses for project
++    directory names, so keys match between local-disk transcripts and
++    store-mirrored transcripts even on filesystems that decompose Unicode
++    (macOS HFS+).
++    """
++    abs_path = _canonicalize_path(str(directory) if directory is not None else ".")
++    return _sanitize_path(abs_path)
++
++
++def _entries_to_jsonl(entries: list[Any]) -> str:
++    """Serialize store entries to a JSONL string (one ``json.dumps`` per line).
++
++    The ``SessionStore.load`` contract permits adapters to reorder object keys
++    (e.g. Postgres JSONB), but ``_parse_session_info_from_lite`` scans for
++    ``{"type":"tag"`` as a line prefix. Hoist ``type`` to the front so the
++    store path matches the byte shape the disk path produces.
++    """
++
++    def _type_first(e: Any) -> Any:
++        if isinstance(e, dict) and "type" in e:
++            return {"type": e["type"], **e}
++        return e
++
++    return (
++        "\n".join(json.dumps(_type_first(e), separators=(",", ":")) for e in entries)
++        + "\n"
++    )
++
++
++def _jsonl_to_lite(jsonl: str, mtime: int) -> _LiteSessionFile:
++    """Build the head/tail/size lite shape from an in-memory JSONL string.
++
++    Matches ``_read_session_lite``'s byte semantics so the store path exposes
++    the same slice to ``_parse_session_info_from_lite`` as the disk path
++    would for the same transcript.
++    """
++    buf = jsonl.encode("utf-8")
++    size = len(buf)
++    head = buf[:LITE_READ_BUF_SIZE].decode("utf-8", errors="replace")
++    tail = (
++        buf[max(0, size - LITE_READ_BUF_SIZE) :].decode("utf-8", errors="replace")
++        if size > LITE_READ_BUF_SIZE
++        else head
++    )
++    return _LiteSessionFile(mtime=mtime, size=size, head=head, tail=tail)
++
++
++def _mtime_from_jsonl_tail(jsonl: str) -> int:
++    """Best-effort mtime: parse the last entry's ``timestamp`` field.
++
++    Falls back to the current wall-clock time when absent or unparseable.
++    """
++    trimmed = jsonl.rstrip()
++    last_line = trimmed[trimmed.rfind("\n") + 1 :]
++    try:
++        obj = json.loads(last_line)
++    except (json.JSONDecodeError, ValueError):
++        obj = None
++    if isinstance(obj, dict):
++        ts = obj.get("timestamp")
++        if isinstance(ts, str):
++            try:
++                norm = ts.replace("Z", "+00:00") if ts.endswith("Z") else ts
++                return int(datetime.fromisoformat(norm).timestamp() * 1000)
++            except ValueError:
++                pass
++    return int(time.time() * 1000)
++
++
++def _filter_transcript_entries(entries: list[Any]) -> list[_TranscriptEntry]:
++    """Filter store-loaded entries to transcript message types with a ``uuid``.
++
++    Mirrors ``_parse_transcript_entries`` for the already-parsed object path
++    so chain-building never sees metadata-only entries (custom-title, tag,
++    agent_metadata, etc.).
++    """
++    result: list[_TranscriptEntry] = []
++    for e in entries:
++        if (
++            isinstance(e, dict)
++            and e.get("type") in _TRANSCRIPT_ENTRY_TYPES
++            and isinstance(e.get("uuid"), str)
++        ):
++            result.append(e)
++    return result
++
++
++async def _load_store_entries_as_jsonl(
++    store: SessionStore, session_id: str, directory: str | None
++) -> str | None:
++    """Load entries from a SessionStore and serialize to a JSONL string.
++
++    Returns ``None`` if the session has no entries.
++    """
++    project_key = project_key_for_directory(directory)
++    key: SessionKey = {"project_key": project_key, "session_id": session_id}
++    entries = await store.load(key)
++    if not entries:
++        return None
++    return _entries_to_jsonl(entries)
++
++
++async def list_sessions_from_store(
++    session_store: SessionStore,
++    directory: str | None = None,
++    limit: int | None = None,
++    offset: int = 0,
++) -> list[SDKSessionInfo]:
++    """List sessions from a :class:`SessionStore`.
++
++    Async, store-backed counterpart to :func:`list_sessions`. Loads each
++    session's entries to derive a real summary via the same lite-parse used
++    by the filesystem path, so disk and store paths produce identical
++    results for the same transcript content.
++
++    Args:
++        session_store: The store to read from. Must implement
++            :meth:`SessionStore.list_sessions`.
++        directory: Project directory used to compute the ``project_key``.
++            Defaults to the current working directory.
++        limit: Maximum number of sessions to return.
++        offset: Number of sessions to skip from the start of the sorted
++            result set.
++
++    Returns:
++        List of ``SDKSessionInfo`` sorted by ``last_modified`` descending.
++
++    Raises:
++        ValueError: If ``session_store`` does not implement
++            :meth:`SessionStore.list_sessions`.
++
++    Note:
++        ``include_worktrees`` is a filesystem concept and is not honored on
++        the store path — the store operates on a single ``project_key``.
++
++    .. note::
++        This performs one full ``store.load()`` per session in the listing
++        to derive summaries. On remote backends with many or large sessions
++        this can be expensive (e.g., S3 egress, Postgres large-row reads).
++        Consider denormalizing summary metadata into your adapter's
++        ``list_sessions()`` index.
++    """
++    if not _store_implements(session_store, "list_sessions"):
++        raise ValueError(
++            "session_store does not implement list_sessions() -- cannot list "
++            "sessions. Provide a store with a list_sessions() method."
++        )
++    project_path = _canonicalize_path(str(directory) if directory is not None else ".")
++    project_key = _sanitize_path(project_path)
++    raw = await session_store.list_sessions(project_key)
++    # Copy — store.list_sessions() may return a reference to internal state.
++    listing = list(raw)
++
++    # Derive a real summary per session by loading its entries and reusing
++    # the filesystem path's lite-parse. Loads run concurrently with a fixed
++    # bound so large listings don't exhaust adapter connection pools or hit
++    # backend rate limits; adapter errors degrade that row instead of failing
++    # the whole list. Filtering (sidechain/empty drop) happens before
++    # pagination so ``limit``/``offset`` index the same filtered set as the
++    # disk path.
++    sem = asyncio.Semaphore(_STORE_LIST_LOAD_CONCURRENCY)
++
++    async def _bounded_load(sid: str) -> str | None:
++        async with sem:
++            return await _load_store_entries_as_jsonl(session_store, sid, directory)
++
++    settled = await asyncio.gather(
++        *(_bounded_load(e["session_id"]) for e in listing),
++        return_exceptions=True,
++    )
++    results: list[SDKSessionInfo] = []
++    for entry, outcome in zip(listing, settled, strict=True):
++        sid = entry["session_id"]
++        mtime = entry["mtime"]
++        if isinstance(outcome, BaseException):
++            results.append(
++                SDKSessionInfo(session_id=sid, summary="", last_modified=mtime)
++            )
++            continue
++        if outcome is None:
++            continue
++        parsed = _parse_session_info_from_lite(
++            sid, _jsonl_to_lite(outcome, mtime), project_path
++        )
++        if parsed is None:
++            # Sidechain or no extractable summary — drop, matching the
++            # filesystem path.
++            continue
++        parsed.last_modified = mtime
++        results.append(parsed)
++    return _apply_sort_limit_offset(results, limit, offset)
++
++
++async def get_session_info_from_store(
++    session_store: SessionStore,
++    session_id: str,
++    directory: str | None = None,
++) -> SDKSessionInfo | None:
++    """Read metadata for a single session from a :class:`SessionStore`.
++
++    Async, store-backed counterpart to :func:`get_session_info`.
++
++    Args:
++        session_store: The store to read from.
++        session_id: UUID of the session to look up.
++        directory: Project directory used to compute the ``project_key``.
++            Defaults to the current working directory.
++
++    Returns:
++        ``SDKSessionInfo`` for the session, or ``None`` if the session is
++        not found, the ``session_id`` is not a valid UUID, the session is
++        a sidechain session, or it has no extractable summary.
++    """
++    if not _validate_uuid(session_id):
++        return None
++    jsonl = await _load_store_entries_as_jsonl(session_store, session_id, directory)
++    if jsonl is None:
++        return None
++    lite = _jsonl_to_lite(jsonl, _mtime_from_jsonl_tail(jsonl))
++    project_path = _canonicalize_path(str(directory) if directory is not None else ".")
++    return _parse_session_info_from_lite(session_id, lite, project_path)
++
++
++async def get_session_messages_from_store(
++    session_store: SessionStore,
++    session_id: str,
++    directory: str | None = None,
++    limit: int | None = None,
++    offset: int = 0,
++) -> list[SessionMessage]:
++    """Read a session's conversation messages from a :class:`SessionStore`.
++
++    Async, store-backed counterpart to :func:`get_session_messages`. Feeds
++    ``session_store.load()`` results directly into the chain builder — no
++    JSONL round-trip.
++
++    Args:
++        session_store: The store to read from.
++        session_id: UUID of the session to read.
++        directory: Project directory used to compute the ``project_key``.
++            Defaults to the current working directory.
++        limit: Maximum number of messages to return.
++        offset: Number of messages to skip from the start.
++
++    Returns:
++        List of ``SessionMessage`` objects in chronological order. Empty
++        list if the session is not found or ``session_id`` is invalid.
++    """
++    if not _validate_uuid(session_id):
++        return []
++    project_key = project_key_for_directory(directory)
++    key: SessionKey = {"project_key": project_key, "session_id": session_id}
++    entries = await session_store.load(key)
++    if not entries:
++        return []
++    return _entries_to_session_messages(
++        _filter_transcript_entries(entries), limit, offset
++    )
++
++
++async def list_subagents_from_store(
++    session_store: SessionStore,
++    session_id: str,
++    directory: str | None = None,
++) -> list[str]:
++    """List subagent IDs for a session from a :class:`SessionStore`.
++
++    Async, store-backed counterpart to :func:`list_subagents`.
++
++    Args:
++        session_store: The store to read from. Must implement
++            :meth:`SessionStore.list_subkeys`.
++        session_id: UUID of the parent session.
++        directory: Project directory used to compute the ``project_key``.
++            Defaults to the current working directory.
++
++    Returns:
++        List of subagent ID strings. Empty list if ``session_id`` is
++        invalid or the session has no subagents.
++
++    Raises:
++        ValueError: If ``session_store`` does not implement
++            :meth:`SessionStore.list_subkeys`.
++    """
++    if not _validate_uuid(session_id):
++        return []
++    if not _store_implements(session_store, "list_subkeys"):
++        raise ValueError(
++            "session_store does not implement list_subkeys() -- cannot list "
++            "subagents. Provide a store with a list_subkeys() method."
++        )
++    project_key = project_key_for_directory(directory)
++    subkeys = await session_store.list_subkeys(
++        {"project_key": project_key, "session_id": session_id}
++    )
++    seen: set[str] = set()
++    ids: list[str] = []
++    for subpath in subkeys:
++        if not subpath.startswith("subagents/"):
++            continue
++        last = subpath.rsplit("/", 1)[-1]
++        if last.startswith("agent-"):
++            agent_id = last[len("agent-") :]
++            if agent_id not in seen:
++                seen.add(agent_id)
++                ids.append(agent_id)
++    return ids
++
++
++async def get_subagent_messages_from_store(
++    session_store: SessionStore,
++    session_id: str,
++    agent_id: str,
++    directory: str | None = None,
++    limit: int | None = None,
++    offset: int = 0,
++) -> list[SessionMessage]:
++    """Read a subagent's conversation messages from a :class:`SessionStore`.
++
++    Async, store-backed counterpart to :func:`get_subagent_messages`.
++    Subagents may live at ``subagents/agent-<id>`` or nested under
++    ``subagents/workflows/<runId>/agent-<id>``. Scans subkeys when the
++    store implements :meth:`SessionStore.list_subkeys`; otherwise tries
++    the direct path.
++
++    Args:
++        session_store: The store to read from.
++        session_id: UUID of the parent session.
++        agent_id: ID of the subagent.
++        directory: Project directory used to compute the ``project_key``.
++            Defaults to the current working directory.
++        limit: Maximum number of messages to return.
++        offset: Number of messages to skip from the start.
++
++    Returns:
++        List of ``SessionMessage`` objects in chronological order. Empty
++        list if the session/subagent is not found.
++    """
++    if not _validate_uuid(session_id):
++        return []
++    if not agent_id:
++        return []
++    project_key = project_key_for_directory(directory)
++
++    subpath = f"subagents/agent-{agent_id}"
++    if _store_implements(session_store, "list_subkeys"):
++        subkeys = await session_store.list_subkeys(
++            {"project_key": project_key, "session_id": session_id}
++        )
++        target = f"agent-{agent_id}"
++        match = next(
++            (
++                sk
++                for sk in subkeys
++                if sk.startswith("subagents/") and sk.rsplit("/", 1)[-1] == target
++            ),
++            None,
++        )
++        if match is None:
++            return []
++        subpath = match
++
++    key: SessionKey = {
++        "project_key": project_key,
++        "session_id": session_id,
++        "subpath": subpath,
++    }
++    entries = await session_store.load(key)
++    if not entries:
++        return []
++
++    # Drop synthetic agent_metadata entries injected by the mirror hook —
++    # they describe the .meta.json sidecar, not transcript lines.
++    transcript = [
++        e
++        for e in entries
++        if not (isinstance(e, dict) and e.get("type") == "agent_metadata")
++    ]
++    if not transcript:
++        return []
++
++    return _entries_to_subagent_messages(
++        _filter_transcript_entries(transcript), limit, offset
++    )
+diff --git a/src/claude_agent_sdk/_internal/transcript_mirror_batcher.py b/src/claude_agent_sdk/_internal/transcript_mirror_batcher.py
+new file mode 100644
+index 0000000..65261bb
+--- /dev/null
++++ b/src/claude_agent_sdk/_internal/transcript_mirror_batcher.py
+@@ -0,0 +1,174 @@
++"""Batching layer between ``transcript_mirror`` stdout frames and a SessionStore.
++
++The CLI subprocess emits ``{"type": "transcript_mirror", "filePath": ..., "entries": [...]}``
++frames interleaved with normal SDK messages. The receive loop peels these off
++and hands them to :class:`TranscriptMirrorBatcher.enqueue`, which accumulates
++them and flushes to :meth:`SessionStore.append` either when a ``result``
++message arrives (explicit flush) or when the pending buffer exceeds size
++thresholds (eager background flush). This keeps adapter latency off the
++hot path during model streaming.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import json
++import logging
++from collections.abc import Awaitable, Callable
++from dataclasses import dataclass, field
++
++from ..types import SessionKey, SessionStore, SessionStoreEntry
++from .session_store import file_path_to_session_key
++
++logger = logging.getLogger(__name__)
++
++# Eager-flush thresholds. Exported for tests.
++MAX_PENDING_ENTRIES = 500
++MAX_PENDING_BYTES = 1 << 20  # 1 MiB
++SEND_TIMEOUT_SECONDS = 60.0
++
++
++@dataclass
++class _MirrorEntry:
++    file_path: str
++    entries: list[SessionStoreEntry]
++    bytes: int
++
++
++@dataclass
++class TranscriptMirrorBatcher:
++    """Accumulates ``transcript_mirror`` frames and flushes them to a store.
++
++    ``enqueue`` is fire-and-forget; ``flush`` is async. The pending queue is
++    bounded — when it exceeds ``max_pending_entries`` or ``max_pending_bytes``
++    an eager flush fires in the background so memory stays flat during long
++    turns where no ``result`` (and thus no explicit ``flush()``) arrives.
++
++    Adapter failures are reported via ``on_error`` and the failed batch is
++    dropped (at-most-once delivery). Failures never raise — the local-disk
++    transcript is already durable so the session must continue unaffected.
++    """
++
++    store: SessionStore
++    projects_dir: str
++    on_error: Callable[[SessionKey | None, str], Awaitable[None]]
++    send_timeout: float = SEND_TIMEOUT_SECONDS
++    max_pending_entries: int = MAX_PENDING_ENTRIES
++    max_pending_bytes: int = MAX_PENDING_BYTES
++
++    _pending: list[_MirrorEntry] = field(default_factory=list)
++    _pending_entries: int = 0
++    _pending_bytes: int = 0
++    _flush_task: asyncio.Task[None] | None = None
++    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
++
++    def enqueue(self, file_path: str, entries: list[SessionStoreEntry]) -> None:
++        """Buffer a frame; schedule an eager flush if thresholds are exceeded."""
++        # Approximate wire size — one stringify per frame (not per entry) keeps
++        # this cheap relative to the json.loads the transport already did.
++        size = len(json.dumps(entries))
++        self._pending.append(_MirrorEntry(file_path, entries, size))
++        self._pending_entries += len(entries)
++        self._pending_bytes += size
++        if (
++            self._pending_entries > self.max_pending_entries
++            or self._pending_bytes > self.max_pending_bytes
++        ):
++            # Fire-and-forget; the lock serializes against any in-flight flush
++            # so append ordering holds. drain() never raises, but guard anyway
++            # so a future regression can't surface as an unhandled exception.
++            self._flush_task = asyncio.ensure_future(self._drain())
++            self._flush_task.add_done_callback(lambda t: t.exception())
++
++    async def flush(self) -> None:
++        """Flush all pending entries. Awaits any in-flight eager flush first."""
++        task = asyncio.ensure_future(self._drain())
++        self._flush_task = task
++        await task
++        # Compare-and-null: enqueue() may have started a newer drain while we
++        # were awaiting; don't clobber it or the next drain() would miss the
++        # serialization wait and could overlap.
++        if self._flush_task is task:
++            self._flush_task = None
++
++    async def close(self) -> None:
++        """Final flush before teardown. Never raises."""
++        try:
++            await self.flush()
++        except Exception as e:  # pragma: no cover - defensive
++            logger.debug(f"[TranscriptMirrorBatcher] close flush failed: {e}")
++
++    async def _drain(self) -> None:
++        """Detach the pending buffer, await any prior flush, then send.
++
++        Detaching happens before acquiring the lock so ``enqueue`` can keep
++        accumulating into a fresh buffer while a prior flush is in flight.
++        Never raises — adapter and ``on_error`` callback errors are caught
++        and logged.
++        """
++        items = self._pending
++        self._pending = []
++        self._pending_entries = 0
++        self._pending_bytes = 0
++        errors: list[tuple[SessionKey, str]] = []
++        async with self._lock:
++            if not items:
++                return
++            try:
++                await self._do_flush(items, errors)
++            except Exception as e:  # pragma: no cover - defensive
++                # _do_flush already wraps store.append; this guards any
++                # remaining unguarded path so the "Never raises" contract
++                # holds against future regressions.
++                logger.error("[TranscriptMirrorBatcher] _do_flush raised: %s", e)
++                return
++        # Report errors after releasing the lock so a slow on_error callback
++        # cannot block subsequent drains (which only need the lock for
++        # append-ordering).
++        for key, msg in errors:
++            try:
++                await self.on_error(key, msg)
++            except Exception as cb_err:  # pragma: no cover - defensive
++                logger.error(
++                    "[TranscriptMirrorBatcher] on_error callback raised: %s",
++                    cb_err,
++                )
++
++    async def _do_flush(
++        self, items: list[_MirrorEntry], errors: list[tuple[SessionKey, str]]
++    ) -> None:
++        # Coalesce by file_path so each unique file gets one append per flush
++        # instead of one per enqueued frame. dict preserves first-seen order;
++        # entries within a path keep enqueue order.
++        by_path: dict[str, list[SessionStoreEntry]] = {}
++        for item in items:
++            bucket = by_path.get(item.file_path)
++            if bucket is not None:
++                bucket.extend(item.entries)
++            else:
++                by_path[item.file_path] = list(item.entries)
++
++        for file_path, entries in by_path.items():
++            if not entries:
++                # Avoid creating phantom keys in adapters that touch storage
++                # on append([]) — nothing to write.
++                continue
++            key = file_path_to_session_key(file_path, self.projects_dir)
++            if key is None:
++                logger.warning(
++                    "[SessionStore] dropping mirror frame: filePath %s is not "
++                    "under %s -- subprocess CLAUDE_CONFIG_DIR likely differs "
++                    "from parent (custom env / container?)",
++                    file_path,
++                    self.projects_dir,
++                )
++                continue
++            try:
++                await asyncio.wait_for(
++                    self.store.append(key, entries), timeout=self.send_timeout
++                )
++            except Exception as e:
++                logger.error(
++                    "[TranscriptMirrorBatcher] flush failed for %s: %s", file_path, e
++                )
++                errors.append((key, str(e)))
+diff --git a/src/claude_agent_sdk/_internal/transport/subprocess_cli.py b/src/claude_agent_sdk/_internal/transport/subprocess_cli.py
+index 983eeea..6c74cc7 100644
+--- a/src/claude_agent_sdk/_internal/transport/subprocess_cli.py
++++ b/src/claude_agent_sdk/_internal/transport/subprocess_cli.py
+@@ -319,6 +319,9 @@ class SubprocessCLITransport(Transport):
+         if self._options.fork_session:
+             cmd.append("--fork-session")
+ 
++        if self._options.session_store is not None:
++            cmd.append("--session-mirror")
++
+         # Agents are always sent via initialize request (matching TypeScript SDK)
+         # No --agents CLI flag needed
+ 
+diff --git a/src/claude_agent_sdk/_version.py b/src/claude_agent_sdk/_version.py
+index 044624b..605860b 100644
+--- a/src/claude_agent_sdk/_version.py
++++ b/src/claude_agent_sdk/_version.py
+@@ -1,3 +1,3 @@
+ """Version information for claude-agent-sdk."""
+ 
+-__version__ = "0.1.62"
++__version__ = "0.1.63"
+diff --git a/src/claude_agent_sdk/client.py b/src/claude_agent_sdk/client.py
+index 7d7911a..66b3989 100644
+--- a/src/claude_agent_sdk/client.py
++++ b/src/claude_agent_sdk/client.py
+@@ -4,10 +4,13 @@ import json
+ import os
+ from collections.abc import AsyncIterable, AsyncIterator
+ from dataclasses import asdict, replace
+-from typing import Any
++from typing import TYPE_CHECKING, Any
+ 
+ from . import Transport
+ from ._errors import CLIConnectionError
++
++if TYPE_CHECKING:
++    from ._internal.session_resume import MaterializedResume
+ from .types import (
+     ClaudeAgentOptions,
+     ContextUsageResponse,
+@@ -73,6 +76,7 @@ class ClaudeSDKClient:
+         self._custom_transport = transport
+         self._transport: Transport | None = None
+         self._query: Any | None = None
++        self._materialized: MaterializedResume | None = None
+ 
+     def _convert_hooks_to_internal_format(
+         self, hooks: dict[HookEvent, list[HookMatcher]]
+@@ -97,8 +101,8 @@ class ClaudeSDKClient:
+     ) -> None:
+         """Connect to Claude with a prompt or message stream."""
+ 
+-        from ._internal.query import Query
+-        from ._internal.transport.subprocess_cli import SubprocessCLITransport
++        from ._internal.session_resume import materialize_resume_session
++        from ._internal.session_store_validation import validate_session_store_options
+ 
+         # Auto-connect with empty async iterable if no prompt is provided
+         async def _empty_stream() -> AsyncIterator[dict[str, Any]]:
+@@ -112,6 +116,46 @@ class ClaudeSDKClient:
+         # only needs an AsyncIterable (or an empty stream for None/str cases).
+         actual_prompt = prompt if isinstance(prompt, AsyncIterable) else _empty_stream()
+ 
++        # Fail fast on invalid session_store option combinations before
++        # spawning the subprocess.
++        validate_session_store_options(self.options)
++
++        # resume/continue + session_store: load the session from the store
++        # into a temp CLAUDE_CONFIG_DIR for the subprocess to resume from.
++        # When materialized, override resume/continue/env on a copy of options
++        # so the subprocess points at the temp dir; when None, fall through
++        # to normal handling (fresh session or local-disk resume). Skipped
++        # when a custom transport was supplied — the materialized options
++        # never reach a pre-constructed transport, so loading the store and
++        # writing .credentials.json to a temp dir would be wasted work.
++        self._materialized = (
++            await materialize_resume_session(self.options)
++            if self._custom_transport is None
++            else None
++        )
++        try:
++            await self._connect_inner(prompt, actual_prompt)
++        except BaseException:
++            # If connect fails after the subprocess has spawned (e.g. at
++            # query.initialize()), close the subprocess/read task *before*
++            # removing the temp CLAUDE_CONFIG_DIR it points at. disconnect()
++            # already orders close() → cleanup() and is None-safe for
++            # pre-spawn failures, so reuse it here.
++            await self.disconnect()
++            raise
++
++    async def _connect_inner(
++        self,
++        prompt: str | AsyncIterable[dict[str, Any]] | None,
++        actual_prompt: AsyncIterable[dict[str, Any]],
++    ) -> None:
++        from ._internal.query import Query
++        from ._internal.session_resume import (
++            apply_materialized_options,
++            build_mirror_batcher,
++        )
++        from ._internal.transport.subprocess_cli import SubprocessCLITransport
++
+         # Validate and configure permission settings (matching TypeScript SDK logic)
+         if self.options.can_use_tool:
+             # canUseTool callback requires streaming mode (AsyncIterable prompt)
+@@ -133,6 +177,9 @@ class ClaudeSDKClient:
+         else:
+             options = self.options
+ 
++        if self._materialized is not None:
++            options = apply_materialized_options(options, self._materialized)
++
+         # Use provided custom transport or create subprocess transport
+         if self._custom_transport:
+             self._transport = self._custom_transport
+@@ -189,6 +236,21 @@ class ClaudeSDKClient:
+             skills=self.options.skills,
+         )
+ 
++        if self.options.session_store is not None:
++            q = self._query
++
++            async def _on_mirror_error(key: Any, error: str) -> None:
++                q.report_mirror_error(key, error)
++
++            self._query.set_transcript_mirror_batcher(
++                build_mirror_batcher(
++                    store=self.options.session_store,
++                    materialized=self._materialized,
++                    env=self.options.env,
++                    on_error=_on_mirror_error,
++                )
++            )
++
+         # Start reading messages and initialize
+         await self._query.start()
+         await self._query.initialize()
+@@ -548,6 +610,9 @@ class ClaudeSDKClient:
+             await self._query.close()
+             self._query = None
+         self._transport = None
++        if self._materialized is not None:
++            await self._materialized.cleanup()
++            self._materialized = None
+ 
+     async def __aenter__(self) -> "ClaudeSDKClient":
+         """Enter async context - automatically connects with empty stream for interactive use."""
+diff --git a/src/claude_agent_sdk/testing/__init__.py b/src/claude_agent_sdk/testing/__init__.py
+new file mode 100644
+index 0000000..123cec6
+--- /dev/null
++++ b/src/claude_agent_sdk/testing/__init__.py
+@@ -0,0 +1,9 @@
++"""Test utilities for SDK extension authors.
++
++Importing this subpackage does not require ``pytest`` — assertions use plain
++``assert`` so the harness works under any test runner.
++"""
++
++from .session_store_conformance import run_session_store_conformance
++
++__all__ = ["run_session_store_conformance"]
+diff --git a/src/claude_agent_sdk/testing/session_store_conformance.py b/src/claude_agent_sdk/testing/session_store_conformance.py
+new file mode 100644
+index 0000000..c5a9657
+--- /dev/null
++++ b/src/claude_agent_sdk/testing/session_store_conformance.py
+@@ -0,0 +1,257 @@
++"""Shared conformance test suite for :class:`SessionStore` adapters.
++
++Call :func:`run_session_store_conformance` from an async test to assert the
++13 behavioral contracts every adapter must satisfy. Tests for optional
++methods (``list_sessions``, ``delete``, ``list_subkeys``) are skipped when
++named in ``skip_optional`` or when the store does not override that method.
++
++Example::
++
++    import pytest
++    from claude_agent_sdk.testing import run_session_store_conformance
++
++    @pytest.mark.asyncio
++    async def test_my_store_conformance():
++        await run_session_store_conformance(MyRedisStore)
++"""
++
++from __future__ import annotations
++
++import inspect
++import math
++from collections.abc import Awaitable, Callable
++from typing import Any
++
++from ..types import SessionKey, SessionStore
++
++OptionalMethod = str  # "list_sessions" | "delete" | "list_subkeys"
++_OPTIONAL_METHODS: frozenset[str] = frozenset(
++    {"list_sessions", "delete", "list_subkeys"}
++)
++
++_KEY: SessionKey = {"project_key": "proj", "session_id": "sess"}
++
++
++def _has_optional(
++    store: SessionStore, method: OptionalMethod, skip_optional: frozenset[str]
++) -> bool:
++    """True if ``store`` supports ``method`` and it isn't explicitly skipped."""
++    if method in skip_optional:
++        return False
++    impl = getattr(store, method, None)
++    if impl is None:
++        return False
++    # Distinguish a real override from the Protocol's default that raises
++    # NotImplementedError: an override lives on the instance's class, the
++    # default lives on SessionStore itself.
++    default = getattr(SessionStore, method, None)
++    return getattr(type(store), method, None) is not default
++
++
++async def run_session_store_conformance(
++    make_store: Callable[[], SessionStore | Awaitable[SessionStore]],
++    *,
++    skip_optional: frozenset[str] = frozenset(),
++) -> None:
++    """Assert the 13 :class:`SessionStore` behavioral contracts.
++
++    ``make_store`` is invoked once per contract to provide isolation. It may be
++    sync or async. Contracts for optional methods (``list_sessions``,
++    ``delete``, ``list_subkeys``) are skipped when named in ``skip_optional``
++    or when the store does not override that method.
++    """
++    invalid = skip_optional - _OPTIONAL_METHODS
++    assert not invalid, f"unknown optional methods in skip_optional: {invalid}"
++
++    async def fresh() -> SessionStore:
++        result = make_store()
++        if inspect.isawaitable(result):
++            return await result
++        return result
++
++    probe = await fresh()
++    has_list_sessions = _has_optional(probe, "list_sessions", skip_optional)
++    has_delete = _has_optional(probe, "delete", skip_optional)
++    has_list_subkeys = _has_optional(probe, "list_subkeys", skip_optional)
++
++    # --- Required: append + load -------------------------------------------
++
++    # 1. append then load returns same entries in same order
++    store = await fresh()
++    await store.append(_KEY, [_e({"uuid": "b", "n": 1}), _e({"uuid": "a", "n": 2})])
++    loaded = await store.load(_KEY)
++    # Deep-equal is the contract; byte-equal serialization is intentionally
++    # NOT checked (Postgres JSONB may reorder keys — SDK never byte-compares).
++    assert loaded == [_e({"uuid": "b", "n": 1}), _e({"uuid": "a", "n": 2})]
++
++    # 2. load unknown key returns None
++    store = await fresh()
++    assert await store.load({"project_key": "proj", "session_id": "nope"}) is None
++    await store.append(_KEY, [_e({"uuid": "x", "n": 1})])
++    assert await store.load({**_KEY, "subpath": "nope"}) is None
++
++    # 3. multiple append calls preserve call order
++    store = await fresh()
++    await store.append(_KEY, [_e({"uuid": "z", "n": 1})])
++    await store.append(_KEY, [_e({"uuid": "a", "n": 2}), _e({"uuid": "m", "n": 3})])
++    await store.append(_KEY, [_e({"uuid": "b", "n": 4})])
++    assert await store.load(_KEY) == [
++        _e({"uuid": "z", "n": 1}),
++        _e({"uuid": "a", "n": 2}),
++        _e({"uuid": "m", "n": 3}),
++        _e({"uuid": "b", "n": 4}),
++    ]
++
++    # 4. append([]) is a no-op
++    store = await fresh()
++    await store.append(_KEY, [_e({"uuid": "a", "n": 1})])
++    await store.append(_KEY, [])
++    assert await store.load(_KEY) == [_e({"uuid": "a", "n": 1})]
++
++    # 5. subpath keys are stored independently of main
++    store = await fresh()
++    sub: SessionKey = {**_KEY, "subpath": "subagents/agent-1"}
++    await store.append(_KEY, [_e({"uuid": "m", "n": 1})])
++    await store.append(sub, [_e({"uuid": "s", "n": 1})])
++    assert await store.load(_KEY) == [_e({"uuid": "m", "n": 1})]
++    assert await store.load(sub) == [_e({"uuid": "s", "n": 1})]
++
++    # 6. project_key isolation
++    store = await fresh()
++    await store.append({"project_key": "A", "session_id": "s1"}, [_e({"from": "A"})])
++    await store.append({"project_key": "B", "session_id": "s1"}, [_e({"from": "B"})])
++    assert await store.load({"project_key": "A", "session_id": "s1"}) == [
++        _e({"from": "A"})
++    ]
++    assert await store.load({"project_key": "B", "session_id": "s1"}) == [
++        _e({"from": "B"})
++    ]
++    if has_list_sessions:
++        assert len(await store.list_sessions("A")) == 1
++        assert len(await store.list_sessions("B")) == 1
++
++    # --- Optional: list_sessions -------------------------------------------
++
++    if has_list_sessions:
++        # 7. list_sessions returns session_ids for project
++        store = await fresh()
++        await store.append({"project_key": "proj", "session_id": "a"}, [_e({"n": 1})])
++        await store.append({"project_key": "proj", "session_id": "b"}, [_e({"n": 1})])
++        await store.append({"project_key": "other", "session_id": "c"}, [_e({"n": 1})])
++        sessions = await store.list_sessions("proj")
++        assert sorted(s["session_id"] for s in sessions) == ["a", "b"]
++        # mtime must be epoch-ms; >1e12 rules out epoch-seconds (≈2001 in ms).
++        assert all(math.isfinite(s["mtime"]) and s["mtime"] > 1e12 for s in sessions)
++        assert await store.list_sessions("never-appended-project") == []
++
++        # 8. list_sessions excludes subagent subpaths
++        store = await fresh()
++        await store.append(
++            {"project_key": "proj", "session_id": "main"}, [_e({"n": 1})]
++        )
++        await store.append(
++            {
++                "project_key": "proj",
++                "session_id": "main",
++                "subpath": "subagents/agent-1",
++            },
++            [_e({"n": 1})],
++        )
++        sessions = await store.list_sessions("proj")
++        assert [s["session_id"] for s in sessions] == ["main"]
++
++    # --- Optional: delete --------------------------------------------------
++
++    if has_delete:
++        # 9. delete main then load returns None
++        store = await fresh()
++        await store.delete({"project_key": "proj", "session_id": "never-written"})
++        await store.append(_KEY, [_e({"n": 1})])
++        await store.delete(_KEY)
++        assert await store.load(_KEY) is None
++
++        # 10. delete main cascades to subkeys
++        store = await fresh()
++        sub1: SessionKey = {**_KEY, "subpath": "subagents/agent-1"}
++        sub2: SessionKey = {**_KEY, "subpath": "subagents/agent-2"}
++        other: SessionKey = {"project_key": "proj", "session_id": "sess2"}
++        other_proj: SessionKey = {
++            "project_key": "other-proj",
++            "session_id": _KEY["session_id"],
++        }
++        await store.append(_KEY, [_e({"n": 1})])
++        await store.append(sub1, [_e({"n": 1})])
++        await store.append(sub2, [_e({"n": 1})])
++        await store.append(other, [_e({"n": 1})])
++        await store.append(other_proj, [_e({"n": 1})])
++
++        await store.delete(_KEY)
++
++        assert await store.load(_KEY) is None
++        assert await store.load(sub1) is None
++        assert await store.load(sub2) is None
++        loaded_other = await store.load(other)
++        assert loaded_other is not None and len(loaded_other) == 1
++        loaded_other_proj = await store.load(other_proj)
++        assert loaded_other_proj is not None and len(loaded_other_proj) == 1
++        if has_list_subkeys:
++            assert await store.list_subkeys(_KEY) == []
++        if has_list_sessions:
++            listed = await store.list_sessions(_KEY["project_key"])
++            assert _KEY["session_id"] not in [s["session_id"] for s in listed]
++
++        # 11. delete with subpath removes only that subkey
++        store = await fresh()
++        await store.append(_KEY, [_e({"n": 1})])
++        await store.append(sub1, [_e({"n": 1})])
++        await store.append(sub2, [_e({"n": 1})])
++
++        await store.delete(sub1)
++
++        assert await store.load(sub1) is None
++        loaded_sub2 = await store.load(sub2)
++        assert loaded_sub2 is not None and len(loaded_sub2) == 1
++        loaded_main = await store.load(_KEY)
++        assert loaded_main is not None and len(loaded_main) == 1
++        if has_list_subkeys:
++            assert await store.list_subkeys(_KEY) == ["subagents/agent-2"]
++
++    # --- Optional: list_subkeys --------------------------------------------
++
++    if has_list_subkeys:
++        # 12. list_subkeys returns subpaths
++        store = await fresh()
++        await store.append(_KEY, [_e({"n": 1})])
++        await store.append({**_KEY, "subpath": "subagents/agent-1"}, [_e({"n": 1})])
++        await store.append({**_KEY, "subpath": "subagents/agent-2"}, [_e({"n": 1})])
++        await store.append(
++            {
++                "project_key": _KEY["project_key"],
++                "session_id": "other-sess",
++                "subpath": "subagents/agent-x",
++            },
++            [_e({"n": 1})],
++        )
++        subkeys = await store.list_subkeys(_KEY)
++        assert sorted(subkeys) == ["subagents/agent-1", "subagents/agent-2"]
++        assert "subagents/agent-x" not in subkeys
++
++        # 13. list_subkeys excludes main transcript
++        store = await fresh()
++        await store.append(_KEY, [_e({"n": 1})])
++        assert await store.list_subkeys(_KEY) == []
++        assert (
++            await store.list_subkeys(
++                {"project_key": "proj", "session_id": "never-appended"}
++            )
++            == []
++        )
++
++
++def _e(d: dict[str, Any]) -> Any:
++    """Build a test entry satisfying ``SessionStoreEntry`` (``type`` is required).
++
++    Adapters must treat entries as opaque pass-through blobs; the value of
++    ``type`` is irrelevant to the contracts under test.
++    """
++    return {"type": "x", **d}
+diff --git a/src/claude_agent_sdk/types.py b/src/claude_agent_sdk/types.py
+index 545156f..279bd0d 100644
+--- a/src/claude_agent_sdk/types.py
++++ b/src/claude_agent_sdk/types.py
+@@ -4,15 +4,15 @@ import sys
+ from collections.abc import Awaitable, Callable
+ from dataclasses import dataclass, field
+ from pathlib import Path
+-from typing import TYPE_CHECKING, Any, Literal
++from typing import TYPE_CHECKING, Any, Literal, Protocol
+ 
+ if sys.version_info >= (3, 11):
+-    from typing import NotRequired, TypedDict
++    from typing import NotRequired, Required, TypedDict
+ else:
+-    # PEP 655: stdlib TypedDict on 3.10 doesn't process NotRequired, so
+-    # __required_keys__ would include NotRequired fields. typing_extensions
+-    # backports the correct behavior.
+-    from typing_extensions import NotRequired, TypedDict
++    # PEP 655: stdlib TypedDict on 3.10 doesn't process NotRequired/Required,
++    # so __required_keys__ would be wrong. typing_extensions backports the
++    # correct behavior.
++    from typing_extensions import NotRequired, Required, TypedDict
+ 
+ if TYPE_CHECKING:
+     from mcp.server import Server as McpServer
+@@ -1002,6 +1002,23 @@ class TaskNotificationMessage(SystemMessage):
+     usage: TaskUsage | None = None
+ 
+ 
++@dataclass
++class MirrorErrorMessage(SystemMessage):
++    """System message emitted when a :meth:`SessionStore.append` call fails.
++
++    Non-fatal — the local-disk transcript is already durable, so the session
++    continues unaffected. The mirrored copy in the external store will be
++    missing the failed batch.
++
++    Subclass of SystemMessage: existing ``isinstance(msg, SystemMessage)`` and
++    ``case SystemMessage()`` checks continue to match. The base ``subtype``
++    field is ``"mirror_error"`` and ``data`` carries the raw payload.
++    """
++
++    key: "SessionKey | None" = None
++    error: str = ""
++
++
+ @dataclass
+ class ResultMessage:
+     """Result message with cost and usage information."""
+@@ -1090,6 +1107,156 @@ Message = (
+ )
+ 
+ 
++# ---------------------------------------------------------------------------
++# Session Store Types
++# ---------------------------------------------------------------------------
++
++
++class SessionKey(TypedDict):
++    """Identifies a session transcript or subagent transcript in a store.
++
++    Main transcripts have no ``subpath``; subagent transcripts include a
++    ``subpath`` like ``"subagents/agent-{id}"`` that mirrors the on-disk
++    directory structure.
++    """
++
++    project_key: str
++    """Caller-defined scope. Default: sanitized cwd. Multi-tenant deployments
++    should set this to a tenant ID or project name. Paths longer than 200
++    characters are truncated and suffixed with a portable djb2 hash so the
++    same path yields the same key across runtimes."""
++
++    session_id: str
++
++    subpath: NotRequired[str]
++    """Omit for the main transcript; set for subagent files. Empty string is
++    invalid — omit the field for the main transcript. Opaque to the adapter —
++    just use it as a storage key suffix."""
++
++
++class SessionStoreEntry(TypedDict, total=False):
++    """One JSONL transcript line as observed by a :class:`SessionStore` adapter.
++
++    The concrete shape is the CLI's on-disk transcript format (a large
++    discriminated union). That union is internal, so this is a minimal
++    structural supertype — adapters should treat entries as pass-through
++    blobs; round-tripping ``json.dumps``/``json.loads`` is the only
++    required invariant.
++    """
++
++    type: Required[str]
++    uuid: str
++    timestamp: str
++    # Additional fields are opaque JSON — adapters must pass them through.
++
++
++class SessionStoreListEntry(TypedDict):
++    """Entry returned by :meth:`SessionStore.list_sessions`."""
++
++    session_id: str
++    mtime: int
++    """Last-modified time in Unix epoch milliseconds. Adapters without native
++    modification time (e.g. Redis) must maintain their own index."""
++
++
++class SessionListSubkeysKey(TypedDict):
++    """Key argument to :meth:`SessionStore.list_subkeys` (no ``subpath``)."""
++
++    project_key: str
++    session_id: str
++
++
++class SessionStore(Protocol):
++    """Adapter for mirroring session transcripts to external storage.
++
++    The subprocess still writes to local disk (set ``CLAUDE_CONFIG_DIR=/tmp``
++    for an ephemeral local copy); the adapter receives a secondary copy.
++
++    The SDK never deletes from your store unless you call
++    ``delete_session_via_store()`` with :meth:`delete` implemented. Retention is
++    the adapter's responsibility —
++    implement TTL, object-storage lifecycle policies, or scheduled cleanup
++    according to your compliance requirements (e.g. ZDR/HIPAA retention
++    windows). Local-disk transcripts under ``CLAUDE_CONFIG_DIR`` are swept by
++    the existing ``cleanupPeriodDays`` setting independently of this adapter.
++
++    Only :meth:`append` and :meth:`load` are required. The remaining methods
++    are optional: implementers may omit them, and call sites probe for their
++    presence at runtime before invoking (the SDK never uses ``isinstance`` for
++    this — a duck-typed adapter need not subclass ``SessionStore``). The
++    default implementations on this Protocol raise :class:`NotImplementedError`
++    so subclasses can inherit them as "absent" markers.
++    """
++
++    async def append(self, key: SessionKey, entries: list[SessionStoreEntry]) -> None:
++        """Mirror a batch of transcript entries.
++
++        Called AFTER the subprocess's local write succeeds — durability is
++        already guaranteed locally.
++
++        Batches arrive at ~100ms cadence during active turns. Entries are
++        JSON-safe plain objects — one per line in the local JSONL file.
++
++        Within a single process, persist entries in append-call order; across
++        concurrent processes, order is by storage commit time, not call time.
++
++        Exceptions are logged; the subprocess continues unaffected.
++        At-most-once delivery — failed batches are not retried.
++        """
++        ...
++
++    async def load(self, key: SessionKey) -> list[SessionStoreEntry] | None:
++        """Load a full session for resume.
++
++        Called once, in the SDK parent, before subprocess spawn. The result is
++        materialized to a temporary JSONL file; the subprocess resumes from
++        that file using its existing resume code.
++
++        Return ``None`` for a key that was never written; adapters that cannot
++        distinguish "never written" from "emptied" (e.g. Redis ``LRANGE``) may
++        return ``None`` for both. Returned entries must be deep-equal to what
++        was appended — byte-equal serialization is NOT required (e.g. Postgres
++        ``JSONB`` may reorder object keys); the SDK never hashes or
++        byte-compares entries.
++        """
++        ...
++
++    async def list_sessions(self, project_key: str) -> list[SessionStoreListEntry]:
++        """List sessions for a ``project_key``. Returns IDs + modification times.
++
++        ``mtime`` is Unix epoch milliseconds; adapters without native
++        modification time (e.g. Redis) must maintain their own index. Result
++        order is unspecified — the SDK sorts by ``mtime`` descending.
++
++        Optional — if unimplemented, ``list_sessions()`` with a session store
++        raises.
++        """
++        raise NotImplementedError
++
++    async def delete(self, key: SessionKey) -> None:
++        """Delete a session.
++
++        Deleting a main-transcript key (no ``subpath``) must cascade to all
++        subkeys under that session so subagent transcripts aren't orphaned. A
++        targeted delete with an explicit ``subpath`` removes only that one
++        entry.
++
++        Optional — if unimplemented, deletion is a no-op (appropriate for
++        WORM/append-only backends like object storage).
++        """
++        raise NotImplementedError
++
++    async def list_subkeys(self, key: SessionListSubkeysKey) -> list[str]:
++        """List all subpath keys under a session (e.g. subagent transcripts).
++
++        Used during resume to discover and materialize all subagent data.
++
++        Optional — if unimplemented, resume only materializes the main
++        transcript.
++        """
++        raise NotImplementedError
++
++
+ # ---------------------------------------------------------------------------
+ # Session Listing Types
+ # ---------------------------------------------------------------------------
+@@ -1269,6 +1436,16 @@ class ClaudeAgentOptions:
+     # When enabled, files can be rewound to their state at any user message
+     # using `ClaudeSDKClient.rewind_files()`.
+     enable_file_checkpointing: bool = False
++    # Mirror session transcripts to external storage and enable store-backed
++    # resume. When set, every transcript line written locally is also passed to
++    # ``session_store.append()``, and ``resume`` can materialize from the store
++    # when the local file is absent.
++    session_store: SessionStore | None = None
++    # Upper bound on ``session_store.load()`` / ``list_subkeys()`` calls during
++    # resume materialization, in milliseconds. Prevents a slow store from
++    # blocking subprocess spawn indefinitely. A value of 0 means immediate
++    # timeout; use a large value to effectively disable.
++    load_timeout_ms: int = 60_000
+     # API-side task budget in tokens. When set, the model is made aware of
+     # its remaining token budget so it can pace tool use and wrap up before
+     # the limit.

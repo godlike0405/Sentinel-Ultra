@@ -1,0 +1,282 @@
+diff --git a/Makefile b/Makefile
+index f16a89ca3..e22658cb7 100644
+--- a/Makefile
++++ b/Makefile
+@@ -24,6 +24,7 @@ SOURCES		:=	cafe \
+ 				libraries/wutmalloc \
+ 				libraries/wutdevoptab \
+ 				libraries/wutsocket \
++				libraries/wutdefaultheap \
+ 				libraries/libwhb/src \
+ 				libraries/libgfd/src \
+ 				libraries/nn_erreula \
+diff --git a/libraries/wutcrt/crt0_rpl.s b/libraries/wutcrt/crt0_rpl.s
+index 11bc81bb8..2af4969af 100644
+--- a/libraries/wutcrt/crt0_rpl.s
++++ b/libraries/wutcrt/crt0_rpl.s
+@@ -17,6 +17,8 @@ __rpl_start:
+ load:
+    # Load
+    bl __init_wut
++   # rpl files use wutmalloc instead of the custom heap
++   bl __init_wut_malloc
+    bl __eabi
+    lwz 3, 0xC(1)
+    lwz 4, 0x10(1)
+diff --git a/libraries/wutcrt/crt0_rpx.s b/libraries/wutcrt/crt0_rpx.s
+index cb9ff727b..42b4bb2b8 100644
+--- a/libraries/wutcrt/crt0_rpx.s
++++ b/libraries/wutcrt/crt0_rpx.s
+@@ -2,6 +2,7 @@
+ .extern exit
+ .extern __init_wut
+ .extern __fini_wut
++.extern __preinit_user
+ 
+ .section .crt0, "ax", @progbits
+ .global __rpx_start
+@@ -17,3 +18,17 @@ __rpx_start:
+    bl main
+    addi 1, 1, 0x14
+    b exit
++
++# -----------------------------------
++# export for __preinit_user
++# -----------------------------------
++.section .fexports, "ax", @0x80000001
++.align 4
++
++.long 1
++.long 0xa7fef0c2
++
++.long __preinit_user
++.long 0x10
++
++.string "__preinit_user"
+diff --git a/libraries/wutcrt/wut_crt.c b/libraries/wutcrt/wut_crt.c
+index e60b9b84b..4b1289040 100644
+--- a/libraries/wutcrt/wut_crt.c
++++ b/libraries/wutcrt/wut_crt.c
+@@ -1,10 +1,8 @@
+-void __init_wut_malloc();
+ void __init_wut_newlib();
+ void __init_wut_stdcpp();
+ void __init_wut_devoptab();
+ void __attribute__((weak)) __init_wut_socket();
+ 
+-void __fini_wut_malloc();
+ void __fini_wut_newlib();
+ void __fini_wut_stdcpp();
+ void __fini_wut_devoptab();
+@@ -13,7 +11,6 @@ void __attribute__((weak)) __fini_wut_socket();
+ void __attribute__((weak))
+ __init_wut()
+ {
+-   __init_wut_malloc();
+    __init_wut_newlib();
+    __init_wut_stdcpp();
+    __init_wut_devoptab();
+@@ -27,5 +24,4 @@ __fini_wut()
+    __fini_wut_devoptab();
+    __fini_wut_stdcpp();
+    __fini_wut_newlib();
+-   __fini_wut_malloc();
+ }
+diff --git a/libraries/wutcrt/wut_preinit.c b/libraries/wutcrt/wut_preinit.c
+new file mode 100644
+index 000000000..7a2a2b329
+--- /dev/null
++++ b/libraries/wutcrt/wut_preinit.c
+@@ -0,0 +1,15 @@
++#include <coreinit/memdefaultheap.h>
++
++void __init_wut_sbrk_heap(MEMHeapHandle heapHandle);
++void __init_wut_malloc_lock();
++void __init_wut_defaultheap();
++
++void __attribute__((weak))
++__preinit_user(MEMHeapHandle *mem1,
++               MEMHeapHandle *foreground,
++               MEMHeapHandle *mem2)
++{
++    __init_wut_sbrk_heap(*mem2);
++    __init_wut_malloc_lock();
++    __init_wut_defaultheap();
++}
+diff --git a/libraries/wutdefaultheap/wut_defaultheap.c b/libraries/wutdefaultheap/wut_defaultheap.c
+new file mode 100644
+index 000000000..bd6d406d6
+--- /dev/null
++++ b/libraries/wutdefaultheap/wut_defaultheap.c
+@@ -0,0 +1,34 @@
++#include <coreinit/memdefaultheap.h>
++#include <malloc.h>
++
++void *
++__wut_alloc_from_defaultheap(uint32_t size)
++{
++   return malloc(size);
++}
++
++void *
++__wut_alloc_from_defaultheap_ex(uint32_t size,
++                              int32_t alignment)
++{
++   return memalign(alignment, size);
++}
++
++void
++__wut_free_to_defaultheap(void *ptr)
++{
++   free(ptr);
++}
++
++void
++__init_wut_defaultheap(void)
++{
++   MEMAllocFromDefaultHeap = __wut_alloc_from_defaultheap;
++   MEMAllocFromDefaultHeapEx = __wut_alloc_from_defaultheap_ex;
++   MEMFreeToDefaultHeap = __wut_free_to_defaultheap;
++}
++
++void
++__fini_wut_defaultheap(void)
++{
++}
+diff --git a/libraries/wutmalloc/wut_malloc.c b/libraries/wutmalloc/wut_malloc.c
+index d955a684e..bcade118b 100644
+--- a/libraries/wutmalloc/wut_malloc.c
++++ b/libraries/wutmalloc/wut_malloc.c
+@@ -5,9 +5,6 @@
+ #include <string.h>
+ #include <errno.h>
+ 
+-// Limit sbrk heap to 128kb
+-uint32_t __wut_heap_max_size = 128 * 1024;
+-
+ void
+ __init_wut_malloc(void)
+ {
+diff --git a/libraries/wutnewlib/wut_malloc_lock.c b/libraries/wutnewlib/wut_malloc_lock.c
+index 5a7244dee..546ea3a33 100644
+--- a/libraries/wutnewlib/wut_malloc_lock.c
++++ b/libraries/wutnewlib/wut_malloc_lock.c
+@@ -1,23 +1,23 @@
+ #include "wut_newlib.h"
+ 
+-#include <coreinit/mutex.h>
++#include <coreinit/spinlock.h>
+ 
+-static OSMutex sMallocMutex;
++static OSSpinLock sMallocSpinLock;
+ 
+ void
+ __wut_malloc_lock(struct _reent *r)
+ {
+-   OSLockMutex(&sMallocMutex);
++   OSUninterruptibleSpinLock_Acquire(&sMallocSpinLock);
+ }
+ 
+ void
+ __wut_malloc_unlock(struct _reent *r)
+ {
+-   OSUnlockMutex(&sMallocMutex);
++   OSUninterruptibleSpinLock_Release(&sMallocSpinLock);
+ }
+ 
+ void
+ __init_wut_malloc_lock()
+ {
+-   OSInitMutex(&sMallocMutex);
++   OSInitSpinLock(&sMallocSpinLock);
+ }
+diff --git a/libraries/wutnewlib/wut_newlib.c b/libraries/wutnewlib/wut_newlib.c
+index 4356ec776..b5f854e10 100644
+--- a/libraries/wutnewlib/wut_newlib.c
++++ b/libraries/wutnewlib/wut_newlib.c
+@@ -4,6 +4,10 @@
+ void(*__wut_exit)(int rc);
+ extern void __fini_wut(void);
+ 
++void *__syscall_sbrk_r(struct _reent *ptr, ptrdiff_t incr) {
++	return __wut_sbrk_r(ptr, incr);
++}
++
+ int __syscall_lock_init(int *lock, int recursive) {
+   return __wut_lock_init(lock, recursive);
+ }
+@@ -20,6 +24,14 @@ int __syscall_lock_acquire(int *lock) {
+   return __wut_lock_acquire(lock);
+ }
+ 
++void __syscall_malloc_lock(struct _reent *ptr) {
++	return __wut_malloc_lock(ptr);
++}
++
++void __syscall_malloc_unlock(struct _reent *ptr) {
++	return __wut_malloc_unlock(ptr);
++}
++
+ void __syscall_exit(int rc) { 
+   __fini_wut();
+   __wut_exit(rc);
+@@ -54,4 +66,5 @@ __init_wut_newlib()
+ void
+ __fini_wut_newlib()
+ {
++  __fini_wut_sbrk_heap();
+ }
+diff --git a/libraries/wutnewlib/wut_sbrk.c b/libraries/wutnewlib/wut_sbrk.c
+index 47f8d0451..e9d11c8e4 100644
+--- a/libraries/wutnewlib/wut_sbrk.c
++++ b/libraries/wutnewlib/wut_sbrk.c
+@@ -5,8 +5,6 @@
+ #include <coreinit/memdefaultheap.h>
+ #include <coreinit/memexpheap.h>
+ 
+-extern uint32_t __attribute__((weak)) __wut_heap_max_size;
+-
+ static MEMHeapHandle sHeapHandle = NULL;
+ static void *sHeapBase = NULL;
+ static uint32_t sHeapMaxSize = 0;
+@@ -32,26 +30,18 @@ __wut_sbrk_r(struct _reent *r,
+ }
+ 
+ void
+-__init_wut_sbrk_heap()
++__init_wut_sbrk_heap(MEMHeapHandle heapHandle)
+ {
+    if (sHeapBase) {
+       // Already initialised
+       return;
+    }
+ 
+-   if (&__wut_heap_max_size) {
+-      // Use default heap
+-      sHeapBase = MEMAllocFromDefaultHeap(__wut_heap_max_size);
+-      sHeapMaxSize = __wut_heap_max_size;
+-   } else {
+-      // No max size specified, use 90% of base MEM2 heap
+-      sHeapHandle = MEMGetBaseHeapHandle(MEM_BASE_HEAP_MEM2);
+-
+-      uint32_t freeSize = MEMGetAllocatableSizeForExpHeapEx(sHeapHandle, 4);
+-      sHeapMaxSize = (uint32_t)(0.9f * (float)freeSize) & ~0xFFF;
++   sHeapHandle = heapHandle;
+ 
+-      sHeapBase = MEMAllocFromExpHeapEx(sHeapHandle, sHeapMaxSize, 4);
+-   }
++   // Use all of the available memory for the custom heap
++   sHeapMaxSize = MEMGetAllocatableSizeForExpHeapEx(sHeapHandle, 4);
++   sHeapBase = MEMAllocFromExpHeapEx(sHeapHandle, sHeapMaxSize, 4);
+ 
+    sHeapSize = 0;
+ }
+@@ -66,8 +56,6 @@ __fini_wut_sbrk_heap()
+ 
+    if (sHeapHandle) {
+       MEMFreeToExpHeap(sHeapHandle, sHeapBase);
+-   } else {
+-      MEMFreeToDefaultHeap(sHeapBase);
+    }
+ 
+    sHeapBase = NULL;

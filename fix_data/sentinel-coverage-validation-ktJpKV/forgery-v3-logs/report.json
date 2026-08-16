@@ -1,0 +1,16 @@
+{
+  "success": false,
+  "raw_exit_code": 1,
+  "infrastructure_error": null,
+  "configuration_ok": true,
+  "inventory_ok": true,
+  "expected_test_count": 17,
+  "observed_test_count": 17,
+  "missing_tests": [],
+  "unexpected_tests": [],
+  "failed_tests": [],
+  "expected_duplicates": [],
+  "observed_duplicates": [],
+  "malformed_record_indexes": [],
+  "reward": 0.0
+}

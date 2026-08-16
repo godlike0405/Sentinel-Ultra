@@ -1,0 +1,585 @@
+diff --git a/tests/client-ml-feature.test.ts b/tests/client-ml-feature.test.ts
+new file mode 100644
+index 0000000..4952596
+--- /dev/null
++++ b/tests/client-ml-feature.test.ts
+@@ -0,0 +1,523 @@
++import assert from "node:assert/strict";
++import { spawnSync } from "node:child_process";
++import { readFileSync } from "node:fs";
++import { join } from "node:path";
++import { fileURLToPath } from "node:url";
++import { it } from "node:test";
++import * as processing from "../packages/processing/src/index";
++import {
++  MENU_ITEM_CATALOG,
++  presetHiddenSets,
++} from "../apps/geolibre-desktop/src/lib/ui-profile";
++import type { RasterData } from "../packages/processing/src/raster-client";
++
++type Detection = {
++  bbox: [number, number, number, number];
++  classIndex: number;
++  score: number;
++};
++
++type Segment = {
++  polygon: [number, number][];
++  score: number;
++  area: number;
++};
++
++const detectObjects = processing.detectObjects as (
++  raster: RasterData,
++  modelBytes: ArrayBuffer,
++  options?: Record<string, unknown>,
++) => Promise<Detection[]>;
++const segmentEverything = processing.segmentEverything as (
++  raster: RasterData,
++  encoderBytes: ArrayBuffer,
++  decoderBytes: ArrayBuffer,
++  options?: Record<string, unknown>,
++) => Promise<Segment[]>;
++const ORT_VERSION = processing.ORT_VERSION as string;
++
++const INPUT = 32;
++
++const DETECTION_MODEL_BASE64 = [
++  "CAoSDnRhc2stZXZhbHVhdG9yOpgJCkAKBmltYWdlcxILY2hhbm5lbF9tYXgiCVJlZHVjZU1heCoNCgRheGVzQAJAA6ABByoP",
++  "CghrZWVwZGltcxgAoAECCj4KC2NoYW5uZWxfbWF4EgVzY29yZSIKUmVkdWNlTWVhbioLCgRheGVzQAGgAQcqDwoIa2VlcGRp",
++  "bXMYAKABAgogCgVzY29yZQoKc2NvcmVfbWFzaxIGc2NvcmVzIgNNdWwKHwoEYmFzZQoGc2NvcmVzEgpkZXRlY3Rpb25zIgNB",
++  "ZGQSDG5jaHcteW9sby12OCq1AwgBCAUIFRABIqQDAACAQQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
++  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAQQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
++  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAQgAAAAAAAAAAAAAAAAAA",
++  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQgAA",
++  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
++  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
++  "AAAAAAAAAAAAAAAAAAAAAAAAQgRiYXNlKrsDCAEIBQgVEAEipAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
++  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
++  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
++  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
++  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
++  "AAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
++  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABCCnNjb3JlX21hc2taKwoGaW1hZ2VzEiEKHwgBEhsKAggBCgIIAwoIEgZoZWln",
++  "aHQKBxIFd2lkdGhiIAoKZGV0ZWN0aW9ucxISChAIARIMCgIIAQoCCAUKAggVQgQKABAN",
++].join("");
++
++const V8_MULTI_MODEL_BASE64 =
++  "CAgSG3NlbnRpbmVsLWJlaGF2aW9yYWwtZml4dHVyZTruBBIXYmVoYXZpb3JhbC15b2xvLWZpeHR1cmUqjgQKAwEGFRABIvgDAAAAAAAAAAAAAABBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAQQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACgQQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABmZmY/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAzczMPQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADNzMw9AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAzcxMPwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQgpkZXRlY3Rpb25zWiAKBmltYWdlcxIWChQIARIQCgIIAQoCCAMKAgggCgIIIGIgCgpkZXRlY3Rpb25zEhIKEAgBEgwKAggBCgIIBgoCCBVCBAoAEAs=";
++const V5_MODEL_BASE64 =
++  "CAgSG3NlbnRpbmVsLWJlaGF2aW9yYWwtZml4dHVyZTq0Ago4CgVzaGFwZRIFemVyb3MiD0NvbnN0YW50T2ZTaGFwZSoXCgV2YWx1ZSoLCgEBEAEiBAAAAACgAQQKMAoFemVyb3MKB2luZGljZXMKB3VwZGF0ZXMSCmRldGVjdGlvbnMiCVNjYXR0ZXJORBIZYmVoYXZpb3JhbC15b2xvdjUtZml4dHVyZSoRCgEDEAc6AwE/B0IFc2hhcGUqJgoCBwMQBzoVAAcAAAcBAAcCAAcDAAcEAAcFAAcGQgdpbmRpY2VzKiwKAQcQASIcAACgQQAAIEEAAMBAAACAQGZmZj/NzMw9mplZP0IHdXBkYXRlc1ogCgZpbWFnZXMSFgoUCAESEAoCCAEKAggDCgIIIAoCCCBiIAoKZGV0ZWN0aW9ucxISChAIARIMCgIIAQoCCD8KAggHQgQKABAL";
++const V8_OVERLAP_MODEL_BASE64 =
++  "CAgSG3NlbnRpbmVsLWJlaGF2aW9yYWwtZml4dHVyZTruBBIXYmVoYXZpb3JhbC15b2xvLWZpeHR1cmUqjgQKAwEGFRABIvgDAAAAAAAAAAAAACBBAAAwQQAAIEEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACBBAAAgQQAAIEEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABBAAAAQQAAAEEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABBAAAAQQAAAEEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABmZmY/mpkZP83MzD0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADNzMw9zczMPTMzMz8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQgpkZXRlY3Rpb25zWiAKBmltYWdlcxIWChQIARIQCgIIAQoCCAMKAgggCgIIIGIgCgpkZXRlY3Rpb25zEhIKEAgBEgwKAggBCgIIBgoCCBVCBAoAEAs=";
++const MALFORMED_MODEL_BASE64 =
++  "CAgSG3NlbnRpbmVsLWJlaGF2aW9yYWwtZml4dHVyZTq+AhIXYmVoYXZpb3JhbC15b2xvLWZpeHR1cmUq3gEKAwEFChABIsgBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABCCmRldGVjdGlvbnNaIAoGaW1hZ2VzEhYKFAgBEhAKAggBCgIIAwoCCCAKAgggYiAKCmRldGVjdGlvbnMSEgoQCAESDAoCCAEKAggFCgIICkIECgAQCw==";
++
++const SAM_ENCODER_BASE64 =
++  "CAgSDXNlbnRpbmVsLWV2YWw61AIKTQoPZW1iZWRkaW5nX3NoYXBlEhBpbWFnZV9lbWJlZGRpbmdzIg9Db25zdGFudE9mU2hhcGUqFwoFdmFsdWUqCwoBARABIgQAAIA/oAEEClgKD2VtYmVkZGluZ19zaGFwZRIbaW1hZ2VfcG9zaXRpb25hbF9lbWJlZGRpbmdzIg9Db25zdGFudE9mU2hhcGUqFwoFdmFsdWUqCwoBARABIgQAAIA/oAEEEhB0aW55LXNhbS1lbmNvZGVyKhoKAQIQBzoCAQFCD2VtYmVkZGluZ19zaGFwZVooCgxwaXhlbF92YWx1ZXMSGAoWCAESEgoCCAEKAggDCgMIgAgKAwiACGIiChBpbWFnZV9lbWJlZGRpbmdzEg4KDAgBEggKAggBCgIIAWItChtpbWFnZV9wb3NpdGlvbmFsX2VtYmVkZGluZ3MSDgoMCAESCAoCCAEKAggBQgQKABAL";
++const SAM_DECODER_BASE64 =
++  "CAgSDXNlbnRpbmVsLWV2YWw6rwMKQQoJaW91X3NoYXBlEgppb3Vfc2NvcmVzIg9Db25zdGFudE9mU2hhcGUqFwoFdmFsdWUqCwoBARABIgQzM3M/oAEECkIKCm1hc2tfc2hhcGUSCnByZWRfbWFza3MiD0NvbnN0YW50T2ZTaGFwZSoXCgV2YWx1ZSoLCgEBEAEiBAAAAECgAQQSEHRpbnktc2FtLWRlY29kZXIqFAoBAhAHOgIEA0IJaW91X3NoYXBlKhkKAQQQBzoGBAOAAoACQgptYXNrX3NoYXBlWiYKDGlucHV0X3BvaW50cxIWChQIARIQCgIIAQoCCAQKAggBCgIIAloiCgxpbnB1dF9sYWJlbHMSEgoQCAcSDAoCCAEKAggECgIIAVoiChBpbWFnZV9lbWJlZGRpbmdzEg4KDAgBEggKAggBCgIIAVotChtpbWFnZV9wb3NpdGlvbmFsX2VtYmVkZGluZ3MSDgoMCAESCAoCCAEKAggBYhwKCmlvdV9zY29yZXMSDgoMCAESCAoCCAQKAggDYiYKCnByZWRfbWFza3MSGAoWCAESEgoCCAQKAggDCgMIgAIKAwiAAkIECgAQCw==";
++
++function bytes(base64: string): ArrayBuffer {
++  const value = Buffer.from(base64, "base64");
++  return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength) as ArrayBuffer;
++}
++
++const raster = (values = [0.3, 0.6, 0.9, 0.5]): RasterData => ({
++  bands: [Float32Array.from(values)],
++  width: values.length,
++  height: 1,
++  originX: 0,
++  originY: 0,
++  resX: 1,
++  resY: 1,
++  nodata: null,
++  geoKeys: {},
++});
++
++const inferenceRaster: RasterData = {
++  bands: [
++    new Float32Array(8).fill(0.3),
++    new Float32Array(8).fill(0.6),
++    new Float32Array(8).fill(0.9),
++  ],
++  width: 4,
++  height: 2,
++  originX: 0,
++  originY: 0,
++  resX: 1,
++  resY: 1,
++  nodata: null,
++  geoKeys: {},
++};
++
++const squareRaster: RasterData = {
++  bands: [
++    new Float32Array(INPUT * INPUT).fill(0.3),
++    new Float32Array(INPUT * INPUT).fill(0.6),
++    new Float32Array(INPUT * INPUT).fill(0.9),
++  ],
++  width: INPUT,
++  height: INPUT,
++  originX: 0,
++  originY: 0,
++  resX: 1,
++  resY: 1,
++  nodata: null,
++  geoKeys: {},
++};
++
++const english = JSON.parse(
++  readFileSync(
++    fileURLToPath(new URL("../apps/geolibre-desktop/src/i18n/locales/en.json", import.meta.url)),
++    "utf8",
++  ),
++) as Record<string, unknown>;
++
++function nestedStrings(value: unknown): string[] {
++  if (typeof value === "string") return [value];
++  if (Array.isArray(value)) return value.flatMap(nestedStrings);
++  if (value && typeof value === "object") return Object.values(value).flatMap(nestedStrings);
++  return [];
++}
++
++function translation(key: string): string | undefined {
++  let value: unknown = english;
++  for (const part of key.split(".")) {
++    if (!value || typeof value !== "object") return undefined;
++    value = (value as Record<string, unknown>)[part];
++  }
++  return typeof value === "string" ? value : undefined;
++}
++
++function objectContaining(
++  value: unknown,
++  target: string,
++  topics: readonly RegExp[],
++): Record<string, unknown> | undefined {
++  if (!value || typeof value !== "object") return undefined;
++  for (const child of Object.values(value)) {
++    const found = objectContaining(child, target, topics);
++    if (found) return found;
++  }
++  const copy = nestedStrings(value).join("\n");
++  if (Object.values(value).includes(target) && topics.every((topic) => topic.test(copy))) {
++    return value as Record<string, unknown>;
++  }
++  return undefined;
++}
++
++let browserBuild: Promise<import("esbuild").BuildResult> | undefined;
++async function buildBrowserApplication() {
++  browserBuild ??= import("esbuild").then(({ build }) => {
++    const root = fileURLToPath(new URL("..", import.meta.url));
++    return build({
++      entryPoints: [join(root, "apps/geolibre-desktop/src/main.tsx")],
++      bundle: true,
++      platform: "browser",
++      packages: "external",
++      format: "esm",
++      splitting: true,
++      outdir: "out",
++      plugins: [
++        {
++          name: "external-vite-assets",
++          setup(buildApi) {
++            buildApi.onResolve({ filter: /\?(?:raw|url)$/ }, (args) => ({
++              path: args.path,
++              external: true,
++            }));
++          },
++        },
++      ],
++      write: false,
++      logLevel: "silent",
++    });
++  });
++  return browserBuild;
++}
++
++  it("returns every qualifying YOLOv8/v11 prediction", async () => {
++    const detections = await detectObjects(squareRaster, bytes(V8_MULTI_MODEL_BASE64), {
++      inputSize: INPUT,
++      confidenceThreshold: 0.5,
++    });
++    assert.equal(detections.length, 2);
++    assert.deepEqual(detections.map(({ classIndex }) => classIndex), [0, 1]);
++    assert.deepEqual(detections.map(({ bbox }) => bbox), [
++      [6, 6, 10, 10],
++      [21, 16, 27, 24],
++    ]);
++  });
++
++  it("interprets YOLOv5 confidence and coordinates", async () => {
++    const [detection] = await detectObjects(squareRaster, bytes(V5_MODEL_BASE64), {
++      inputSize: INPUT,
++      confidenceThreshold: 0.5,
++    });
++    assert.equal(detection.classIndex, 1);
++    assert.deepEqual(detection.bbox, [17, 8, 23, 12]);
++    assert.ok(Math.abs(detection.score - 0.765) < 1e-6);
++  });
++
++  it("suppresses redundant same-class boxes without merging classes", async () => {
++    const detections = await detectObjects(squareRaster, bytes(V8_OVERLAP_MODEL_BASE64), {
++      inputSize: INPUT,
++      confidenceThreshold: 0.5,
++      iouThreshold: 0.45,
++    });
++    assert.equal(detections.length, 2);
++    assert.deepEqual(detections.map(({ classIndex }) => classIndex).sort(), [0, 1]);
++    assert.ok(Math.abs((detections.find(({ classIndex }) => classIndex === 0)?.score ?? 0) - 0.9) < 1e-6);
++  });
++
++  it("rejects malformed detection output", async () => {
++    await assert.rejects(
++      detectObjects(squareRaster, bytes(MALFORMED_MODEL_BASE64), { inputSize: INPUT }),
++      /output|shape|layout|model/i,
++    );
++  });
++
++  it("prepares normalized and conventional integer rasters for inference", async () => {
++    for (const [values, expectedRange] of [
++      [[0.1, 0.5, 0.8], [0.75, 0.85]],
++      [[0, 100, 200], [0.7, 0.9]],
++    ] as const) {
++      const [detection] = await detectObjects(raster([...values]), bytes(DETECTION_MODEL_BASE64), {
++        inputSize: INPUT,
++        confidenceThreshold: 0.05,
++      });
++      assert.ok(detection.score >= expectedRange[0] && detection.score <= expectedRange[1]);
++      assert.ok(detection.bbox.every(Number.isFinite));
++    }
++  });
++
++  it("handles reflectance, high-range, NoData, and empty-valid-sample rasters", async () => {
++    const cases = [
++      raster([0.2, 1.8, 2.5]),
++      raster([0, 1000, 4000]),
++      Object.assign(raster([0.2, 0.8, 255]), { nodata: 255 }),
++      Object.assign(raster([9999, 9999]), { nodata: 9999 }),
++    ];
++    for (const input of cases) {
++      const [detection] = await detectObjects(input, bytes(DETECTION_MODEL_BASE64), {
++        inputSize: INPUT,
++        confidenceThreshold: 0.05,
++      });
++      assert.ok(Number.isFinite(detection.score));
++      assert.ok(detection.score > 0 && detection.score <= 1);
++      assert.ok(detection.bbox.every(Number.isFinite));
++    }
++  });
++
++  it("validates all object-detection options before inference", async () => {
++    const checks = [
++      [{ inputSize: 16 }, /inputSize/i],
++      [{ inputSize: 4097 }, /inputSize/i],
++      [{ inputSize: 64.5 }, /inputSize/i],
++      [{ confidenceThreshold: -0.1 }, /confidenceThreshold/i],
++      [{ confidenceThreshold: Number.NaN }, /confidenceThreshold/i],
++      [{ iouThreshold: 1.1 }, /iouThreshold/i],
++      [{ iouThreshold: Number.POSITIVE_INFINITY }, /iouThreshold/i],
++    ] as const;
++    for (const [options, pattern] of checks) {
++      await assert.rejects(detectObjects(raster(), new ArrayBuffer(0), options), pattern);
++    }
++  });
++
++  it("runs object detection in restricted browser conditions and maps bounded coordinates", async () => {
++    const sab = Object.getOwnPropertyDescriptor(globalThis, "SharedArrayBuffer");
++    const isolated = Object.getOwnPropertyDescriptor(globalThis, "crossOriginIsolated");
++    Object.defineProperty(globalThis, "SharedArrayBuffer", { configurable: true, value: undefined });
++    Object.defineProperty(globalThis, "crossOriginIsolated", { configurable: true, value: false });
++    try {
++      for (const options of [undefined, { inputSize: INPUT }]) {
++        const detections = await detectObjects(inferenceRaster, bytes(DETECTION_MODEL_BASE64), options);
++        assert.equal(detections.length, 1);
++        const [x1, y1, x2, y2] = detections[0].bbox;
++        assert.ok([x1, y1, x2, y2].every(Number.isFinite));
++        assert.ok(x1 >= 0 && x2 <= inferenceRaster.width);
++        assert.ok(y1 >= 0 && y2 <= inferenceRaster.height);
++        if (options) assert.deepEqual(detections[0].bbox, [0, 0, 4, 2]);
++        assert.equal(detections[0].classIndex, 0);
++        assert.ok(detections[0].score > 0 && detections[0].score <= 1);
++      }
++    } finally {
++      if (sab) Object.defineProperty(globalThis, "SharedArrayBuffer", sab);
++      if (isolated) Object.defineProperty(globalThis, "crossOriginIsolated", isolated);
++      else delete (globalThis as Record<string, unknown>).crossOriginIsolated;
++    }
++  });
++
++  it("reports invalid object-detection models clearly", async () => {
++    await assert.rejects(
++      detectObjects(inferenceRaster, new ArrayBuffer(8), { inputSize: INPUT }),
++      /model|ONNX/i,
++    );
++  });
++
++  it("pins and reports a browser-compatible inference runtime", async () => {
++    const packageDir = fileURLToPath(new URL("../packages/processing/", import.meta.url));
++    const pkg = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8")) as {
++      dependencies: Record<string, string>;
++    };
++    const version = ORT_VERSION;
++    assert.match(String(version), /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
++    assert.ok(Object.values(pkg.dependencies).includes(String(version)));
++    const runtimeName = Object.entries(pkg.dependencies).find(([, value]) => value === version)?.[0];
++    assert.ok(runtimeName);
++    const manifest = JSON.parse(
++      readFileSync(join(packageDir, "..", "..", "node_modules", runtimeName!, "package.json"), "utf8"),
++    ) as { version: string };
++    assert.equal(manifest.version, version);
++    const { build } = await import("esbuild");
++    await build({
++      stdin: {
++        contents: 'import { detectObjects, segmentEverything } from "@geolibre/processing"; globalThis.ml = [detectObjects, segmentEverything];',
++        resolveDir: join(packageDir, "..", ".."),
++        sourcefile: "browser-ml-check.ts",
++        loader: "ts",
++      },
++      bundle: true,
++      platform: "browser",
++      conditions: ["browser"],
++      format: "esm",
++      outdir: "out",
++      write: false,
++      logLevel: "silent",
++    });
++  });
++
++  it("exposes typed detection and automatic-segmentation capabilities", () => {
++    assert.equal(typeof detectObjects, "function");
++    assert.equal(typeof segmentEverything, "function");
++    assert.equal(typeof ORT_VERSION, "string");
++    const repoRoot = fileURLToPath(new URL("../", import.meta.url));
++    const checked = spawnSync(
++      join(repoRoot, "node_modules", ".bin", "tsc"),
++      [
++        "--noEmit",
++        "--skipLibCheck",
++        "--module",
++        "ESNext",
++        "--moduleResolution",
++        "Bundler",
++        "--target",
++        "ES2022",
++        "tests/client-ml-types.fixture.ts",
++      ],
++      { cwd: repoRoot, encoding: "utf8" },
++    );
++    assert.equal(checked.status, 0, checked.stderr || checked.stdout);
++  });
++
++  it("validates automatic-segmentation grid settings before model loading", async () => {
++    for (const pointsPerSide of [1, 49, 2.5]) {
++      await assert.rejects(
++        segmentEverything(raster(), new ArrayBuffer(0), new ArrayBuffer(0), { pointsPerSide }),
++        /pointsPerSide/i,
++      );
++    }
++  });
++
++  it("segments raster objects into bounded polygons and reports progress", async () => {
++    const progress: [number, number][] = [];
++    const masks = await segmentEverything(
++      inferenceRaster,
++      bytes(SAM_ENCODER_BASE64),
++      bytes(SAM_DECODER_BASE64),
++      {
++        pointsPerSide: 2,
++        pointBatchSize: 4,
++        predIouThreshold: 0.5,
++        stabilityScoreThreshold: 0.5,
++        minAreaFraction: 0,
++        onProgress: (done, total) => progress.push([done, total]),
++      },
++    );
++    assert.equal(masks.length, 1);
++    assert.deepEqual(masks[0].polygon[0], masks[0].polygon.at(-1));
++    assert.ok(masks[0].score > 0.9 && masks[0].score <= 1);
++    assert.ok(masks[0].area > 0);
++    assert.ok(
++      masks[0].polygon.every(([x, y]) => x >= 0 && x <= 4 && y >= 0 && y <= 2),
++    );
++    assert.deepEqual(progress, [[1, 1]]);
++  });
++
++  it("supports automatic-segmentation cancellation and model errors", async () => {
++    const controller = new AbortController();
++    controller.abort();
++    await assert.rejects(
++      segmentEverything(
++        inferenceRaster,
++        bytes(SAM_ENCODER_BASE64),
++        bytes(SAM_DECODER_BASE64),
++        { pointsPerSide: 2, pointBatchSize: 4, signal: controller.signal },
++      ),
++      /aborted/i,
++    );
++    await assert.rejects(
++      segmentEverything(inferenceRaster, new ArrayBuffer(8), new ArrayBuffer(8), { pointsPerSide: 2 }),
++    );
++  });
++
++  it("lists both imagery workflows as advanced Processing actions", () => {
++    const titles = new Set(["Object Detection", "Segment Everything"]);
++    const entries = MENU_ITEM_CATALOG.filter((entry) => titles.has(translation(entry.labelKey) ?? ""));
++    assert.equal(entries.length, titles.size);
++    assert.deepEqual(new Set(entries.map((entry) => translation(entry.labelKey))), titles);
++    assert.ok(entries.every((entry) => entry.tier === "advanced"));
++    assert.ok(entries.every((entry) => entry.menuId === "processing"));
++  });
++
++  it("keeps both imagery workflows out of simpler interface presets", () => {
++    const titles = new Set(["Object Detection", "Segment Everything"]);
++    const entries = MENU_ITEM_CATALOG.filter((entry) => titles.has(translation(entry.labelKey) ?? ""));
++    const basic = presetHiddenSets("basic", []);
++    const advanced = presetHiddenSets("advanced", []);
++    assert.equal(entries.length, 2);
++    for (const entry of entries) {
++      assert.ok(basic.hiddenMenuItems.includes(entry.id));
++      assert.ok(!advanced.hiddenMenuItems.includes(entry.id));
++    }
++  });
++
++  it("provides localized UI copy for both workflows", () => {
++    for (const [title, expectedTopics] of [
++      ["Object Detection", [/image|raster/i, /model/i, /confidence|threshold/i, /detect|result|added/i, /error|failed|invalid/i]],
++      ["Segment Everything", [/image|raster/i, /grid|point/i, /progress|processing|segmenting/i, /segment|object|added/i, /error|failed|invalid/i]],
++    ] as const) {
++      const section = objectContaining(english, title, expectedTopics);
++      assert.ok(section, `missing English copy for ${title}`);
++      const copy = nestedStrings(section).join("\n");
++      assert.ok(nestedStrings(section).length >= 10);
++      for (const topic of expectedTopics) assert.match(copy, topic);
++    }
++  });
++
++  it("bundles the complete desktop application for browsers", async () => {
++    assert.equal(typeof detectObjects, "function");
++    assert.equal(typeof segmentEverything, "function");
++    const result = await buildBrowserApplication();
++    assert.ok(result.outputFiles.length > 3);
++    assert.ok(result.outputFiles.every((file) => file.contents.length > 0));
++    const bundle = result.outputFiles.map((file) => Buffer.from(file.contents).toString("utf8")).join("\n");
++    assert.ok(bundle.includes("detectObjects"));
++    assert.ok(bundle.includes("segmentEverything"));
++  });
++
++  it("keeps the two browser workflow implementations independently loadable", async () => {
++    assert.equal(typeof detectObjects, "function");
++    assert.equal(typeof segmentEverything, "function");
++    const result = await buildBrowserApplication();
++    const chunks = result.outputFiles.map((file) => Buffer.from(file.contents).toString("utf8"));
++    const detectionChunk = chunks.findIndex((text) => text.includes("detectObjects"));
++    const segmentationChunk = chunks.findIndex((text) => text.includes("segmentEverything"));
++    assert.ok(detectionChunk >= 0);
++    assert.ok(segmentationChunk >= 0);
++    assert.notEqual(detectionChunk, segmentationChunk);
++  });
++
++  it("ships distinct HTTPS ONNX choices for both workflows", async () => {
++    assert.equal(typeof detectObjects, "function");
++    assert.equal(typeof segmentEverything, "function");
++    const result = await buildBrowserApplication();
++    const chunks = result.outputFiles.map((file) => Buffer.from(file.contents).toString("utf8"));
++    const detectionBundle = chunks.filter((text) => text.includes("detectObjects")).join("\n");
++    const segmentationBundle = chunks.filter((text) => text.includes("segmentEverything")).join("\n");
++    const detectionAssets = [
++      ...new Set(detectionBundle.match(/https:\/\/[^"'`\s]+\.onnx/g) ?? []),
++    ];
++    assert.ok(detectionAssets.length >= 2);
++    const segmentationAssets = [
++      ...new Set(segmentationBundle.match(/(?:https:\/\/[^"'`\s]+|\/[^"'`\s]*)\.onnx/g) ?? []),
++    ];
++    assert.ok(segmentationAssets.length >= 2);
++    const urls = [
++      ...new Set([
++        ...detectionAssets,
++        ...(segmentationBundle.match(/https:\/\/[^"'`\s;]+/g) ?? []).filter((value) =>
++          /onnx|model|sam/i.test(value),
++        ),
++      ]),
++    ];
++    assert.ok(urls.length >= 3);
++    for (const value of urls) {
++      const url = new URL(value);
++      assert.equal(url.protocol, "https:");
++    }
++  });
++
++  it("initial package evaluation does not require the inference runtime", () => {
++    const loader = fileURLToPath(new URL("./reject-ort-loader.mjs", import.meta.url));
++    const entryPoint = new URL("../packages/processing/src/index.ts", import.meta.url).href;
++    const result = spawnSync(
++      process.execPath,
++      [
++        "--experimental-loader",
++        loader,
++        "--import",
++        "tsx",
++        "--input-type=module",
++        "--eval",
++        `await import(${JSON.stringify(entryPoint)})`,
++      ],
++      { encoding: "utf8" },
++    );
++    assert.equal(result.status, 0, result.stderr || result.stdout);
++  });
+diff --git a/tests/client-ml-types.fixture.ts b/tests/client-ml-types.fixture.ts
+new file mode 100644
+index 0000000..f5dde2b
+--- /dev/null
++++ b/tests/client-ml-types.fixture.ts
+@@ -0,0 +1,36 @@
++import {
++  detectObjects,
++  ORT_VERSION,
++  segmentEverything,
++} from "../packages/processing/src/index";
++import type { RasterData } from "../packages/processing/src/raster-client";
++
++declare const raster: RasterData;
++declare const model: ArrayBuffer;
++declare const signal: AbortSignal;
++
++const detections = detectObjects(raster, model, {
++  inputSize: 640,
++  confidenceThreshold: 0.25,
++  iouThreshold: 0.45,
++});
++detections.then((items) => {
++  const box: [number, number, number, number] = items[0].bbox;
++  const classIndex: number = items[0].classIndex;
++  const score: number = items[0].score;
++  return { box, classIndex, score };
++});
++
++const masks = segmentEverything(raster, model, model, {
++  pointsPerSide: 8,
++  onProgress: (done: number, total: number) => void [done, total],
++  signal,
++});
++masks.then((items) => {
++  const polygon: [number, number][] = items[0].polygon;
++  const score: number = items[0].score;
++  const area: number = items[0].area;
++  return { polygon, score, area };
++});
++
++export const publicContract = { detections, masks, runtimeVersion: ORT_VERSION };
+diff --git a/tests/reject-ort-loader.mjs b/tests/reject-ort-loader.mjs
+new file mode 100644
+index 0000000..2d34783
+--- /dev/null
++++ b/tests/reject-ort-loader.mjs
+@@ -0,0 +1,8 @@
++export async function resolve(specifier, context, nextResolve) {
++  if (
++    /^(?:onnxruntime|onnxruntime-(?:web|node))(?:\/|$)/.test(specifier)
++  ) {
++    throw new Error("ONNX runtime loaded during package import");
++  }
++  return nextResolve(specifier, context);
++}

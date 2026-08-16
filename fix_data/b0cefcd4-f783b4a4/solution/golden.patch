@@ -1,0 +1,1778 @@
+diff --git a/platyPS.sln b/platyPS.sln
+index 81ed173..99aac03 100644
+--- a/platyPS.sln
++++ b/platyPS.sln
+@@ -5,8 +5,6 @@ VisualStudioVersion = 16.0.30717.126
+ MinimumVisualStudioVersion = 15.0.26124.0
+ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Microsoft.PowerShell.PlatyPS", "src\Microsoft.PowerShell.PlatyPS.csproj", "{E366DB7C-7A85-48CB-895F-390D50349923}"
+ EndProject
+-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Microsoft.PowerShell.PlatyPS.Tests", "test\Microsoft.PowerShell.PlatyPS.Tests\Microsoft.PowerShell.PlatyPS.Tests.csproj", "{22D8368F-AC97-4D1E-B310-101C29D82CEE}"
+-EndProject
+ Global
+ 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+ 		Debug|Any CPU = Debug|Any CPU
+diff --git a/src/Command/ExportMarkdownHelpCommand.cs b/src/Command/ExportMarkdownHelpCommand.cs
+index 0f85041..5f41ca3 100644
+--- a/src/Command/ExportMarkdownHelpCommand.cs
++++ b/src/Command/ExportMarkdownHelpCommand.cs
+@@ -56,7 +56,8 @@ namespace Microsoft.PowerShell.PlatyPS
+ 
+             foreach (object o in Command)
+             {
+-                if (o is CommandHelp cmdletHelp)
++                object commandObject = o is PSObject psObject ? psObject.BaseObject : o;
++                if (commandObject is CommandHelp cmdletHelp)
+                 {
+                     var markdownPath = Path.Combine($"{fullPath}", $"{cmdletHelp.Title}.md");
+                     if (new FileInfo(markdownPath).Exists && ! Force)
+@@ -74,10 +75,9 @@ namespace Microsoft.PowerShell.PlatyPS
+                 else
+                 {
+                     // should be error
+-                    WriteWarning(o.ToString() + " is not a CommandHelp object.");
++                    WriteWarning(commandObject.ToString() + " is not a CommandHelp object.");
+                 }
+             }
+         }
+     }
+ }
+-
+diff --git a/src/Command/ImportMamlCommand.cs b/src/Command/ImportMamlCommand.cs
+index 4d69805..4a39563 100644
+--- a/src/Command/ImportMamlCommand.cs
++++ b/src/Command/ImportMamlCommand.cs
+@@ -9,6 +9,7 @@ using System.IO;
+ using System.Management.Automation;
+ using System.Management.Automation.Runspaces;
+ 
++using Microsoft.PowerShell.PlatyPS;
+ using Microsoft.PowerShell.PlatyPS.MarkdownWriter;
+ using Microsoft.PowerShell.PlatyPS.Model;
+ 
+@@ -26,29 +27,10 @@ namespace Microsoft.PowerShell.PlatyPS
+         [Parameter(Mandatory = true, Position = 0, ValueFromPipeline = true)]
+         public string MamlFile { get; set; } = string.Empty;
+ 
+-        #endregion
+-
+-        TransformSettings transformSettings = new TransformSettings();
++        [Parameter()]
++        public TransformSettings Settings { get; set; } = new TransformSettings();
+ 
+-        protected override void BeginProcessing()
+-        {
+-            /*
+-            {
+-            transformSettings = new TransformSettings();
+-                AlphabeticParamsOrder = AlphabeticParamsOrder,
+-                DoubleDashList = ConvertDoubleDashLists,
+-                ExcludeDontShow = ExcludeDontShow,
+-                FwLink = FwLink,
+-                HelpVersion = HelpVersion,
+-                Locale = Locale is null ? CultureInfo.GetCultureInfo("en-US") : new CultureInfo(Locale),
+-                ModuleGuid = ModuleGuid is null ? null : Guid.Parse(ModuleGuid),
+-                ModuleName = ModuleName,
+-                OnlineVersionUrl = OnlineVersionUrl,
+-                Session = Session,
+-                UseFullTypeName = UseFullTypeName
+-            };
+-            */
+-        }
++        #endregion
+ 
+         protected override void ProcessRecord()
+         {
+@@ -58,7 +40,7 @@ namespace Microsoft.PowerShell.PlatyPS
+             {
+                 try
+                 {
+-                    cmdHelpObjs = new TransformMaml(transformSettings).Transform(new string[] { mamlPath.Path });
++                    cmdHelpObjs = new TransformMaml(Settings).Transform(new string[] { mamlPath.Path });
+ 
+                     if (cmdHelpObjs != null)
+                     {
+diff --git a/src/Command/NewMarkownHelpCommand.cs b/src/Command/NewMarkownHelpCommand.cs
+index 2ef7ea9..ed92ac3 100644
+--- a/src/Command/NewMarkownHelpCommand.cs
++++ b/src/Command/NewMarkownHelpCommand.cs
+@@ -59,6 +59,9 @@ namespace Microsoft.PowerShell.PlatyPS
+         [Parameter(ParameterSetName = "FromMaml")]
+         public string? ModuleName { get; set; }
+ 
++        /// <summary>
++        /// Include no metadata in the output file.
++        /// </summary>
+         [Parameter()]
+         public SwitchParameter NoMetadata { get; set; }
+ 
+@@ -189,7 +192,21 @@ namespace Microsoft.PowerShell.PlatyPS
+                 {
+                     var settings = new CommandHelpWriterSettings(Encoding, $"{fullPath}{Constants.DirectorySeparator}{cmdletHelp.Title}.md");
+                     using var cmdWrt = new CommandHelpMarkdownWriter(settings);
+-                    WriteObject(this.InvokeProvider.Item.Get(cmdWrt.Write(cmdletHelp, Metadata).FullName));
++                    Hashtable? outputMetadata = null;
++                    if (!NoMetadata)
++                    {
++                        outputMetadata = Metadata is null ? new Hashtable() : new Hashtable(Metadata);
++                        var baseMetadata = GetBaseMetadata(cmdletHelp);
++                        foreach (var metadataKey in baseMetadata.Keys)
++                        {
++                            if (!outputMetadata.ContainsKey(metadataKey))
++                            {
++                                outputMetadata.Add(metadataKey, baseMetadata[metadataKey]);
++                            }
++                        }
++                    }
++
++                    WriteObject(this.InvokeProvider.Item.Get(cmdWrt.Write(cmdletHelp, outputMetadata).FullName));
+                 }
+ 
+                 if (WithModulePage)
+@@ -205,6 +222,19 @@ namespace Microsoft.PowerShell.PlatyPS
+                 }
+             }
+         }
++
++        static Hashtable GetBaseMetadata(CommandHelp help)
++        {
++            var metadata = new Hashtable();
++            metadata.Add("title", help.Title);
++            metadata.Add("Module Name", help.ModuleName);
++            metadata.Add("Locale", help.Locale.Name);
++            metadata.Add("schema", "3.0.0");
++            metadata.Add("online version", help.OnlineVersionUrl);
++            metadata.Add("ms.date", DateTime.Now.ToString("MM/dd/yyyy"));
++            metadata.Add("external help file", help.ExternalHelpFile);
++            return metadata;
++        }
++
+     }
+ }
+-
+diff --git a/src/Common/YamlUtils.cs b/src/Common/YamlUtils.cs
+new file mode 100644
+index 0000000..6985c5e
+--- /dev/null
++++ b/src/Common/YamlUtils.cs
+@@ -0,0 +1,108 @@
++// Copyright (c) Microsoft Corporation.
++// Licensed under the MIT License.
++
++using System;
++using System.Collections.Generic;
++using System.Linq;
++using Microsoft.PowerShell.PlatyPS;
++using Microsoft.PowerShell.PlatyPS.Model;
++using YamlDotNet;
++using YamlDotNet.Serialization;
++using YamlDotNet.Serialization.NamingConventions;
++
++namespace Microsoft.PowerShell.PlatyPS
++{
++    /// <summary>
++    /// This class contains utility functions for working with yaml.
++    /// </summary>
++    internal class YamlUtils
++    {
++        private static Deserializer deserializer = (Deserializer)new DeserializerBuilder().Build();
++        private static Serializer serializer = (Serializer)new SerializerBuilder().WithNamingConvention(CamelCaseNamingConvention.Instance).Build();
++
++
++        /// <summary>
++        /// This does not use the yaml deserializer but attempts to parse the bare text into a dictionary.
++        /// </summary>
++        /// <param name="text">A string which represents a non-conforming yaml block</param>
++        /// <param name="result">dictionary</param>
++        /// <returns></returns>
++        internal static bool TryConvertYamlToDictionary(string text, out Dictionary<string, string>result)
++        {
++            Dictionary<string, string> valuePairs = new();
++            foreach(string line in text.Split(Constants.LineSplitter))
++            {
++                var trimmedLine = line.Trim();
++                if (string.IsNullOrEmpty(trimmedLine))
++                {
++                    continue;
++                }
++
++                var keyValue = trimmedLine.Split(new char[] {':'}, 2);
++                if (keyValue is null || keyValue.Length == 0 || string.IsNullOrEmpty(keyValue[0]))
++                {
++                    continue;
++                }
++                else if (keyValue.Length == 1)
++                {
++                    valuePairs.Add(keyValue[0].Trim(), string.Empty);
++                }
++                else if (keyValue.Length == 2)
++                {
++                    valuePairs.Add(keyValue[0].Trim(), keyValue[1].Trim());
++                }
++            }
++
++            result = valuePairs;
++            if (valuePairs.Keys.Count > 0)
++            {
++                return true;
++            }
++
++            return false;
++        }
++
++        internal static bool TryFixYaml(string badYaml, out string goodYaml)
++        {
++            if (TryConvertYamlToDictionary(badYaml, out var dict))
++            {
++                try
++                {
++                    var result = serializer.Serialize(dict);
++                    goodYaml = result;
++                    return true;
++                }
++                catch
++                {
++                    ;
++                }
++            }
++
++            goodYaml = string.Empty;
++            return false;
++        }
++
++        internal static bool TryLastChance(string badYaml, out ParameterMetadataV2 metadata)
++        {
++            if (TryFixYaml(badYaml, out var goodYaml))
++            {
++                if (ParameterMetadataV1.TryConvertToV1(goodYaml, out var v1metadata))
++                {
++                    if (v1metadata.TryConvertMetadataToV2(out var v2metadata))
++                    {
++                        metadata = v2metadata;
++                        return true;
++                    }
++                }
++            }
++
++            metadata = new ParameterMetadataV2();
++            return false;
++        }
++
++        internal static string SerializeElement(object o)
++        {
++            return serializer.Serialize(o);
++        }
++    }
++}
+diff --git a/src/MamlWriter/MamlHelpers.cs b/src/MamlWriter/MamlHelpers.cs
+index 6f1b671..b349aca 100644
+--- a/src/MamlWriter/MamlHelpers.cs
++++ b/src/MamlWriter/MamlHelpers.cs
+@@ -149,18 +149,6 @@ namespace Microsoft.PowerShell.PlatyPS.MAML
+         {
+ 
+             var pipelineInput = new PipelineInputType();
+-            pipelineInput = PipelineInputType.None;
+-
+-            if (parameter.PipelineInput.ByPropertyName)
+-            {
+-                pipelineInput |= PipelineInputType.ByPropertyName;
+-            }
+-
+-            if (parameter.PipelineInput.ByValue)
+-            {
+-                pipelineInput |= PipelineInputType.ByValue;
+-            }
+-
+             return pipelineInput;
+         }
+ 
+@@ -171,7 +159,9 @@ namespace Microsoft.PowerShell.PlatyPS.MAML
+             {
+                 parameterValue.DataType = parameter.Type;
+                 parameterValue.IsVariableLength = parameter.VariableLength;
+-                parameterValue.IsMandatory = parameter.Required;
++                // We just mark mandatory if one of the parameter sets is mandatory since MAML doesn't
++                // have a way to disambiguate these.
++                parameterValue.IsMandatory = parameter.ParameterSets.Any(x => x.IsRequired);
+             }
+             return parameterValue;
+         }
+@@ -180,10 +170,9 @@ namespace Microsoft.PowerShell.PlatyPS.MAML
+         {
+             var newParameter = new MAML.Parameter();
+             newParameter.Name = parameter.Name;
+-            newParameter.IsMandatory = parameter.Required;
++            newParameter.IsMandatory = parameter.ParameterSets.Any(x => x.IsRequired);
+             newParameter.SupportsGlobbing = parameter.Globbing;
+-            newParameter.SupportsPipelineInput = GetPipelineInputType(parameter);
+-            newParameter.Position = parameter.Position;
++            newParameter.Position = parameter.ParameterSets.FirstOrDefault().Position;
+             newParameter.Value = GetParameterValue(parameter);
+ 
+             if (parameter.Description is not null)
+diff --git a/src/MarkdownReader/CommandHelpMarkdownReader.cs b/src/MarkdownReader/CommandHelpMarkdownReader.cs
+index 8c07038..3068832 100644
+--- a/src/MarkdownReader/CommandHelpMarkdownReader.cs
++++ b/src/MarkdownReader/CommandHelpMarkdownReader.cs
+@@ -1,26 +1,21 @@
+ // Copyright (c) Microsoft Corporation.
+ // Licensed under the MIT License.
+ 
+-using Markdig.Extensions.CustomContainers;
+-using Markdig.Syntax;
+-using Markdig.Syntax.Inlines;
+-using Microsoft.PowerShell.PlatyPS.MarkdownWriter;
+-using Microsoft.PowerShell.PlatyPS.Model;
++// using Markdig.Extensions.CustomContainers;
+ using System;
+ using System.Collections.Generic;
+-using System.Collections;
+-// Copyright (c) Microsoft Corporation.
+-// Licensed under the MIT License.
+-
+ using System.Collections.Specialized;
+ using System.Collections.ObjectModel;
+-using System.Diagnostics;
+-using System.Drawing.Design;
+ using System.IO;
+ using System.Linq;
+-using System.Security.Cryptography;
++// using System.Security.Cryptography;
+ using System.Text;
+ using System.Text.RegularExpressions;
++using Markdig.Syntax;
++using Markdig.Syntax.Inlines;
++using Microsoft.PowerShell.PlatyPS.MarkdownWriter;
++using Microsoft.PowerShell.PlatyPS.Model;
++// using System.Management.Automation.Language;
+ 
+ namespace Microsoft.PowerShell.PlatyPS
+ {
+@@ -88,14 +83,31 @@ namespace Microsoft.PowerShell.PlatyPS
+             return ValidateMarkdown(md.Ast, out Issues);
+         }
+ 
++        /// <summary>
++        /// Captures whether there were errors found during the parsing.
++        /// </summary>
+         public static bool HadErrors { get; private set; } = false;
++
++        /// <summary>
++        /// The collection of parsing errors.
++        /// </summary>
+         public static List<ParseError> ParseErrors { get; private set; } = new List<ParseError>();
++
++        /// <summary>
++        /// Add an error to the collection.
++        /// </summary>
++        /// <param name="context">Information about the context where the error occurred.</param>
++        /// <param name="message">A message to further elaborate on the error.</param>
++        /// <param name="line">The line which caused the parsing error.</param>
+         public static void AddParseError(string context, string message, int line = -1)
+         {
+             ParseErrors.Add(new ParseError(context, message, line));
+             HadErrors = true;
+         }
+ 
++        /// <summary>
++        /// Clear the error collection.
++        /// </summary>
+         public static void ClearParseErrors()
+         {
+             ParseErrors.Clear();
+@@ -152,7 +164,7 @@ namespace Microsoft.PowerShell.PlatyPS
+                 "schema",
+                 "title"
+             };
+-            
++
+             foreach(var key in requiredKeys)
+             {
+                 if (metadata.Contains(key))
+@@ -401,7 +413,7 @@ namespace Microsoft.PowerShell.PlatyPS
+ 
+             markdownContent.Take();
+             var noteContent = markdownContent.GetStringFromAst(end);
+-            var dm2 = new DiagnosticMessage(DiagnosticMessageSource.Notes, "Notes content not found", DiagnosticSeverity.Information, $"Notes length = {noteContent.Length}", markdownContent.GetTextLine(start));
++            var dm2 = new DiagnosticMessage(DiagnosticMessageSource.Notes, "Notes content found", DiagnosticSeverity.Information, $"Notes length = {noteContent.Length}", markdownContent.GetTextLine(start));
+             diagnostics.Add(dm2);
+             return noteContent;
+         }
+@@ -518,10 +530,10 @@ namespace Microsoft.PowerShell.PlatyPS
+                 if (markdownContent.Take() is HeadingBlock syntaxBlock)
+                 {
+                     string parameterSetName = GetParameterSetName(syntaxBlock);
+-                    bool isDefault = parameterSetName.EndsWith("(default)", StringComparison.OrdinalIgnoreCase);
++                    bool isDefault = parameterSetName.EndsWith(Constants.DefaultString, StringComparison.OrdinalIgnoreCase);
+                     if (isDefault)
+                     {
+-                        parameterSetName = parameterSetName.Replace("(Default)", string.Empty).Trim();
++                        parameterSetName = parameterSetName.Replace(Constants.DefaultString, string.Empty).Trim();
+                     }
+ 
+                     if (markdownContent.GetCurrent() is FencedCodeBlock fcb)
+@@ -1003,6 +1015,7 @@ namespace Microsoft.PowerShell.PlatyPS
+ 
+             int currentIndex = startIndex;
+ 
++            // Read until we get to our next level 2 header (the end of the parameters)
+             while(currentIndex < nextHeaderLevel2)
+             {
+                 var parameterItemIndex = GetNextHeaderIndex(md, expectedHeaderLevel: 3, startIndex: currentIndex);
+@@ -1041,11 +1054,10 @@ namespace Microsoft.PowerShell.PlatyPS
+                     continue;
+                 }
+ 
++                // Get the next yaml block as it has all the parameter metadata
+                 var yamlBlockIndex = GetNextCodeBlock(md, parameterItemIndex, "yaml");
+-                string description = GetParameterDescription(markdownContent, parameterItemIndex + 1, yamlBlockIndex);
+-
++                string description = GetParameterDescription(markdownContent, parameterItemIndex + 1, yamlBlockIndex).Trim();
+                 var paramYamlBlock = GetParameterYamlBlock(md, parameterItemIndex + 1, language: "yaml");
+-                Dictionary<string, string> yamlDict;
+ 
+                 if (paramYamlBlock != null)
+                 {
+@@ -1054,93 +1066,54 @@ namespace Microsoft.PowerShell.PlatyPS
+                     // yaml does not allow '*' to start a value, so we need to change this to be (all).
+                     // yamlBlock = yamlBlock.Replace("* (all)","\"(all)\"");
+ 
+-                    StringReader stringReader = new StringReader(yamlBlock);
+-                    var deserializer = new YamlDotNet.Serialization.DeserializerBuilder().Build();
+-                    try
+-                    {
+-                        var yamlObject = deserializer.Deserialize(stringReader);
+-                        yamlDict = parseYamlBlock(yamlObject);
+-                    }
+-                    catch (Exception e) // Deserialize can fail, if it does we will need to parse the yaml block manually.
++                    if (ParameterMetadataV2.TryConvertToV2(yamlBlock, out var v2))
+                     {
+-                        AddParseError(parameterName, e.Message, md[parameterItemIndex].Line);
+                         diagnostics.Add(
+-                            new DiagnosticMessage(DiagnosticMessageSource.Parameter, $"{parameterName} found", DiagnosticSeverity.Error, "YAML Parse Failure", md[parameterItemIndex].Line + 1)
++                            new DiagnosticMessage(DiagnosticMessageSource.Parameter, $"{parameterName} found", DiagnosticSeverity.Information, "Version 2 metadata found", md[parameterItemIndex].Line + 1)
+                         );
+-                        yamlDict = new Dictionary<string, string>();
++                        parameters.Add(new Parameter(parameterName, description, v2));
+                     }
+-                }
+-                else
+-                {
+-                    yamlDict = new Dictionary<string, string>();
+-                }
+-
+-                if (! yamlDict.TryGetValue("Type", out string typeAsString))
+-                {
+-                    typeAsString = string.Empty;
+-                }
+-
+-                if (! yamlDict.TryGetValue("Position", out string positionAsString))
+-                {
+-                    positionAsString = string.Empty;
+-                }
+-
+-                Parameter parameter = new Parameter(parameterName, typeAsString.Trim(), positionAsString.Trim());
+-                diagnostics.Add(
+-                        new DiagnosticMessage(DiagnosticMessageSource.Parameter, $"{parameterName} found", DiagnosticSeverity.Information, "GetParameters", md[parameterItemIndex].Line)
+-                    );
+-
+-                if (yamlDict.TryGetValue("Parameter Sets", out string parameterSetsAsString))
+-                {
+-                    if (string.Equals(parameterSetsAsString, Constants.ParameterSetsAll, StringComparison.OrdinalIgnoreCase))
++                    else if (ParameterMetadataV1.TryConvertToV1(yamlBlock, out var v1))
+                     {
+-                        parameter.ParameterSets.Add(Constants.ParameterSetsAll);
++                        diagnostics.Add(
++                            new DiagnosticMessage(DiagnosticMessageSource.Parameter, $"{parameterName} found", DiagnosticSeverity.Information, "Version 1 metadata found", md[parameterItemIndex].Line + 1)
++                        );
++                        parameters.Add(Parameter.ConvertV1ParameterToV2(parameterName, description, v1));
+                     }
+-                    else
++                    else if (YamlUtils.TryConvertYamlToDictionary(yamlBlock, out var yamlDict))
+                     {
+-                        parameter.ParameterSets.AddRange(parameterSetsAsString.Trim().Split(',').Select(x => x.Trim()).ToArray());
++                        // Last ditch effort - try a dictionary
++                        AddParseError(parameterName, "YAML may have illegal elements, trying last chance", paramYamlBlock.Line);
++                        if (YamlUtils.TryLastChance(yamlBlock, out var lastChance))
++                        {
++                            diagnostics.Add(
++                                new DiagnosticMessage(DiagnosticMessageSource.Parameter, $"{parameterName} found", DiagnosticSeverity.Information, "found in LastChance parse", md[parameterItemIndex].Line + 1)
++                            );
++                                parameters.Add(new Parameter(parameterName, description, lastChance));
++                            }
++                        }
++                        else
++                        {
++                            AddParseError(parameterName, "YAML was not v1 or v2 shape", md[parameterItemIndex].Line);
++                        diagnostics.Add(
++                            new DiagnosticMessage(DiagnosticMessageSource.Parameter, $"{parameterName} found", DiagnosticSeverity.Error, "YAML Parse Failure", md[parameterItemIndex].Line + 1)
++                        );
+                     }
+                 }
+ 
+-                if(yamlDict.TryGetValue("Aliases", out string aliasesAsString))
+-                {
+-                    parameter.Aliases = aliasesAsString.Trim();
+-                }
+-
+-                if (yamlDict.TryGetValue("Accepted values", out string acceptedValuesAsString))
+-                {
+-                    parameter.AddAcceptedValueRange(acceptedValuesAsString.Split(Constants.Comma).Select(x => x.Trim()).ToArray());
+-                }
+-
+-                if (yamlDict.TryGetValue("Required", out string requiredAsString))
+-                {
+-                    parameter.Required = string.Equals(requiredAsString.Trim(), Constants.TrueString, StringComparison.OrdinalIgnoreCase);
+-                }
+-
+-                if (yamlDict.TryGetValue("Default value", out string defaultValuesAsString))
+-                {
+-                    parameter.DefaultValue = defaultValuesAsString.Trim();
+-                }
+-
+-                if (yamlDict.TryGetValue("Accept pipeline input", out string acceptedPipelineAsString))
+-                {
+-                    parameter.PipelineInput = GetPipelineInputInfoFromString(acceptedPipelineAsString); //new PipelineInputInfo(string.Equals(acceptedPipelineAsString.Trim(), Constants.TrueString, StringComparison.OrdinalIgnoreCase));
+-                }
+-
+-                if (yamlDict.TryGetValue("Accept wildcard characters", out string acceptWildCardAsString))
+-                {
+-                    parameter.Globbing = string.Equals(acceptWildCardAsString.Trim(), Constants.TrueString, StringComparison.OrdinalIgnoreCase);
+-
+-                }
+-
+-                parameter.Description = description.Trim();
+-                parameters.Add(parameter);
+                 currentIndex = parameterItemIndex + 1;
+             }
+ 
+             return parameters;
+         }
+ 
++        private static Parameter GetParameterFromV2ParameterMetadata(string name, ParameterMetadataV2 v2)
++        {
++            var parameter = new Parameter(name, v2.Type);
++
++            return parameter;
++        }
++
+         private static Regex newPipelineInfoFormat = new Regex(@"ByName \((?<n>False|True)\), ByValue \((?<v>False|True)\)");
+         private static PipelineInputInfo GetPipelineInputInfoFromString(string acceptedPipelineAsString)
+         {
+@@ -1167,9 +1140,9 @@ namespace Microsoft.PowerShell.PlatyPS
+             return new PipelineInputInfo(false);
+         }
+ 
+-        private static Dictionary<string, string> parseYamlBlock(object? parsedYamlObject)
++        private static Dictionary<string, object> parseYamlBlock(object? parsedYamlObject)
+         {
+-            Dictionary<string, string> metadataHeader = new Dictionary<string, string>();
++            Dictionary<string, object> metadataHeader = new Dictionary<string, object>();
+             if (parsedYamlObject is null)
+             {
+                 return metadataHeader;
+@@ -1655,7 +1628,7 @@ namespace Microsoft.PowerShell.PlatyPS
+                 return Ast[offset].Line + 1; // internally, we are 0 based
+             }
+         }
+-    
++
+         public bool IsEmptyHeader(int Level)
+         {
+             var currentHeader = Ast[CurrentIndex] as HeadingBlock;
+diff --git a/src/MarkdownReader/V1ParameterMetadata.cs b/src/MarkdownReader/V1ParameterMetadata.cs
+new file mode 100644
+index 0000000..b8d8797
+--- /dev/null
++++ b/src/MarkdownReader/V1ParameterMetadata.cs
+@@ -0,0 +1,322 @@
++using System;
++using System.Collections.Generic;
++using System.ComponentModel;
++using System.Linq;
++using System.Text;
++using System.Text.RegularExpressions;
++using YamlDotNet;
++using YamlDotNet.Serialization;
++using Microsoft.PowerShell.PlatyPS.MarkdownWriter;
++using Microsoft.PowerShell.PlatyPS.Model;
++
++namespace Microsoft.PowerShell.PlatyPS
++{
++    /// <summary>
++    /// This is needed to manage some of the Required yaml
++    /// which includes property set information with the state of required.
++    /// </summary>
++    public class RequiredWithParameterSetName
++    {
++        public string ParameterSetName = string.Empty;
++        public bool Required;
++
++        public RequiredWithParameterSetName(string name, bool required)
++        {
++            ParameterSetName = name;
++            Required = required;
++        }
++    }
++
++    public class ParameterMetadataV1
++    {
++		public string Type { get; set; } = string.Empty;
++		[YamlMember(Alias = "Parameter Sets")]
++
++		public string ParameterSets { get; set; } = string.Empty;
++
++		public string Aliases { get; set; } = string.Empty;
++
++		public string Required { get; set; } = string.Empty;
++
++		[YamlMember(Alias = "Accepted values")]
++        public string AcceptedValues { get; set; } = string.Empty;
++
++		public string Position { get; set; } = string.Empty;
++
++		[YamlMember(Alias = "Default value")]
++		public string DefaultValue { get; set; } = string.Empty;
++
++        [YamlMember(Alias = "Accept pipeline input")]
++        public string AcceptPipelineInput { get; set; } = string.Empty;
++
++		[YamlMember(Alias = "Accept wildcard characters")]
++		public bool AcceptWildcardCharacters { get; set; }
++
++        public string[] GetParameterSetList()
++        {
++            List<string> l = new List<string>();
++			if (string.IsNullOrEmpty(ParameterSets))
++			{
++				return new string[]{ "(All)" };
++			}
++
++            foreach(var p in ParameterSets.Split(Constants.Comma, StringSplitOptions.RemoveEmptyEntries))
++            {
++                l.Add(p.Trim());
++            }
++            return l.ToArray();
++        }
++
++        public bool TryGetRequiredAsBool(out bool value)
++        {
++            if (bool.TryParse(Required, out var result))
++            {
++                value = result;
++                return true;
++            }
++
++            value = false;
++            return false;
++        }
++
++        public static Regex RequiredTruePattern = new Regex(@"True \((.[^\)]+)\)", RegexOptions.IgnoreCase);
++        public List<string> GetRequiredParameterSets()
++        {
++            List<string> l = new();
++
++            var trueMatch = RequiredTruePattern.Match(Required);
++            if (trueMatch.Success)
++            {
++                string foundParameterSets = trueMatch.Groups[1].Value.Trim();
++                if (! string.IsNullOrEmpty(foundParameterSets))
++                {
++                    foreach(var parameterSet in foundParameterSets.Split(Constants.Comma, StringSplitOptions.RemoveEmptyEntries))
++                    {
++                        var pSetName = parameterSet.Trim();
++                        if (! string.IsNullOrEmpty(pSetName))
++                        {
++                            l.Add(pSetName);
++                        }
++                    }
++                }
++            }
++            else
++            {
++                l.Add(Constants.ParameterSetsAll);
++            }
++
++            return l;
++        }
++
++        // Get the list of accepted values.
++        // note we might read an string of spaces, so we need to trim
++        // and then return non-empty strings.
++        public List<string> GetAcceptedValues()
++        {
++            List<string> l = new();
++            if (AcceptedValues is null)
++            {
++                return l;
++            }
++
++            foreach(string v in AcceptedValues.Split(Constants.Comma))
++            {
++                var trimmedValue = v.Trim();
++                if (! string.IsNullOrEmpty(trimmedValue))
++                {
++                    l.Add(trimmedValue);
++                }
++            }
++
++            return l;
++        }
++
++        public bool ParameterSetIncludes(string name)
++        {
++            foreach(var p in ParameterSets.Split(Constants.Comma, StringSplitOptions.RemoveEmptyEntries))
++            {
++                if (string.Compare(p.Trim(), name, true) == 0)
++                {
++                    return true;
++                }
++            }
++            return false;
++        }
++
++		public string[] GetAliases()
++		{
++			if (string.IsNullOrEmpty(Aliases))
++			{
++				return new string[] { };
++			}
++
++            List<string> l = new List<string>();
++            foreach(var p in Aliases.Split(Constants.Comma, StringSplitOptions.RemoveEmptyEntries))
++            {
++                l.Add(p.Trim());
++            }
++            return l.ToArray();
++		}
++
++        // We have a number of things to check because there's no consistency in the
++        // documentation repositories.
++        private Regex trueNameRegex = new Regex(@"^true \(.*ByProperty", RegexOptions.IgnoreCase);
++        private Regex trueValueRegex = new Regex(@"^true \(.*ByValue", RegexOptions.IgnoreCase);
++        private Regex valueRegex = new Regex(@"^ByValue \((?<value>\w+)\), ByName \((?<name>\w+)\)", RegexOptions.IgnoreCase);
++
++		public bool GetByValue(string byValueAndProperty)
++		{
++            // This might be one of the following:
++            // ByValue (False), ByName (False)
++            // ByValue (False), ByName (True)
++            // ByValue (System.Object[]), ByName (System.Object[])
++            // ByValue (True), ByName (False)
++            // False
++            // True (ByPropertyName, ByValue)
++            // True (ByPropertyName)
++            // True (ByValue)
++
++            if (string.IsNullOrEmpty(byValueAndProperty))
++            {
++                return false;
++            }
++    
++            var stringValue = byValueAndProperty.Trim();
++
++			if (string.Compare(stringValue, "true", true) == 0)
++			{
++				return true;
++			}
++
++			if (string.Compare(stringValue, "false", true) == 0)
++			{
++				return false;
++			}
++
++            Match mInfo;
++            mInfo = trueValueRegex.Match(stringValue);
++            if (mInfo.Success)
++            {
++                return true;
++            }
++
++            mInfo = valueRegex.Match(stringValue);
++            if (mInfo.Success)
++            {
++                if(string.Compare(mInfo.Groups["value"].Value, "true", true) == 0)
++                {
++                    return true;
++                }
++            }
++
++			return false;
++		}
++
++		public bool GetByProperty(string byValueAndProperty)
++		{
++            if (string.IsNullOrEmpty(byValueAndProperty))
++            {
++                return false;
++            }
++    
++			var stringValue = byValueAndProperty.Trim();
++            // If it just says "True"
++			if (string.Compare(stringValue, "true", true) == 0)
++			{
++				return true;
++			}
++
++			if (string.Compare(stringValue, "false", true) == 0)
++			{
++				return false;
++			}
++
++            Match mInfo;
++            mInfo = trueNameRegex.Match(stringValue);
++            if (mInfo.Success)
++            {
++                return true;
++            }
++
++            mInfo = valueRegex.Match(stringValue);
++            if (mInfo.Success)
++            {
++                if(string.Compare(mInfo.Groups["name"].Value, "true", true) == 0)
++                {
++                    return true;
++                }
++            }
++
++			return false;
++		}
++
++        public static bool TryConvertToV1(string yaml, out ParameterMetadataV1 v1)
++        {
++            try
++            {
++                var result = new DeserializerBuilder().Build().Deserialize<ParameterMetadataV1>(yaml);
++                v1 = result;
++                return true;
++            }
++            catch
++            {
++                ; // do nothing we couldn't parse the yaml, and we'll return false.
++            }
++
++            v1 = new ParameterMetadataV1();
++            return false;
++        }
++
++        public bool TryConvertMetadataToV2(out ParameterMetadataV2 v2)
++        {
++            var result = new ParameterMetadataV2();
++			result.Type = Type;
++			result.DefaultValue = DefaultValue;
++			result.Globbing = AcceptWildcardCharacters;
++			result.Aliases.AddRange(GetAliases());
++			result.DontShow = false;
++            result.AcceptedValues = GetAcceptedValues();
++			foreach(var pSetName in GetParameterSetList())
++			{
++				var pSetV2 = new ParameterSetV2(pSetName, Position);
++				pSetV2.ValueByPipeline = GetByValue(AcceptPipelineInput);
++				pSetV2.ValueByPipelineByPropertyName = GetByProperty(AcceptPipelineInput);
++                if (TryGetRequiredAsBool(out var required))
++                {
++                    pSetV2.IsRequired = required;
++                }
++                else
++                {
++                    if(GetRequiredParameterSets().Any(p => string.Compare(p, pSetName) == 0))
++                    {
++                        pSetV2.IsRequired = true;
++                    }
++                }
++				result.ParameterSets.Add(pSetV2);
++			}
++
++            v2 = result;
++            return true;
++        }
++
++        public string ToYamlString()
++        {
++			StringBuilder sb = new();
++			sb.AppendLine("```yaml");
++			sb.Append(new SerializerBuilder().Build().Serialize(this));
++			sb.AppendLine("```");
++			return sb.ToString();
++        }
++
++        /// <summary>
++        /// The last ditch effort for converting a dictionary to a metadata object
++        /// </summary>
++        /// <param name="dict"></param>
++        /// <returns></returns>
++        public static ParameterMetadataV1 ConvertDictionaryToParameterMetadataV1(Dictionary<string, string>dict)
++        {
++            ParameterMetadataV1 metadata = new ();
++            return metadata; 
++        }
++    }
++}
+diff --git a/src/MarkdownReader/V2ParameterMetadata.cs b/src/MarkdownReader/V2ParameterMetadata.cs
+new file mode 100644
+index 0000000..62102c9
+--- /dev/null
++++ b/src/MarkdownReader/V2ParameterMetadata.cs
+@@ -0,0 +1,98 @@
++using System;
++using System.ComponentModel;
++using System.Collections;
++using System.Collections.Generic;
++using YamlDotNet.Serialization;
++using System.Text;
++
++namespace Microsoft.PowerShell.PlatyPS
++{
++    public class ParameterSetV2
++    {
++        public string Name { get; set;}
++        public string Position { get; set; }
++        public bool IsRequired { get; set; }
++        public bool ValueByPipeline { get; set; }
++        public bool ValueByPipelineByPropertyName { get; set; }
++        public bool ValueFromRemainingArguments { get; set; }
++
++        public ParameterSetV2()
++        {
++            Name = string.Empty;
++            Position = string.Empty;
++            IsRequired = false;
++            ValueByPipeline = false;
++            ValueByPipelineByPropertyName = false;
++            ValueFromRemainingArguments = false;
++        }
++
++		public ParameterSetV2(string name, string position)
++		{
++			Name = name;
++            Position = position;
++            IsRequired = false;
++            ValueByPipeline = false;
++            ValueByPipelineByPropertyName = false;
++            ValueFromRemainingArguments = false;
++		}
++    }
++
++    public class ParameterMetadataV2
++    {
++        public string Type { get; set;}
++        public string DefaultValue { get; set;}
++        public bool VariableLength { get; set;}
++        public bool Globbing { get; set;}
++        public List<string> ParameterValue { get; set;}
++        public List<string> Aliases { get; set;}
++        public List<ParameterSetV2> ParameterSets { get; set; }
++        public bool DontShow { get; set;}
++        public List<string> AcceptedValues { get; set; }
++        public string HelpMessage { get; set; }
++
++        public ParameterMetadataV2()
++        {
++            ParameterValue = new List<string>();
++            Type = string.Empty;
++            DefaultValue = string.Empty;
++            VariableLength = true;
++            Globbing = false;
++            Aliases = new List<string>();
++            ParameterSets = new List<ParameterSetV2>();
++            DontShow = false;
++            AcceptedValues = new List<string>();
++            HelpMessage = string.Empty;
++        }
++
++        public static ParameterMetadataV2 ConvertFromV1(ParameterMetadataV1 v1p)
++        {
++            return new ParameterMetadataV2();
++        }
++
++        public static bool TryConvertToV2(string yaml, out ParameterMetadataV2 v2)
++        {
++            try
++            {
++                var result = new DeserializerBuilder().Build().Deserialize<ParameterMetadataV2>(yaml);
++                v2 = result;
++                return true;
++            }
++            catch
++            {
++                ; // do nothing we couldn't parse the yaml, and we'll return false.
++            }
++
++            v2 = new ParameterMetadataV2();
++            return false;
++        }
++
++		public string ToYamlString()
++		{
++			StringBuilder sb = new();
++			sb.AppendLine("```yaml");
++			sb.Append(new SerializerBuilder().Build().Serialize(this));
++			sb.AppendLine("```");
++			return sb.ToString();
++		}
++    }
++}
+diff --git a/src/MarkdownWriter/CommandHelpMarkdownWriter.cs b/src/MarkdownWriter/CommandHelpMarkdownWriter.cs
+index dfa78bc..96d9bba 100644
+--- a/src/MarkdownWriter/CommandHelpMarkdownWriter.cs
++++ b/src/MarkdownWriter/CommandHelpMarkdownWriter.cs
+@@ -138,13 +138,13 @@ namespace Microsoft.PowerShell.PlatyPS.MarkdownWriter
+             {
+                 foreach (Parameter param in help.Parameters)
+                 {
+-                    string paramString = param.ToParameterString(Constants.mdParameterYamlBlockWithAcceptedValues);
++                    ParameterMetadataV2 v2 = param.GetMetadata();
+ 
+-                    if (!string.IsNullOrEmpty(paramString))
+-                    {
+-                        sb.AppendLine(paramString);
+-                        sb.AppendLine();
+-                    }
++                    sb.AppendLine(string.Format("### -{0}", param.Name));
++                    sb.AppendLine();
++                    sb.AppendLine(param.Description);
++                    sb.AppendLine();
++                    sb.AppendLine(v2.ToYamlString());
+                 }
+             }
+ 
+@@ -168,7 +168,7 @@ namespace Microsoft.PowerShell.PlatyPS.MarkdownWriter
+ 
+         internal override void WriteInputsOutputs(List<InputOutput> inputsoutputs, bool isInput)
+         {
+-            // JWT: should we emit something if there is no input/output
++            // Open Question: should we emit something if there is no input/output?
+             if (inputsoutputs is null)
+             {
+                 return;
+diff --git a/src/Model/CommandHelp.cs b/src/Model/CommandHelp.cs
+index 4e311db..b561f4d 100644
+--- a/src/Model/CommandHelp.cs
++++ b/src/Model/CommandHelp.cs
+@@ -5,6 +5,7 @@ using System;
+ using System.Collections.Generic;
+ using System.Collections.Specialized;
+ using System.Globalization;
++using YamlDotNet.Serialization;
+ 
+ namespace Microsoft.PowerShell.PlatyPS.Model
+ {
+@@ -45,14 +46,17 @@ namespace Microsoft.PowerShell.PlatyPS.Model
+ 
+         public List<InputOutput>? Outputs { get; private set; }
+ 
++        public string? Notes { get; set; }
++
+         public List<Links>? RelatedLinks { get; private set; }
+ 
++        [YamlIgnore]
+         public bool HasCmdletBinding { get; set; }
+ 
++        [YamlIgnore]
+         public bool HasWorkflowCommonParameters { get; set; }
+ 
+-        public string? Notes { get; set; }
+-
++        [YamlIgnore]
+         public Diagnostics Diagnostics { get; set; }
+ 
+         internal Dictionary<string, SyntaxItem> SyntaxDictionary { get; private set; }
+@@ -144,9 +148,9 @@ namespace Microsoft.PowerShell.PlatyPS.Model
+         internal void AddParameter(Parameter parameter)
+         {
+             Parameters.Add(parameter);
+-            foreach(var parameterSetName in parameter.ParameterSets)
++            foreach(var parameterSet in parameter.ParameterSets)
+             {
+-                if (string.Compare(parameterSetName, "(All)", StringComparison.OrdinalIgnoreCase) == 0)
++                if (string.Compare(parameterSet.Name, "(All)", StringComparison.OrdinalIgnoreCase) == 0)
+                 {
+                     foreach(var syntax in SyntaxDictionary.Values)
+                     {
+@@ -160,7 +164,7 @@ namespace Microsoft.PowerShell.PlatyPS.Model
+                         }
+                     }
+                 }
+-                else if (SyntaxDictionary.TryGetValue(parameterSetName, out var syntaxItem))
++                else if (SyntaxDictionary.TryGetValue(parameterSet.Name, out var syntaxItem))
+                 {
+                     try
+                     {
+diff --git a/src/Model/CommandHelpIEquality.cs b/src/Model/CommandHelpIEquality.cs
+index 6478cbb..0c7b0e9 100644
+--- a/src/Model/CommandHelpIEquality.cs
++++ b/src/Model/CommandHelpIEquality.cs
+@@ -198,7 +198,7 @@ namespace Microsoft.PowerShell.PlatyPS.Model
+         /// <returns>An integer representing the hash.</returns>
+         public override int GetHashCode()
+         {
+-            return this.GetHashCode();
++            return (Metadata, ModuleName, Title, Description).GetHashCode();
+         }
+ 
+         /// <summary>
+diff --git a/src/Model/Constants.cs b/src/Model/Constants.cs
+index 7841c5b..3574d3b 100644
+--- a/src/Model/Constants.cs
++++ b/src/Model/Constants.cs
+@@ -50,6 +50,8 @@ namespace Microsoft.PowerShell.PlatyPS.Model
+         internal const string FalseString = "False";
+         internal const string NoneString = "None";
+         internal const string NamedString = "Named";
++        internal const string ParameterSetsAllName = "__AllParameterSets";
++        internal const string DefaultString = "(Default)";
+         internal const string ParameterSetsAll = "(All)";
+         internal const string ParameterSetsAllForRequired = "All";
+         internal const string DelimiterComma = ", ";
+diff --git a/src/Model/Parameter.cs b/src/Model/Parameter.cs
+index 953d82e..6087653 100644
+--- a/src/Model/Parameter.cs
++++ b/src/Model/Parameter.cs
+@@ -3,6 +3,7 @@
+ 
+ using System;
+ using System.Collections.Generic;
++using System.Text;
+ using System.Linq;
+ 
+ namespace Microsoft.PowerShell.PlatyPS.Model
+@@ -12,14 +13,15 @@ namespace Microsoft.PowerShell.PlatyPS.Model
+     /// </summary>
+     public class Parameter : IEquatable<Parameter>
+     {
+-        public string? Description { get; set;}
+         public string Name { get; set;}
+-        public List<string>? ParameterValue { get; set;}
++
+         public string Type { get; set;}
+ 
+-        public string? DefaultValue { get; set;}
++        public string? Description { get; set;}
+ 
+-        public bool Required { get; set; }
++        public List<string>? ParameterValue { get; set;}
++
++        public string? DefaultValue { get; set;}
+ 
+         private List<string>? RequiredTrueParameterSets { get; set; }
+         private List<string>? RequiredFalseParameterSets { get; set; }
+@@ -29,29 +31,25 @@ namespace Microsoft.PowerShell.PlatyPS.Model
+ 
+         public bool Globbing { get; set;}
+ 
+-        public PipelineInputInfo PipelineInput { get; set;}
+-
+-        public string Position { get; set;}
+-
+         public string? Aliases { get; set;}
+ 
+-        public List<string> ParameterSets { get; private set;}
+-
+         public bool DontShow { get; set;}
+ 
+         public List<string>? AcceptedValues { get; private set; }
+ 
++        public List<ParameterSet> ParameterSets { get; set; }
++
+         public string? HelpMessage { get; set; }
+ 
+-        public Parameter(string name,
+-                         string type,
+-                         string position)
++        public Parameter(string name, string type)
+         {
+             Name = name;
+             Type = type;
+-            Position = position;
++            // Position = position;
+             ParameterSets = new();
+-            PipelineInput = new PipelineInputInfo(false);
++            // var ps = new ParameterSet("All");
++            // ParameterSets.Add(ps);
++            // PipelineInput = new PipelineInputInfo(false);
+         }
+ 
+         public void AddRequiredParameterSetsRange(bool required, IEnumerable<string> parameterSetNames)
+@@ -101,85 +99,97 @@ namespace Microsoft.PowerShell.PlatyPS.Model
+             AcceptedValues.AddRange(values);
+         }
+ 
+-        public void AddParameterSet(string parameterSetName)
++        public Parameter(string name, string description, ParameterMetadataV2 metadata)
+         {
+-            if (string.Equals(parameterSetName, "__AllParameterSets", StringComparison.OrdinalIgnoreCase))
+-            {
+-                ParameterSets.Add(Constants.ParameterSetsAll);
+-            }
+-            else
++            Name = name;
++            Type = metadata.Type;
++            Description = description;
++            VariableLength = metadata.VariableLength;
++            DefaultValue = metadata.DefaultValue;
++            Globbing = metadata.Globbing;
++            Aliases = string.Join(",", metadata.Aliases);
++            DontShow = metadata.DontShow;
++            AcceptedValues = metadata.AcceptedValues;
++            HelpMessage = metadata.HelpMessage;
++            ParameterValue = metadata.ParameterValue;
++            VariableLength = metadata.VariableLength;
++            DefaultValue = metadata.DefaultValue;
++
++            ParameterSets = new();
++            foreach(var parameterSet in metadata.ParameterSets)
+             {
+-                ParameterSets.Add(parameterSetName);
++                ParameterSets.Add(
++                    new ParameterSet()
++                    {
++                        Name = parameterSet.Name,
++                        Position = parameterSet.Position,
++                        IsRequired = parameterSet.IsRequired,
++                        ValueByPipeline = parameterSet.ValueByPipeline,
++                        ValueByPipelineByPropertyName = parameterSet.ValueByPipelineByPropertyName,
++                        ValueFromRemainingArguments = parameterSet.ValueFromRemainingArguments
++                    }
++                );
+             }
+         }
+ 
+-        public void AddParameterSetsRange(IEnumerable<string> values)
+-        {
+-            ParameterSets.AddRange(values);
+-        }
+-
+-        internal string ToParameterString(string fmt)
++        public static Parameter ConvertV1ParameterToV2(string name, string description, ParameterMetadataV1 V1metadata)
+         {
+-            if (Constants.CommonParametersNames.Contains(Name))
+-            {
+-                return string.Empty;
+-            }
+-
+-            if (AcceptedValues?.Count <= 0)
++            if (V1metadata.TryConvertMetadataToV2(out var metadata))
+             {
+-                return string.Format(Constants.mdParameterYamlBlock,
+-                    Name,
+-                    Description?.Trim(Environment.NewLine.ToCharArray()),
+-                    Type,
+-                    string.Join(Constants.DelimiterComma, ParameterSets),
+-                    Aliases,
+-                    RequiredString(),
+-                    Position,
+-                    DefaultValue,
+-                    PipelineInput.ToString(),
+-                    Globbing ? Constants.TrueString : Constants.FalseString,
+-                    DontShow ? Constants.TrueString : Constants.FalseString
+-                    );
++                return new Parameter(name, description, metadata);
+             }
+             else
+             {
+-                return string.Format(fmt, // Constants.mdParameterYamlBlockWithAcceptedValues,
+-                    Name,
+-                    Description?.Trim(Environment.NewLine.ToCharArray()),
+-                    Type,
+-                    ParameterSets?.Count > 0 ? string.Join(Constants.DelimiterComma, ParameterSets) : Constants.ParameterSetsAll,
+-                    Aliases,
+-                    AcceptedValues?.Count > 0 ? string.Join(Constants.DelimiterComma, AcceptedValues) : string.Empty,
+-                    RequiredString(),
+-                    Position,
+-                    DefaultValue,
+-                    PipelineInput.ToString(),
+-                    Globbing ? Constants.TrueString : Constants.FalseString,
+-                    DontShow ? Constants.TrueString : Constants.FalseString
+-                    );
++                throw new InvalidOperationException("Could not convert to v2");
+             }
+         }
+ 
+-        private string RequiredString()
++        public ParameterMetadataV2 GetMetadata()
+         {
+-            if (RequiredTrueParameterSets?.Count == ParameterSets?.Count)
++            var metadata = new ParameterMetadataV2();
++            metadata.Type = Type;
++            metadata.VariableLength = VariableLength;
++            metadata.Globbing = Globbing;
++
++            if (AcceptedValues is not null && AcceptedValues.Count > 0)
+             {
+-                return Constants.TrueString + "(All)";
++                metadata.AcceptedValues = AcceptedValues;
+             }
+-            else if (RequiredFalseParameterSets?.Count == ParameterSets?.Count)
++
++            if (DefaultValue is not null)
+             {
+-                return Constants.FalseString + "(All)";
++                metadata.DefaultValue = DefaultValue;
+             }
+-            else if (RequiredTrueParameterSets?.Count > 0 || RequiredFalseParameterSets?.Count > 0)
++
++            if (! string.IsNullOrEmpty(Aliases))
+             {
+-                return string.Format(Constants.RequiredParameterSetsTemplate,
+-                    RequiredTrueParameterSets?.Count > 0 ? string.Join(Constants.DelimiterComma, RequiredTrueParameterSets) : Constants.NoneString,
+-                    RequiredFalseParameterSets?.Count > 0 ? string.Join(Constants.DelimiterComma, RequiredFalseParameterSets) : Constants.NoneString);
++                var aliases = Aliases?.Split(Constants.Comma, StringSplitOptions.RemoveEmptyEntries);
++                if (aliases is not null)
++                    {
++                    foreach(var alias in aliases)
++                    {
++                        metadata.Aliases.Add(alias.Trim());
++                    }
++                }
+             }
+-            else
++
++            if (ParameterValue is not null && ParameterValue.Count > 0)
++            {
++                metadata.ParameterValue = ParameterValue;
++            }
++
++            foreach(var paramSet in ParameterSets)
+             {
+-                return Required ? Constants.TrueString : Constants.FalseString;
++                var pSet = new ParameterSetV2();
++                pSet.Name = string.Compare(paramSet.Name, "__AllParameterSets", true) == 0 ? "(All)" : paramSet.Name;
++                pSet.Position = paramSet.Position;
++                pSet.IsRequired = paramSet.IsRequired;
++                pSet.ValueByPipeline = paramSet.ValueByPipeline;
++                pSet.ValueByPipelineByPropertyName = paramSet.ValueByPipelineByPropertyName;
++                pSet.ValueFromRemainingArguments = paramSet.ValueFromRemainingArguments;
++                metadata.ParameterSets.Add(pSet);
+             }
++            return metadata;
+         }
+ 
+         public bool Equals(Parameter other)
+@@ -192,16 +202,13 @@ namespace Microsoft.PowerShell.PlatyPS.Model
+             return (
+                 string.Compare(Name, other.Name, StringComparison.CurrentCulture) == 0 &&
+                 string.Compare(Type, other.Type, StringComparison.CurrentCulture) == 0 &&
+-                string.Compare(Position, other.Position, StringComparison.CurrentCulture) == 0 &&
+                 string.Compare(Description, other.Description, StringComparison.CurrentCulture) == 0 &&
+                 string.Compare(Aliases, other.Aliases, StringComparison.CurrentCulture) == 0 &&
+                 string.Compare(DefaultValue, other.DefaultValue, StringComparison.CurrentCulture) == 0 &&
+                 string.Compare(HelpMessage, other.HelpMessage, StringComparison.CurrentCulture) == 0 &&
+-                Required == other.Required &&
+                 VariableLength == other.VariableLength &&
+                 Globbing == other.Globbing &&
+                 DontShow == other.DontShow &&
+-                PipelineInput == other.PipelineInput &&
+                 ParameterSets.SequenceEqual(other.ParameterSets) &&
+                 (AcceptedValues is null && other.AcceptedValues is null || AcceptedValues.SequenceEqual(other.AcceptedValues))
+             );
+@@ -224,7 +231,7 @@ namespace Microsoft.PowerShell.PlatyPS.Model
+ 
+         public override int GetHashCode()
+         {
+-            return (Name, Type, Position, Description, Aliases, DefaultValue, HelpMessage, Required, VariableLength, Globbing, DontShow, PipelineInput, ParameterSets, AcceptedValues).GetHashCode();
++            return (Name, Type, Description, Aliases, DefaultValue, HelpMessage, VariableLength, Globbing, DontShow, ParameterSets, AcceptedValues).GetHashCode();
+         }
+ 
+         public static bool operator ==(Parameter parameter1, Parameter parameter2)
+diff --git a/src/Model/ParameterSet.cs b/src/Model/ParameterSet.cs
+new file mode 100644
+index 0000000..e6a3e2a
+--- /dev/null
++++ b/src/Model/ParameterSet.cs
+@@ -0,0 +1,89 @@
++// Copyright (c) Microsoft Corporation.
++// Licensed under the MIT License.
++
++using System;
++using System.Collections.Generic;
++using System.Linq;
++
++namespace Microsoft.PowerShell.PlatyPS.Model
++{
++    /// <summary>
++    /// Class to represent the properties of a parameter in PowerShell help.
++    /// </summary>
++    public class ParameterSet : IEquatable<ParameterSet>
++    {
++        public string Name { get; set;} = string.Empty;
++        public string Position { get; set; } = string.Empty;
++        public bool IsRequired { get; set; } = false;
++        public bool ValueByPipeline { get; set; } = false;
++        public bool ValueByPipelineByPropertyName { get; set; } = false;
++        public bool ValueFromRemainingArguments { get; set; } = false;
++
++        public ParameterSet()
++        {
++
++        }
++
++        public ParameterSet(string name)
++        {
++            Name = name;
++        }
++
++        public bool Equals(ParameterSet other)
++        {
++            if (other is null)
++            {
++                return false;
++            }
++
++            return (
++                string.Compare(Name, other.Name, StringComparison.CurrentCulture) == 0 &&
++                string.Compare(Position, other.Position, StringComparison.CurrentCulture) == 0 &&
++                IsRequired == other.IsRequired &&
++                ValueByPipeline == other.ValueByPipeline &&
++                ValueByPipelineByPropertyName == other.ValueByPipelineByPropertyName &&
++                ValueFromRemainingArguments == other.ValueFromRemainingArguments);
++        }
++
++        public override bool Equals(object other)
++        {
++            if (other is null)
++            {
++                return false;
++            }
++
++            if (other is ParameterSet parameterSet2)
++            {
++                return Equals(parameterSet2);
++            }
++
++            return false;
++        }
++
++        public override int GetHashCode()
++        {
++            return (Name, Position, IsRequired, ValueByPipeline, ValueByPipelineByPropertyName, ValueFromRemainingArguments).GetHashCode();
++        }
++
++        public static bool operator ==(ParameterSet parameterSet1, ParameterSet parameterSet2)
++        {
++            if (parameterSet1 is not null && parameterSet2 is not null)
++            {
++                return parameterSet1.Equals(parameterSet2);
++            }
++
++            return false;
++        }
++
++        public static bool operator !=(ParameterSet parameterSet1, ParameterSet parameterSet2)
++        {
++            if (parameterSet1 is not null && parameterSet2 is not null)
++            {
++                return ! parameterSet1.Equals(parameterSet2);
++            }
++
++            return false;
++        }
++    }
++}
++
+diff --git a/src/Model/SyntaxItem.cs b/src/Model/SyntaxItem.cs
+index 0d86cf4..88c541e 100644
+--- a/src/Model/SyntaxItem.cs
++++ b/src/Model/SyntaxItem.cs
+@@ -64,59 +64,10 @@ namespace Microsoft.PowerShell.PlatyPS.Model
+                 return;
+             }
+ 
+-            AddParameterToSyntaxParameter(parameter);
+             _parameterNames.Add(name);
+-
+-            // First see if the parameter is positional
+-
+-            int position = int.MinValue;
+-
+-            if (int.TryParse(parameter.Position, out position))
+-            {
+-                // This can throw because the position is already in the list.
+-                _positionalParameters.Add(position, parameter);
+-                return;
+-            }
+-
+-            // The position should be 'Named' if not a number
+-            if (!string.Equals(parameter.Position, "Named", StringComparison.OrdinalIgnoreCase))
+-            {
+-                throw new InvalidCastException($"Invalid value '{parameter.Position}' provided for position for parameter '{name}'");
+-            }
+-
+-            if (parameter.Required)
+-            {
+-                _requiredParameters.Add(name, parameter);
+-                return;
+-            }
+-
+             _alphabeticOrderParameters.Add(name, parameter);
+         }
+ 
+-        public void AddParameterToSyntaxParameter(Parameter parameter)
+-        {
+-            bool isPositional = false;
+-            if (int.TryParse(parameter.Position, out int _))
+-            {
+-                isPositional = true;
+-            }
+-
+-            bool isSwitchParameter = string.Compare(parameter.Type, "SwitchParameter", true) != -1;
+-            if (! SyntaxParameters.Any(p => string.Compare(p.ParameterName, parameter.Name, true) == 0))
+-            {
+-                this.SyntaxParameters.Add(
+-                    new SyntaxParameter {
+-                        ParameterName = parameter.Name,
+-                        ParameterType = parameter.Type,
+-                        Position = parameter.Position,
+-                        IsMandatory = parameter.Required,
+-                        IsPositional = isPositional,
+-                        IsSwitchParameter = isSwitchParameter
+-                    }
+-                );
+-            }
+-        }
+-
+         private string GetFormattedSyntaxParameter(string paramName, string paramTypeName, bool isPositional, bool isRequired)
+         {
+             bool isSwitchParam = string.Equals(paramTypeName, "SwitchParameter", StringComparison.OrdinalIgnoreCase);
+diff --git a/src/Transform/TransformBase.cs b/src/Transform/TransformBase.cs
+index c6fa678..c654664 100644
+--- a/src/Transform/TransformBase.cs
++++ b/src/Transform/TransformBase.cs
+@@ -99,23 +99,31 @@ namespace Microsoft.PowerShell.PlatyPS
+ 
+             foreach (KeyValuePair<string, ParameterMetadata> parameterMetadata in cmdletInfo.Parameters)
+             {
+-                var paramAttribInfo = GetParameterAtributeInfo(parameterMetadata.Value.Attributes);
++                string parameterName = parameterMetadata.Key;
++                if (Constants.CommonParametersNames.Contains(parameterName))
++                {
++                    continue;
++                }
+ 
++                var paramAttribInfo = GetParameterAtributeInfo(parameterMetadata.Value.Attributes);
+                 string typeName = GetParameterTypeName(parameterMetadata.Value.ParameterType);
+ 
+-                Parameter param = new(parameterMetadata.Value.Name, typeName, paramAttribInfo.Position);
+-
++                Parameter param = new(parameterMetadata.Value.Name, typeName); 
+                 param.DontShow = paramAttribInfo.DontShow;
+-                param.Required = paramAttribInfo.Required;
+-                param.PipelineInput = new PipelineInputInfo(paramAttribInfo.PipelineInput);
+                 param.Globbing = paramAttribInfo.Globbing;
+                 param.HelpMessage = paramAttribInfo.HelpMessage;
+ 
+                 foreach (KeyValuePair<string, ParameterSetMetadata> paramSet in parameterMetadata.Value.ParameterSets)
+                 {
+-                    string paramSetName = paramSet.Key;
+-                    param.AddParameterSet(paramSetName);
+-                    param.AddRequiredParameterSets(paramSet.Value.IsMandatory, paramSetName);
++                    string parameterSetName = string.Compare(paramSet.Key, Constants.ParameterSetsAllName) == 0 ? Constants.ParameterSetsAll : paramSet.Key;
++                    ParameterSetMetadata metadata = paramSet.Value;
++                    var pSet = new Model.ParameterSet(parameterSetName);
++                    pSet.Position = metadata.Position == int.MinValue ? Constants.NamedString : paramSet.Value.Position.ToString();
++                    pSet.IsRequired = metadata.IsMandatory;
++                    pSet.ValueByPipeline = metadata.ValueFromPipeline;
++                    pSet.ValueByPipelineByPropertyName = metadata.ValueFromPipelineByPropertyName;
++                    pSet.ValueFromRemainingArguments = metadata.ValueFromRemainingArguments;
++                    param.ParameterSets.Add(pSet);
+                 }
+ 
+                 param.DefaultValue = GetParameterDefaultValueFromHelp(helpItem, param.Name);
+@@ -198,7 +206,18 @@ namespace Microsoft.PowerShell.PlatyPS
+                 SyntaxItem syn = new(cmdletInfo.Name, parameterSetInfo.Name, parameterSetInfo.IsDefault);
+ 
+                 foreach (CommandParameterInfo paramInfo in parameterSetInfo.Parameters)
+-                {
++                    {
++                    if (IsNotCommonParameter(paramInfo.Name)) {
++                        syn.SyntaxParameters.Add(
++                            new SyntaxParameter(
++                                paramInfo.Name,
++                                GetParameterTypeName(paramInfo.ParameterType),
++                                paramInfo.Position == int.MinValue ? "named" : paramInfo.Position.ToString(),
++                                paramInfo.IsMandatory,
++                                paramInfo.Position != int.MinValue,
++                                string.Compare(paramInfo.ParameterType.Name, "SwitchParameter", true) == 0)
++                        );
++                    }
+                     Parameter param = GetParameterInfo(cmdletInfo, helpItem, paramInfo);
+                     syn.AddParameter(param);
+                 }
+@@ -209,6 +228,11 @@ namespace Microsoft.PowerShell.PlatyPS
+             return syntaxItems;
+         }
+ 
++        private bool IsNotCommonParameter(string name)
++        {
++            return ! Constants.CommonParametersNames.Contains(name);
++        }
++
+         private string GetParameterTypeName(Type type)
+         {
+             string typeName = string.Empty;
+@@ -272,7 +296,7 @@ namespace Microsoft.PowerShell.PlatyPS
+ 
+             string typeName = GetParameterTypeName(paramInfo.ParameterType);
+ 
+-            Parameter param = new(paramInfo.Name, typeName, paramAttribInfo.Position);
++            Parameter param = new(paramInfo.Name, typeName);
+ 
+             string? descriptionFromHelp = GetParameterDescriptionFromHelp(helpItem, param.Name) ?? paramAttribInfo.HelpMessage;
+ 
+@@ -280,10 +304,8 @@ namespace Microsoft.PowerShell.PlatyPS
+                 string.Format(Constants.FillInParameterDescriptionTemplate, param.Name) :
+                 descriptionFromHelp;
+ 
+-            param.AddParameterSetsRange(GetParameterSetsOfParameter(param.Name, cmdletInfo));
+-
+             param.Aliases = string.Join("-", paramInfo.Aliases);
+-            param.Required = paramInfo.IsMandatory;
++            param.ParameterSets.ForEach(x => x.IsRequired = paramInfo.IsMandatory);
+ 
+             string defaultValueFromHelp = GetParameterDefaultValueFromHelp(helpItem, param.Name);
+ 
+@@ -291,8 +313,6 @@ namespace Microsoft.PowerShell.PlatyPS
+                 Constants.NoneString :
+                 defaultValueFromHelp;
+ 
+-            param.PipelineInput = new PipelineInputInfo(byValue: paramInfo.ValueFromPipeline, byPropertyName: paramInfo.ValueFromPipelineByPropertyName);
+-
+             return param;
+         }
+ 
+diff --git a/src/Transform/TransformMaml.cs b/src/Transform/TransformMaml.cs
+index ef76e5c..4080aba 100644
+--- a/src/Transform/TransformMaml.cs
++++ b/src/Transform/TransformMaml.cs
+@@ -404,7 +404,7 @@ namespace Microsoft.PowerShell.PlatyPS
+                             minKey--;
+                         }
+ 
+-                        parameter.Position = minKey.ToString();
++                        parameter.ParameterSets.ForEach(x => x.Position = minKey.ToString());
+                         try
+                         {
+                             syntaxItem.AddParameter(parameter);
+@@ -524,14 +524,15 @@ namespace Microsoft.PowerShell.PlatyPS
+                 }
+             }
+ 
+-            Parameter parameter = new Parameter(name, type, position);
++            // Parameter parameter = new Parameter(name, type, position);
++            Parameter parameter = new Parameter(name, type);
+             parameter.DefaultValue = defaultValue;
+             parameter.AddAcceptedValueRange(acceptedValues);
+             parameter.Description = description;
+-            parameter.Required = required;
++            // we will set the required attributed to all parameter sets since MAML doesn't have a way to disambiguate.
++            parameter.ParameterSets.ForEach(x => x.IsRequired = required);
+             parameter.VariableLength = variableLength;
+             parameter.Globbing = globbing;
+-            parameter.PipelineInput = new PipelineInputInfo(pipelineInput);
+             parameter.Aliases = aliases;
+ 
+             // need to go the end of command:parameter
+@@ -540,23 +541,6 @@ namespace Microsoft.PowerShell.PlatyPS
+                 reader.ReadEndElement();
+             }
+ 
+-            // Update parameter.ParameterSets only if we are reading for parameters. Not for syntax.
+-            if (parameterSetCount != -1)
+-            {
+-                if (_paramSetMap.TryGetValue(name, out List<string>? paramSetList))
+-                {
+-                    if (paramSetList is not null)
+-                    {
+-                        // If the parameter is in all parameter sets then dont add.
+-                        // This ensures it is marked as present in all parameter sets.
+-                        if (paramSetList is not null && paramSetList.Count != parameterSetCount)
+-                        {
+-                            parameter.AddParameterSetsRange(paramSetList);
+-                        }
+-                    }
+-                }
+-            }
+-
+             return parameter;
+         }
+ 
+diff --git a/src/Transform/TransformSettings.cs b/src/Transform/TransformSettings.cs
+index ecc73a6..1eeb752 100644
+--- a/src/Transform/TransformSettings.cs
++++ b/src/Transform/TransformSettings.cs
+@@ -8,21 +8,21 @@ using System.Management.Automation.Runspaces;
+ 
+ namespace Microsoft.PowerShell.PlatyPS
+ {
+-    internal class TransformSettings
++    public class TransformSettings
+     {
+-        internal string? FwLink { get; set; }
+-        internal string? HelpVersion { get; set; }
+-        internal CultureInfo Locale { get; set; }
+-        internal Hashtable? Metadata { get; set; }
+-        internal Guid? ModuleGuid { get; set; }
+-        internal string? ModuleName { get; set; }
+-        internal string? OnlineVersionUrl { get; set; }
+-        internal bool? CreateModulePage { get; set; }
+-        internal bool? DoubleDashList { get; set; }
+-        internal bool? AlphabeticParamsOrder { get; set; }
+-        internal bool? UseFullTypeName { get; set; }
+-        internal PSSession? Session { get; set; }
+-        internal bool? ExcludeDontShow { get; set; }
++        public string? FwLink { get; set; }
++        public string? HelpVersion { get; set; }
++        public CultureInfo Locale { get; set; }
++        public Hashtable? Metadata { get; set; }
++        public Guid? ModuleGuid { get; set; }
++        public string? ModuleName { get; set; }
++        public string? OnlineVersionUrl { get; set; }
++        public bool? CreateModulePage { get; set; }
++        public bool? DoubleDashList { get; set; }
++        public bool? AlphabeticParamsOrder { get; set; }
++        public bool? UseFullTypeName { get; set; }
++        public PSSession? Session { get; set; }
++        public bool? ExcludeDontShow { get; set; }
+ 
+         public TransformSettings()
+         {
+diff --git a/src/YamlWriter/CommandHelpYamlWriter.cs b/src/YamlWriter/CommandHelpYamlWriter.cs
+index 1890185..58b6f01 100644
+--- a/src/YamlWriter/CommandHelpYamlWriter.cs
++++ b/src/YamlWriter/CommandHelpYamlWriter.cs
+@@ -210,35 +210,7 @@ namespace Microsoft.PowerShell.PlatyPS.YamlWriter
+ 
+             if (help.Parameters?.Count > 0)
+             {
+-                foreach (Parameter param in help.Parameters)
+-                {
+-                    /*
+-                    The metadata that we write out for each parameter is:
+-                    name
+-                    type
+-                    description
+-                    defaultValue
+-                    pipelineInput
+-                    position (as string)
+-                    aliases
+-                    parameterValueGroup
+-                    */
+-                    sb.AppendLine(string.Format("- name: {0}", param.Name));
+-                    sb.AppendLine(string.Format("  type: {0}", param.Type));
+-                    sb.AppendLine("  description: |+");
+-                    if (param.Description is not null)
+-                    {
+-                        foreach(var line in param.Description.Split(Constants.LineSplitter))
+-                        {
+-                            sb.AppendLine(string.Format("    {0}", line));
+-                        }
+-                    }
+-                    sb.AppendLine(string.Format("  defaultValue: {0}", param.DefaultValue ?? "None"));
+-                    sb.AppendLine(string.Format("  pipelineInput: {0}", param.PipelineInput));
+-                    sb.AppendLine(string.Format("  position: \"{0}\"", param.Position));
+-                    sb.AppendLine(string.Format("  aliases: {0}", param.Aliases));
+-                    sb.AppendLine(string.Format("  parameterValueGroup: \"{0}\"", string.Empty)); // ????
+-                }
++                sb.AppendLine(YamlUtils.SerializeElement(help.Parameters));
+ 
+                 if (help.HasCmdletBinding)
+                 {

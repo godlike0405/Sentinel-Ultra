@@ -1,0 +1,46 @@
+schema_version = "1.3"
+
+[metadata]
+pass_at_k_opus_4_8 = "0/4"
+pass_at_k_gpt_5_5 = "3/4"
+hardening_cycles = "3"
+agent_hardened = "true"
+solvable = false
+author_name = "anonymous"
+author_email = "anonymous@snorkel.ai"
+# --- swe_ultra_requirements §4 field names ---
+category = "implementation"
+subcategory = "feature"
+coding_language = "go"
+repo_name = "sif"
+repo_license = "BSD-3-Clause"
+source_pr_url = "https://github.com/vmfunc/sif/pull/367"
+base_commit_sha = "7ea1cd28d5b535b8ea7826de9100e12907bc2fd0"
+model_difficulty = "hard"
+tags = ["concurrency", "worker-pool", "cli-flag", "go", "scanner"]
+# --- legacy aliases (kept for backward-compatible internal consumers) ---
+difficulty = "hard"
+task_type = "implementation"
+task_subtype = "feature"
+source = "https://github.com/vmfunc/sif/pull/367"
+language = "go"
+difficulty_explanation = "The latest recorded rollouts solved 0 of 4 Opus attempts and 3 of 4 GPT attempts. The hardened scope requires deterministic aggregation of simultaneous failures, fail-fast scheduling with in-flight draining, process-wide coordination across overlapping parallel runs, race-safe shared output, and restoration of sequential terminal behavior after success or failure."
+expert_time_estimate_min = 90.0
+junior_time_estimate_min = 300.0
+pr_created_at = "2026-07-10T00:11:06Z"
+pr_merged_at = "2026-07-12T21:23:35Z"
+
+[verifier]
+timeout_sec = 1800.0
+
+[agent]
+timeout_sec = 7200.0
+
+[environment]
+build_timeout_sec = 1800.0
+cpus = 4
+memory_mb = 8192
+storage_mb = 10240
+gpus = 0
+os = "linux"
+workdir = "/app"

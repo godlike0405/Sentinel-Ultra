@@ -1,0 +1,113 @@
+diff --git a/Runtime/Utils/UnityObjectNameComparer.cs b/Runtime/Utils/UnityObjectNameComparer.cs
+index 921e35c..5679a5a 100644
+--- a/Runtime/Utils/UnityObjectNameComparer.cs
++++ b/Runtime/Utils/UnityObjectNameComparer.cs
+@@ -2,6 +2,7 @@
+ {
+     using System;
+     using System.Collections.Generic;
++    using System.Text.RegularExpressions;
+ #if UNITY_EDITOR
+     using UnityEditor;
+ #endif
+@@ -11,6 +12,11 @@
+     {
+         public static readonly UnityObjectNameComparer<T> Instance = new();
+ 
++        private static readonly Regex TrailingNumberRegex = new(
++            @"^(.*?)(\d+)$",
++            RegexOptions.Compiled
++        );
++
+         private UnityObjectNameComparer() { }
+ 
+         public int Compare(T x, T y)
+@@ -30,7 +36,7 @@
+                 return -1;
+             }
+ 
+-            int comparison = string.Compare(x.name, y.name, StringComparison.OrdinalIgnoreCase);
++            int comparison = CompareNames(x.name, y.name);
+             if (comparison != 0)
+             {
+                 return comparison;
+@@ -50,5 +56,79 @@
+ 
+             return comparison;
+         }
++
++        private static int CompareNames(string left, string right)
++        {
++            if (left == null || right == null)
++            {
++                return string.Compare(left, right, StringComparison.OrdinalIgnoreCase);
++            }
++
++            Match leftMatch = TrailingNumberRegex.Match(left);
++            Match rightMatch = TrailingNumberRegex.Match(right);
++
++            if (leftMatch.Success && rightMatch.Success)
++            {
++                int prefix = string.Compare(
++                    leftMatch.Groups[1].Value,
++                    rightMatch.Groups[1].Value,
++                    StringComparison.OrdinalIgnoreCase
++                );
++                if (prefix != 0)
++                {
++                    return prefix;
++                }
++
++                return CompareTrailingNumbers(
++                    leftMatch.Groups[2].Value,
++                    rightMatch.Groups[2].Value
++                );
++            }
++
++            // A name without a trailing number sorts ahead of one that has it.
++            if (leftMatch.Success)
++            {
++                return 1;
++            }
++
++            if (rightMatch.Success)
++            {
++                return -1;
++            }
++
++            return string.Compare(left, right, StringComparison.OrdinalIgnoreCase);
++        }
++
++        private static int CompareTrailingNumbers(string left, string right)
++        {
++            int leftStart = 0;
++            while (leftStart < left.Length && left[leftStart] == '0')
++            {
++                ++leftStart;
++            }
++
++            int rightStart = 0;
++            while (rightStart < right.Length && right[rightStart] == '0')
++            {
++                ++rightStart;
++            }
++
++            int leftLength = left.Length - leftStart;
++            int rightLength = right.Length - rightStart;
++            int comparison = leftLength.CompareTo(rightLength);
++            if (comparison != 0)
++            {
++                return comparison;
++            }
++
++            return string.Compare(
++                left,
++                leftStart,
++                right,
++                rightStart,
++                leftLength,
++                StringComparison.Ordinal
++            );
++        }
+     }
+ }

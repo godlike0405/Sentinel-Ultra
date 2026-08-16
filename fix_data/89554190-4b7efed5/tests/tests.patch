@@ -1,0 +1,714 @@
+diff --git a/tests/unit/modules/default/weather/providers/buienradar_spec.js b/tests/unit/modules/default/weather/providers/buienradar_spec.js
+new file mode 100755
+index 00000000..3f6e587c
+--- /dev/null
++++ b/tests/unit/modules/default/weather/providers/buienradar_spec.js
+@@ -0,0 +1,708 @@
++/**
++ * Buienradar Provider Tests
++ *
++ * Tests data parsing for current, forecast, and hourly weather types.
++ * Buienradar covers NL/BE only, metric system, no API key required.
++ */
++import { http, HttpResponse } from "msw";
++import { setupServer } from "msw/node";
++import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from "vitest";
++
++const BUIENRADAR_URL = "https://forecast.buienradar.nl/2.0/forecast/*";
++
++/**
++ * Builds a stable Buienradar mock payload for parsing tests.
++ * @returns {object} Buienradar forecast response fixture.
++ */
++function buildBuienradarResponse () {
++	const today = "2100-01-01";
++	const tomorrow = "2100-01-02";
++
++	const makeHour = (datetime, overrides = {}) => ({
++		datetime,
++		temperature: "5",
++		feeltemperature: "3",
++		humidity: "80",
++		windspeedms: "4",
++		winddirectiondegrees: "180",
++		precipitationmm: "0.5",
++		precipitation: "60",
++		iconcode: "a",
++		...overrides
++	});
++
++	return {
++		location: {
++			name: "Rotterdam",
++			lat: 51.92,
++			lon: 4.48
++		},
++		days: [
++			{
++				date: today,
++				sunrise: `${today}T07:00:00`,
++				sunset: `${today}T17:00:00`,
++				mintemp: "1",
++				maxtemp: "8",
++				humidity: "75",
++				windspeedms: "5",
++				winddirectiondegrees: "200",
++				precipitationmm: "2.5",
++				precipitation: "70",
++				iconcode: "b",
++				hours: [
++					makeHour(`${today}T12:00:00`, { temperature: 6, iconcode: "a" }),
++					makeHour(`${today}T13:00:00`, { temperature: 7, iconcode: "b" }),
++					makeHour(`${today}T14:00:00`, { temperature: 7.5, iconcode: "c" })
++				]
++			},
++			{
++				date: tomorrow,
++				sunrise: `${tomorrow}T07:01:00`,
++				sunset: `${tomorrow}T17:02:00`,
++				mintemp: "0",
++				maxtemp: "6",
++				windspeedms: "6",
++				winddirectiondegrees: "220",
++				precipitationmm: "1.0",
++				precipitation: "40",
++				iconcode: "f",
++				hours: []
++			}
++		]
++	};
++}
++
++let server;
++
++beforeAll(() => {
++	server = setupServer();
++	server.listen({ onUnhandledRequest: "bypass" });
++});
++
++afterAll(() => {
++	server.close();
++});
++
++afterEach(() => {
++	server.resetHandlers();
++});
++
++describe("BuienradarProvider", () => {
++	let BuienradarProvider;
++
++	beforeAll(async () => {
++		const module = await import("../../../../../../defaultmodules/weather/providers/buienradar");
++		BuienradarProvider = module.default;
++	});
++
++	describe("Constructor & Configuration", () => {
++		it("should apply defaults while allowing configuration overrides", () => {
++			const defaults = new BuienradarProvider({ locationId: 6275 });
++			expect(() => defaults.start()).not.toThrow();
++			expect(() => defaults.stop()).not.toThrow();
++			expect(defaults.config.apiBase).toBe("https://forecast.buienradar.nl/2.0/forecast");
++			expect(defaults.config.type).toBe("current");
++			expect(defaults.config.maxEntries).toBe(5);
++			expect(defaults.config.updateInterval).toBe(10 * 60 * 1000);
++
++			const customized = new BuienradarProvider({
++				apiBase: "https://weather.example.test",
++				locationId: 1234,
++				type: "hourly",
++				maxEntries: 9,
++				updateInterval: 123456
++			});
++			expect(customized.config).toEqual(expect.objectContaining({
++				apiBase: "https://weather.example.test",
++				locationId: 1234,
++				type: "hourly",
++				maxEntries: 9,
++				updateInterval: 123456
++			}));
++		});
++
++		it("should use the configured endpoint and location when started", async () => {
++			const provider = new BuienradarProvider({
++				apiBase: "https://weather.example.test/forecast/",
++				locationId: 1234,
++				updateInterval: 123456
++			});
++			const requestPromise = new Promise((resolve) => {
++				server.use(http.get("https://weather.example.test/forecast/*", ({ request }) => {
++					resolve(request.url);
++					return HttpResponse.json(buildBuienradarResponse());
++				}));
++			});
++			provider.setCallbacks(vi.fn(), vi.fn());
++
++			provider.initialize();
++			provider.start();
++
++			const requestedUrl = new URL(await requestPromise);
++			expect(requestedUrl.origin).toBe("https://weather.example.test");
++			expect(requestedUrl.pathname).toBe("/forecast/1234");
++			expect(provider.config.updateInterval).toBe(123456);
++			provider.stop();
++		});
++
++		it("should fetch repeatedly after start and stop future fetches", async () => {
++			const previousTestMode = process.env.mmTestMode;
++			process.env.mmTestMode = "false";
++			const provider = new BuienradarProvider({ locationId: 6275, updateInterval: 30 });
++			let requestCount = 0;
++			const onData = vi.fn();
++			let releaseSecondResponse;
++			let markSecondRequestStarted;
++			const secondRequestStarted = new Promise((resolve) => {
++				markSecondRequestStarted = resolve;
++			});
++			const secondResponseReleased = new Promise((resolve) => {
++				releaseSecondResponse = resolve;
++			});
++			provider.setCallbacks(onData, vi.fn());
++			server.use(http.get(BUIENRADAR_URL, async () => {
++				requestCount += 1;
++				if (requestCount === 2) {
++					markSecondRequestStarted();
++					await secondResponseReleased;
++				}
++				return HttpResponse.json(buildBuienradarResponse());
++			}));
++
++			try {
++				provider.initialize();
++				provider.start();
++				await secondRequestStarted;
++				provider.stop();
++				releaseSecondResponse();
++				await new Promise((resolve) => setTimeout(resolve, 80));
++				expect(requestCount).toBe(2);
++				expect(onData).toHaveBeenCalledTimes(1);
++			} finally {
++				provider.stop();
++				if (previousTestMode === undefined) delete process.env.mmTestMode;
++				else process.env.mmTestMode = previousTestMode;
++			}
++		});
++
++		it("should call error callback when locationId is missing", () => {
++			const provider = new BuienradarProvider({});
++			const onData = vi.fn();
++			const onError = vi.fn();
++			let requestCount = 0;
++			server.use(http.get(BUIENRADAR_URL, () => {
++				requestCount += 1;
++				return HttpResponse.json(buildBuienradarResponse());
++			}));
++			provider.setCallbacks(onData, onError);
++			provider.initialize();
++			expect(onError).toHaveBeenCalledWith(expect.objectContaining({
++				translationKey: expect.stringMatching(/\S/)
++			}));
++			expect(onData).not.toHaveBeenCalled();
++			expect(requestCount).toBe(0);
++			expect(() => provider.start()).not.toThrow();
++			expect(() => provider.stop()).not.toThrow();
++		});
++	});
++
++	describe("Current Weather Parsing", () => {
++		it("should parse current weather, set locationName, and merge day metadata", async () => {
++			const provider = new BuienradarProvider({ locationId: 6275, type: "current" });
++			vi.useFakeTimers({ toFake: ["Date"] });
++			vi.setSystemTime(new Date("2100-01-01T13:10:00Z"));
++
++			const dataPromise = new Promise((resolve, reject) => {
++				provider.setCallbacks(resolve, reject);
++			});
++
++			server.use(
++				http.get(BUIENRADAR_URL, () => HttpResponse.json(buildBuienradarResponse()))
++			);
++
++			provider.initialize();
++			provider.start();
++
++			const result = await dataPromise;
++
++			expect(provider.locationName).toBe("Rotterdam");
++			expect(result.temperature).toBe(7);
++			expect(result.humidity).toBe(80);
++			expect(result.windSpeed).toBe(4);
++			expect(result.windFromDirection).toBe(180);
++			expect(result.minTemperature).toBe(1);
++			expect(result.maxTemperature).toBe(8);
++			expect(result.precipitationAmount).toBe(0.5);
++			expect(result.precipitationProbability).toBe(60);
++			expect(result.precipitationUnits).toBe("mm");
++			expect(result.sunrise).toBeInstanceOf(Date);
++			expect(result.sunset).toBeInstanceOf(Date);
++			expect(typeof result.weatherType).toBe("string");
++			vi.useRealTimers();
++		});
++
++		it("should ignore invalid current candidates and emit valid dates", async () => {
++			const provider = new BuienradarProvider({ locationId: 6275, type: "current" });
++			const payload = buildBuienradarResponse();
++			payload.days[0].hours = [{ datetime: "not-a-date", temperature: 99, iconcode: "a" }];
++			payload.days[1].hours = [{ datetime: "2100-01-02T13:00:00", temperature: 7, iconcode: "b" }];
++
++			const dataPromise = new Promise((resolve) => {
++				provider.setCallbacks(resolve, vi.fn());
++			});
++
++			server.use(
++				http.get(BUIENRADAR_URL, () => HttpResponse.json(payload))
++			);
++
++			provider.initialize();
++			provider.start();
++
++			const result = await dataPromise;
++
++			expect(result.temperature).toBe(7);
++			expect(result.minTemperature).toBe(0);
++			expect(result.maxTemperature).toBe(6);
++			expect(result.date).toBeInstanceOf(Date);
++			expect(result.sunrise).toBeInstanceOf(Date);
++			expect(result.sunset).toBeInstanceOf(Date);
++			expect(Number.isNaN(result.date.getTime())).toBe(false);
++			expect(Number.isNaN(result.sunrise.getTime())).toBe(false);
++			expect(Number.isNaN(result.sunset.getTime())).toBe(false);
++		});
++
++		it("should report an error when no usable current record remains", async () => {
++			const provider = new BuienradarProvider({ locationId: 6275, type: "current" });
++			const onData = vi.fn();
++			const errorPromise = new Promise((resolve) => provider.setCallbacks(onData, resolve));
++			const payload = buildBuienradarResponse();
++			payload.days[0].hours = [
++				{ datetime: "invalid-one", temperature: 10 },
++				{ datetime: "", temperature: 11 }
++			];
++
++			server.use(http.get(BUIENRADAR_URL, () => HttpResponse.json(payload)));
++			provider.initialize();
++			provider.start();
++
++			const error = await errorPromise;
++			expect(onData).not.toHaveBeenCalled();
++			expect(error).toEqual(expect.objectContaining({
++				message: expect.stringMatching(/\S/),
++				translationKey: expect.stringMatching(/\S/)
++			}));
++		});
++
++		it("should strictly parse numeric strings while preserving zero and negatives", async () => {
++			const provider = new BuienradarProvider({ locationId: 6275, type: "current" });
++
++			const dataPromise = new Promise((resolve) => {
++				provider.setCallbacks(resolve, vi.fn());
++			});
++
++			const payload = buildBuienradarResponse();
++			payload.days[0].hours = [
++				{
++					datetime: "2100-01-01T12:00:00",
++					temperature: "12.5C",
++					humidity: "",
++					windspeedms: false,
++					winddirectiondegrees: "0",
++					precipitationmm: "-1.25",
++					precipitation: "Infinity",
++					iconcode: "a"
++				}
++			];
++			payload.days[0].mintemp = "-3";
++			payload.days[0].maxtemp = {};
++
++			server.use(
++				http.get(BUIENRADAR_URL, () => HttpResponse.json(payload))
++			);
++
++			provider.initialize();
++			provider.start();
++
++			const result = await dataPromise;
++
++			expect(result.temperature).toBeUndefined();
++			expect(result.humidity).toBeUndefined();
++			expect(result.windSpeed).toBeUndefined();
++			expect(result.windFromDirection).toBe(0);
++			expect(result.precipitationAmount).toBe(-1.25);
++			expect(result.precipitationProbability).toBeUndefined();
++			expect(result.minTemperature).toBe(-3);
++			expect(result.maxTemperature).toBeUndefined();
++		});
++	});
++
++	describe("Forecast Parsing", () => {
++		it("should parse daily forecast data", async () => {
++			const provider = new BuienradarProvider({ locationId: 6275, type: "forecast", maxEntries: 2 });
++
++			const dataPromise = new Promise((resolve) => {
++				provider.setCallbacks(resolve, vi.fn());
++			});
++
++			server.use(
++				http.get(BUIENRADAR_URL, () => HttpResponse.json(buildBuienradarResponse()))
++			);
++
++			provider.initialize();
++			provider.start();
++
++			const result = await dataPromise;
++
++			expect(Array.isArray(result)).toBe(true);
++			expect(result).toHaveLength(2);
++
++			expect(result[0].minTemperature).toBe(1);
++			expect(result[0].maxTemperature).toBe(8);
++			expect(result[0].humidity).toBe(75);
++			expect(result[0].windSpeed).toBe(5);
++			expect(result[0].windFromDirection).toBe(200);
++			expect(result[0].precipitationAmount).toBe(2.5);
++			expect(result[0].precipitationProbability).toBe(70);
++			expect(result[0].sunrise).toBeInstanceOf(Date);
++			expect(result[0].sunset).toBeInstanceOf(Date);
++			expect(result[0].weatherType).toBe("day-cloudy");
++
++			expect(result[1].minTemperature).toBe(0);
++			expect(result[1].maxTemperature).toBe(6);
++		});
++
++		it("should treat daily type the same as forecast", async () => {
++			const provider = new BuienradarProvider({ locationId: 6275, type: "daily", maxEntries: 2 });
++
++			const dataPromise = new Promise((resolve) => {
++				provider.setCallbacks(resolve, vi.fn());
++			});
++
++			server.use(
++				http.get(BUIENRADAR_URL, () => HttpResponse.json(buildBuienradarResponse()))
++			);
++
++			provider.initialize();
++			provider.start();
++
++			const result = await dataPromise;
++
++			expect(Array.isArray(result)).toBe(true);
++			expect(result).toHaveLength(2);
++			expect(result[0].minTemperature).toBe(1);
++			expect(result[0].maxTemperature).toBe(8);
++			expect(result[0].weatherType).toBe("day-cloudy");
++			expect(result[0].date).toBeInstanceOf(Date);
++		});
++
++		it("should filter invalid daily records before applying maxEntries", async () => {
++			const provider = new BuienradarProvider({ locationId: 6275, type: "forecast", maxEntries: 1 });
++			const dataPromise = new Promise((resolve) => provider.setCallbacks(resolve, vi.fn()));
++			const payload = buildBuienradarResponse();
++			payload.days = [
++				{ date: "not-a-date", mintemp: 99, maxtemp: 100, iconcode: "a" },
++				{
++					date: "2100-01-02",
++					sunrise: "invalid-sunrise",
++					sunset: "2100-01-02T17:00:00",
++					mintemp: "0",
++					maxtemp: "6",
++					iconcode: "b",
++					hours: []
++				},
++				{ date: "2100-01-03", mintemp: 2, maxtemp: 7, iconcode: "c", hours: [] }
++			];
++
++			server.use(http.get(BUIENRADAR_URL, () => HttpResponse.json(payload)));
++			provider.initialize();
++			provider.start();
++
++			const result = await dataPromise;
++			expect(result).toHaveLength(1);
++			expect(result[0].date).toEqual(new Date("2100-01-02T00:00:00Z"));
++			expect(result[0].minTemperature).toBe(0);
++			expect(result[0].sunrise).toBeUndefined();
++			expect(result[0].sunset).toBeInstanceOf(Date);
++		});
++
++		it("should handle unknown, missing, and case-insensitive icon codes", async () => {
++			const iconTypes = {
++				a: "day-sunny",
++				aa: "night-clear",
++				b: "day-cloudy",
++				bb: "night-alt-cloudy",
++				c: "cloudy",
++				cc: "cloudy",
++				d: "day-fog",
++				dd: "night-fog",
++				f: "day-sprinkle",
++				ff: "night-alt-sprinkle",
++				g: "day-storm-showers",
++				gg: "night-alt-storm-showers",
++				h: "day-rain",
++				hh: "night-alt-rain",
++				i: "day-rain-mix",
++				ii: "night-alt-rain-mix",
++				j: "day-cloudy",
++				jj: "night-alt-cloudy",
++				k: "day-showers",
++				kk: "night-alt-showers",
++				l: "showers",
++				ll: "showers",
++				m: "sprinkle",
++				mm: "sprinkle",
++				n: "day-haze",
++				nn: "night-fog",
++				o: "day-cloudy",
++				oo: "night-alt-cloudy",
++				p: "cloudy",
++				pp: "cloudy",
++				q: "showers",
++				qq: "showers",
++				r: "day-cloudy",
++				rr: "night-alt-cloudy",
++				s: "thunderstorm",
++				ss: "thunderstorm",
++				t: "snow",
++				tt: "snow",
++				u: "day-snow",
++				uu: "night-alt-snow",
++				v: "snow",
++				vv: "snow",
++				w: "rain-mix",
++				ww: "rain-mix"
++			};
++			const iconEntries = Object.entries(iconTypes);
++			const provider = new BuienradarProvider({ locationId: 6275, type: "forecast", maxEntries: iconEntries.length + 2 });
++
++			const dataPromise = new Promise((resolve) => {
++				provider.setCallbacks(resolve, vi.fn());
++			});
++
++			const payload = {
++				location: { name: "Rotterdam" },
++				days: iconEntries.map(([iconcode], index) => ({
++					date: new Date(Date.UTC(2100, 0, index + 1)).toISOString().slice(0, 10),
++					iconcode: index % 2 === 0 ? iconcode.toUpperCase() : iconcode,
++					hours: []
++				}))
++			};
++			payload.days.push(
++				{ date: "2100-03-01", iconcode: "zzz", hours: [] },
++				{ date: "2100-03-02", hours: [] }
++			);
++
++			server.use(
++				http.get(BUIENRADAR_URL, () => HttpResponse.json(payload))
++			);
++
++			provider.initialize();
++			provider.start();
++
++			const result = await dataPromise;
++
++			expect(result.slice(0, iconEntries.length).map((entry) => entry.weatherType)).toEqual(iconEntries.map(([, type]) => type));
++			expect([null, undefined]).toContain(result.at(-2).weatherType);
++			expect([null, undefined]).toContain(result.at(-1).weatherType);
++		});
++	});
++
++	describe("Hourly Parsing", () => {
++		it("should parse hourly forecast data", async () => {
++			const provider = new BuienradarProvider({ locationId: 6275, type: "hourly", maxEntries: 3 });
++
++			const dataPromise = new Promise((resolve) => {
++				provider.setCallbacks(resolve, vi.fn());
++			});
++
++			server.use(
++				http.get(BUIENRADAR_URL, () => HttpResponse.json(buildBuienradarResponse()))
++			);
++
++			provider.initialize();
++			provider.start();
++
++			const result = await dataPromise;
++
++			expect(Array.isArray(result)).toBe(true);
++			expect(result).toHaveLength(3);
++			expect(result[0].temperature).toBe(6);
++			expect(result[0].feelsLikeTemp).toBe(3);
++			expect(result[0].humidity).toBe(80);
++			expect(result[0].windSpeed).toBe(4);
++			expect(result[0].windFromDirection).toBe(180);
++			expect(result[0].precipitationAmount).toBe(0.5);
++			expect(result[0].precipitationProbability).toBe(60);
++			expect(result[0].weatherType).toBe("day-sunny");
++			expect(result[0].date).toBeInstanceOf(Date);
++
++			expect(result[1].weatherType).toBe("day-cloudy");
++			expect(result[2].weatherType).toBe("cloudy");
++		});
++
++		it("should prevent cached responses when requesting the configured location", async () => {
++			const provider = new BuienradarProvider({ locationId: 6275, type: "hourly", maxEntries: 1 });
++
++			provider.setCallbacks(vi.fn(), vi.fn());
++
++			const requestPromise = new Promise((resolve) => {
++				server.use(
++					http.get(BUIENRADAR_URL, ({ request }) => {
++						resolve({
++							url: request.url,
++							cacheControl: request.headers.get("Cache-Control")
++						});
++						return HttpResponse.json(buildBuienradarResponse());
++					})
++				);
++			});
++
++			provider.initialize();
++			provider.start();
++
++			const requested = await requestPromise;
++
++			expect(requested.url).toContain("/6275");
++			const cacheHeaderDisablesCaching = (/no-cache|no-store/i).test(requested.cacheControl ?? "");
++			const hasCacheBustingQuery = new URL(requested.url).searchParams.size > 0;
++			expect(cacheHeaderDisablesCaching || hasCacheBustingQuery).toBe(true);
++		});
++
++		it("should flatten hours across days before applying maxEntries", async () => {
++			const provider = new BuienradarProvider({ locationId: 6275, type: "hourly", maxEntries: 4 });
++			const dataPromise = new Promise((resolve) => provider.setCallbacks(resolve, vi.fn()));
++			const payload = buildBuienradarResponse();
++			payload.days[0].hours.unshift({
++				datetime: "not-a-date",
++				temperature: "99",
++				feeltemperature: "98",
++				iconcode: "a"
++			});
++			payload.days[1].hours = [
++				{
++					datetime: "2100-01-02T00:00:00",
++					temperature: "9",
++					feeltemperature: "8",
++					iconcode: "a"
++				}
++			];
++
++			server.use(http.get(BUIENRADAR_URL, () => HttpResponse.json(payload)));
++			provider.initialize();
++			provider.start();
++
++			const result = await dataPromise;
++			expect(result).toHaveLength(4);
++			expect(result.map((entry) => entry.temperature)).toEqual([6, 7, 7.5, 9]);
++			expect(result[3].date).toEqual(new Date("2100-01-02T00:00:00Z"));
++		});
++	});
++
++	describe("Error Handling", () => {
++		it("should reject missing, empty, and non-array days without emitting data", async () => {
++			const invalidPayloads = [
++				{ location: { name: "Rotterdam" } },
++				{ days: [] },
++				{ days: {} }
++			];
++
++			for (const payload of invalidPayloads) {
++				const provider = new BuienradarProvider({ locationId: 6275, type: "current" });
++				const onData = vi.fn();
++				const errorPromise = new Promise((resolve) => provider.setCallbacks(onData, resolve));
++
++				server.use(http.get(BUIENRADAR_URL, () => HttpResponse.json(payload)));
++				provider.initialize();
++				provider.start();
++
++				const error = await errorPromise;
++				provider.stop();
++				expect(onData).not.toHaveBeenCalled();
++				expect(error).toEqual(expect.objectContaining({
++					message: expect.stringMatching(/\S/),
++					translationKey: expect.stringMatching(/\S/)
++				}));
++			}
++		});
++
++		it("should report an error when a list mode has no usable entries", async () => {
++			const payload = {
++				location: { name: "Rotterdam" },
++				days: [
++					{
++						date: "not-a-date",
++						hours: [{ datetime: "not-a-date", temperature: 8 }]
++					}
++				]
++			};
++
++			for (const type of ["forecast", "daily", "hourly"]) {
++				const provider = new BuienradarProvider({ locationId: 6275, type });
++				const onData = vi.fn();
++				const errorPromise = new Promise((resolve) => provider.setCallbacks(onData, resolve));
++
++				server.use(http.get(BUIENRADAR_URL, () => HttpResponse.json(payload)));
++				provider.initialize();
++				provider.start();
++
++				const error = await errorPromise;
++				provider.stop();
++				expect(onData).not.toHaveBeenCalled();
++				expect(error).toEqual(expect.objectContaining({
++					message: expect.stringMatching(/\S/),
++					translationKey: expect.stringMatching(/\S/)
++				}));
++			}
++		});
++
++		it("should reject unsupported weather types without emitting data", async () => {
++			const provider = new BuienradarProvider({ locationId: 6275, type: "fortnight" });
++			const onData = vi.fn();
++			const errorPromise = new Promise((resolve) => provider.setCallbacks(onData, resolve));
++
++			server.use(http.get(BUIENRADAR_URL, () => HttpResponse.json(buildBuienradarResponse())));
++			provider.initialize();
++			provider.start();
++
++			const error = await errorPromise;
++			expect(onData).not.toHaveBeenCalled();
++			expect(error).toEqual(expect.objectContaining({
++				message: expect.stringMatching(/\S/),
++				translationKey: expect.stringMatching(/\S/)
++			}));
++		});
++
++		it("should report malformed JSON as a processing error", async () => {
++			const provider = new BuienradarProvider({ locationId: 6275 });
++			const errorPromise = new Promise((resolve) => provider.setCallbacks(vi.fn(), resolve));
++
++			server.use(http.get(BUIENRADAR_URL, () => new HttpResponse("{invalid", {
++				headers: { "Content-Type": "application/json" }
++			})));
++			provider.initialize();
++			provider.start();
++
++			const error = await errorPromise;
++			expect(error).toEqual(expect.objectContaining({
++				message: expect.stringMatching(/\S/),
++				translationKey: expect.stringMatching(/\S/)
++			}));
++		});
++
++		it("should pass standardized HTTP errors to the error callback", async () => {
++			const provider = new BuienradarProvider({ locationId: 6275 });
++			const errorPromise = new Promise((resolve) => provider.setCallbacks(vi.fn(), resolve));
++
++			server.use(http.get(BUIENRADAR_URL, () => new HttpResponse(null, { status: 500 })));
++			provider.initialize();
++			provider.start();
++
++			const error = await errorPromise;
++			expect(error).toEqual(expect.objectContaining({
++				message: expect.stringMatching(/\S/),
++				translationKey: expect.stringMatching(/\S/)
++			}));
++		});
++	});
++});

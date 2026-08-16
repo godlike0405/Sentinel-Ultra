@@ -1,0 +1,33 @@
+{
+  "success": false,
+  "raw_exit_code": 1,
+  "infrastructure_error": null,
+  "configuration_ok": true,
+  "inventory_ok": true,
+  "expected_test_count": 18,
+  "observed_test_count": 18,
+  "missing_tests": [],
+  "unexpected_tests": [],
+  "failed_tests": [
+    "sentinel::aarch64_target_matrix",
+    "sentinel::arm32_target_matrix",
+    "sentinel::deterministic_acos_abi",
+    "sentinel::numerical_drift_is_rejected",
+    "sentinel::ppc64_target_matrix",
+    "sentinel::target_tester3avx",
+    "sentinel::target_tester3avx2",
+    "sentinel::target_tester3avx2128",
+    "sentinel::target_tester3avx512f",
+    "sentinel::target_tester3avx512fnofma",
+    "sentinel::target_tester3purec_scalar",
+    "sentinel::target_tester3purecfma_scalar",
+    "sentinel::target_tester3sse2",
+    "sentinel::target_tester3sse4",
+    "sentinel::tester3_is_mpfr_free",
+    "sentinel::unsupported_instruction_is_clean"
+  ],
+  "expected_duplicates": [],
+  "observed_duplicates": [],
+  "malformed_record_indexes": [],
+  "reward": 0.0
+}

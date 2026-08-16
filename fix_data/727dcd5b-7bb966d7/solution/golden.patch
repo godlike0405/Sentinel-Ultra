@@ -1,0 +1,2352 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index e349f5ffe..a68457b2f 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -77,15 +77,15 @@ set(TARGET_IUTFMA4 "iutfma4")
+ set(TARGET_IUTAVX2 "iutavx2")
+ set(TARGET_IUTAVX2128 "iutavx2128")
+ set(TARGET_IUTAVX512F "iutavx512f")
+-set(TARGET_IUTAVX512F_NOFMA "iutavx512fnofma")
++set(TARGET_IUTAVX512FNOFMA "iutavx512fnofma")
+ set(TARGET_IUTADVSIMD "iutadvsimd")
+-set(TARGET_IUTADVSIMD_NOFMA "iutadvsimdnofma")
++set(TARGET_IUTADVSIMDNOFMA "iutadvsimdnofma")
+ set(TARGET_IUTNEON32 "iutneon32")
+ set(TARGET_IUTNEON32VFPV4 "iutneon32vfpv4")
+ set(TARGET_IUTSVE "iutsve")
+-set(TARGET_IUTSVE_NOFMA "iutsvenofma")
++set(TARGET_IUTSVENOFMA "iutsvenofma")
+ set(TARGET_IUTVSX "iutvsx")
+-set(TARGET_IUTVSX_NOFMA "iutvsxnofma")
++set(TARGET_IUTVSXNOFMA "iutvsxnofma")
+ # The target to generate LLVM bitcode only, available when SLEEF_ENABLE_LLVM_BITCODE is passed to cmake
+ set(TARGET_LLVM_BITCODE "llvm-bitcode")
+ # Generates the helper executable file mkrename needed to write the sleef header
+diff --git a/Configure.cmake b/Configure.cmake
+index a4704c049..aa1cdd0b4 100644
+--- a/Configure.cmake
++++ b/Configure.cmake
+@@ -23,10 +23,10 @@ endif()
+ 
+ # The library currently supports the following SIMD architectures
+ set(SLEEF_SUPPORTED_EXTENSIONS
+-  AVX512F AVX512F_NOFMA AVX2 AVX2128 FMA4 AVX SSE4 SSE2 # x86
+-  ADVSIMD ADVSIMD_NOFMA SVE SVE_NOFMA                   # Aarch64
++  AVX512F AVX512FNOFMA AVX2 AVX2128 FMA4 AVX SSE4 SSE2  # x86
++  ADVSIMD ADVSIMDNOFMA SVE SVENOFMA                     # Aarch64
+   NEON32 NEON32VFPV4			                # Aarch32
+-  VSX VSX_NOFMA				                # PPC64
++  VSX VSXNOFMA				                # PPC64
+   PUREC_SCALAR PURECFMA_SCALAR                          # Generic type
+   CACHE STRING "List of SIMD architectures supported by libsleef."
+   )
+@@ -68,7 +68,7 @@ if((CMAKE_SYSTEM_PROCESSOR MATCHES "x86") OR (CMAKE_SYSTEM_PROCESSOR MATCHES "AM
+     AVX2128
+     AVX512F_
+     AVX512F
+-    AVX512F_NOFMA
++    AVX512FNOFMA
+     PUREC_SCALAR
+     PURECFMA_SCALAR
+   )
+@@ -82,35 +82,52 @@ if((CMAKE_SYSTEM_PROCESSOR MATCHES "x86") OR (CMAKE_SYSTEM_PROCESSOR MATCHES "AM
+   command_arguments(HEADER_PARAMS_AVX2128       finz_ 2 4 __m128d __m128 __m128i __m128i __SSE2__ avx2128)
+   command_arguments(HEADER_PARAMS_AVX512F_      finz_ 8 16 __m512d __m512 __m256i __m512i __AVX512F__)
+   command_arguments(HEADER_PARAMS_AVX512F       finz_ 8 16 __m512d __m512 __m256i __m512i __AVX512F__ avx512f)
+-  command_arguments(HEADER_PARAMS_AVX512F_NOFMA cinz_ 8 16 __m512d __m512 __m256i __m512i __AVX512F__ avx512fnofma)
++  command_arguments(HEADER_PARAMS_AVX512FNOFMA  cinz_ 8 16 __m512d __m512 __m256i __m512i __AVX512F__ avx512fnofma)
+ 
+   command_arguments(ALIAS_PARAMS_AVX512F_DP   8 __m512d __m256i e avx512f finz_)
+   command_arguments(ALIAS_PARAMS_AVX512F_SP -16 __m512  __m512i e avx512f finz_)
+ 
+   set(CLANG_FLAGS_ENABLE_PURECFMA_SCALAR "-mavx2;-mfma")
++
++  set(TESTER3_DEFINITIONS_SSE2          ATR=cinz_ DPTYPE=__m128d SPTYPE=__m128 DPTYPESPEC=d2 SPTYPESPEC=f4  EXTSPEC=sse2)
++  set(TESTER3_DEFINITIONS_SSE4          ATR=cinz_ DPTYPE=__m128d SPTYPE=__m128 DPTYPESPEC=d2 SPTYPESPEC=f4  EXTSPEC=sse4)
++  set(TESTER3_DEFINITIONS_AVX2128       ATR=finz_ DPTYPE=__m128d SPTYPE=__m128 DPTYPESPEC=d2 SPTYPESPEC=f4  EXTSPEC=avx2128)
++  set(TESTER3_DEFINITIONS_AVX           ATR=cinz_ DPTYPE=__m256d SPTYPE=__m256 DPTYPESPEC=d4 SPTYPESPEC=f8  EXTSPEC=avx)
++  set(TESTER3_DEFINITIONS_FMA4          ATR=finz_ DPTYPE=__m256d SPTYPE=__m256 DPTYPESPEC=d4 SPTYPESPEC=f8  EXTSPEC=fma4)
++  set(TESTER3_DEFINITIONS_AVX2          ATR=finz_ DPTYPE=__m256d SPTYPE=__m256 DPTYPESPEC=d4 SPTYPESPEC=f8  EXTSPEC=avx2)
++  set(TESTER3_DEFINITIONS_AVX512F       ATR=finz_ DPTYPE=__m512d SPTYPE=__m512 DPTYPESPEC=d8 SPTYPESPEC=f16 EXTSPEC=avx512f)
++  set(TESTER3_DEFINITIONS_AVX512FNOFMA  ATR=cinz_ DPTYPE=__m512d SPTYPE=__m512 DPTYPESPEC=d8 SPTYPESPEC=f16 EXTSPEC=avx512fnofma)
++
+ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
+   set(SLEEF_ARCH_AARCH64 ON CACHE INTERNAL "True for Aarch64 architecture.")
+   # Aarch64 requires support for advsimdfma4
+   set(COMPILER_SUPPORTS_ADVSIMD 1)
+-  set(COMPILER_SUPPORTS_ADVSIMD_NOFMA 1)
++  set(COMPILER_SUPPORTS_ADVSIMDNOFMA 1)
+ 
+   set(SLEEF_HEADER_LIST
+     ADVSIMD_
+     ADVSIMD
+-    ADVSIMD_NOFMA
++    ADVSIMDNOFMA
+     SVE
+-    SVE_NOFMA
++    SVENOFMA
+     PUREC_SCALAR
+     PURECFMA_SCALAR
+   )
+   command_arguments(HEADER_PARAMS_ADVSIMD_      finz_ 2 4 float64x2_t float32x4_t int32x2_t int32x4_t __ARM_NEON)
+   command_arguments(HEADER_PARAMS_ADVSIMD       finz_ 2 4 float64x2_t float32x4_t int32x2_t int32x4_t __ARM_NEON advsimd)
+-  command_arguments(HEADER_PARAMS_ADVSIMD_NOFMA cinz_ 2 4 float64x2_t float32x4_t int32x2_t int32x4_t __ARM_NEON advsimdnofma)
+-  command_arguments(HEADER_PARAMS_SVE           finz_ 2 4 svfloat64_t svfloat32_t svint32_t svint32_t __ARM_FEATURE_SVE sve)
+-  command_arguments(HEADER_PARAMS_SVE_NOFMA     cinz_ 2 4 svfloat64_t svfloat32_t svint32_t svint32_t __ARM_FEATURE_SVE svenofma)
+-
++  command_arguments(HEADER_PARAMS_ADVSIMDNOFMA  cinz_ 2 4 float64x2_t float32x4_t int32x2_t int32x4_t __ARM_NEON advsimdnofma)
++  command_arguments(HEADER_PARAMS_SVE           finz_ x x svfloat64_t svfloat32_t svint32_t svint32_t __ARM_FEATURE_SVE sve)
++  command_arguments(HEADER_PARAMS_SVENOFMA      cinz_ x x svfloat64_t svfloat32_t svint32_t svint32_t __ARM_FEATURE_SVE svenofma)
+   command_arguments(ALIAS_PARAMS_ADVSIMD_DP  2 float64x2_t int32x2_t n advsimd finz_)
+   command_arguments(ALIAS_PARAMS_ADVSIMD_SP -4 float32x4_t int32x4_t n advsimd finz_)
++
++  set(CLANG_FLAGS_ENABLE_PURECFMA_SCALAR "-march=armv8-a+simd")
++
++  set(TESTER3_DEFINITIONS_ADVSIMD       ATR=finz_ DPTYPE=float64x2_t SPTYPE=float32x4_t DPTYPESPEC=d2 SPTYPESPEC=f4 EXTSPEC=advsimd)
++  set(TESTER3_DEFINITIONS_ADVSIMDNOFMA  ATR=cinz_ DPTYPE=float64x2_t SPTYPE=float32x4_t DPTYPESPEC=d2 SPTYPESPEC=f4 EXTSPEC=advsimdnofma)
++  set(TESTER3_DEFINITIONS_SVE           ATR=finz_ DPTYPE=svfloat64_t SPTYPE=svfloat32_t DPTYPESPEC=dx SPTYPESPEC=fx EXTSPEC=sve)
++  set(TESTER3_DEFINITIONS_SVENOFMA      ATR=cinz_ DPTYPE=svfloat64_t SPTYPE=svfloat32_t DPTYPESPEC=dx SPTYPESPEC=fx EXTSPEC=svenofma)
++
+ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm")
+   set(SLEEF_ARCH_AARCH32 ON CACHE INTERNAL "True for Aarch32 architecture.")
+   set(COMPILER_SUPPORTS_NEON32 1)
+@@ -126,7 +143,6 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm")
+   command_arguments(HEADER_PARAMS_NEON32_     cinz_ 2 4 - float32x4_t int32x2_t int32x4_t __ARM_NEON__)
+   command_arguments(HEADER_PARAMS_NEON32      cinz_ 2 4 - float32x4_t int32x2_t int32x4_t __ARM_NEON__ neon)
+   command_arguments(HEADER_PARAMS_NEON32VFPV4 finz_ 2 4 - float32x4_t int32x2_t int32x4_t __ARM_NEON__ neonvfpv4)
+-
+   command_arguments(ALIAS_PARAMS_NEON32_SP -4 float32x4_t int32x4_t - neon cinz_)
+   command_arguments(ALIAS_PARAMS_NEON32_DP 0)
+ 
+@@ -137,22 +153,26 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(powerpc|ppc)64")
+   set(SLEEF_HEADER_LIST
+     VSX_
+     VSX
+-    VSX_NOFMA
++    VSXNOFMA
+     PUREC_SCALAR
+     PURECFMA_SCALAR
+   )
+ 
+   set(HEADER_PARAMS_VSX       finz_ 2 4 "vector double" "vector float" "vector int" "vector int" __VSX__ vsx)
+   set(HEADER_PARAMS_VSX_      finz_ 2 4 "vector double" "vector float" "vector int" "vector int" __VSX__ vsx)
+-  set(HEADER_PARAMS_VSX_NOFMA cinz_ 2 4 "vector double" "vector float" "vector int" "vector int" __VSX__ vsxnofma)
++  set(HEADER_PARAMS_VSXNOFMA  cinz_ 2 4 "vector double" "vector float" "vector int" "vector int" __VSX__ vsxnofma)
+   set(ALIAS_PARAMS_VSX_DP  2 "vector double" "vector int" - vsx finz_)
+-  set(ALIAS_PARAMS_VSX_SP -4 "vector float" "vector int" - vsx finz_)
++  set(ALIAS_PARAMS_VSX_SP -4 "vector float"  "vector int" - vsx finz_)
++  set(TESTER3_DEFINITIONS_VSX      ATR=finz_ DPTYPE=vectordouble SPTYPE=vectorfloat DPTYPESPEC=d2 SPTYPESPEC=f4 EXTSPEC=vsx)
++  set(TESTER3_DEFINITIONS_VSXNOFMA ATR=cinz_ DPTYPE=vectordouble SPTYPE=vectorfloat DPTYPESPEC=d2 SPTYPESPEC=f4 EXTSPEC=vsxnofma)
+ 
+   set(CLANG_FLAGS_ENABLE_PURECFMA_SCALAR "-mvsx")
+ endif()
+ 
+ command_arguments(HEADER_PARAMS_PUREC_SCALAR    cinz_ 1 1 double float int32_t int32_t __STDC__ purec)
+ command_arguments(HEADER_PARAMS_PURECFMA_SCALAR finz_ 1 1 double float int32_t int32_t FP_FAST_FMA purecfma)
++set(TESTER3_DEFINITIONS_PUREC_SCALAR    ATR=cinz_ DPTYPE=double SPTYPE=float DPTYPESPEC=d1 SPTYPESPEC=f1 EXTSPEC=purec)
++set(TESTER3_DEFINITIONS_PURECFMA_SCALAR ATR=finz_ DPTYPE=double SPTYPE=float DPTYPESPEC=d1 SPTYPESPEC=f1 EXTSPEC=purecfma)
+ set(COMPILER_SUPPORTS_PUREC_SCALAR 1)
+ set(COMPILER_SUPPORTS_PURECFMA_SCALAR 1)
+ 
+@@ -164,20 +184,20 @@ command_arguments(RENAME_PARAMS_FMA4            finz_ 4 8 fma4)
+ command_arguments(RENAME_PARAMS_AVX2            finz_ 4 8 avx2)
+ command_arguments(RENAME_PARAMS_AVX2128         finz_ 2 4 avx2128)
+ command_arguments(RENAME_PARAMS_AVX512F         finz_ 8 16 avx512f)
+-command_arguments(RENAME_PARAMS_AVX512F_NOFMA   cinz_ 8 16 avx512fnofma)
++command_arguments(RENAME_PARAMS_AVX512FNOFMA    cinz_ 8 16 avx512fnofma)
+ command_arguments(RENAME_PARAMS_ADVSIMD         finz_ 2 4 advsimd)
+-command_arguments(RENAME_PARAMS_ADVSIMD_NOFMA   cinz_ 2 4 advsimdnofma)
++command_arguments(RENAME_PARAMS_ADVSIMDNOFMA    cinz_ 2 4 advsimdnofma)
+ command_arguments(RENAME_PARAMS_NEON32          cinz_ 2 4 neon)
+ command_arguments(RENAME_PARAMS_NEON32VFPV4     finz_ 2 4 neonvfpv4)
+ command_arguments(RENAME_PARAMS_VSX             finz_ 2 4 vsx)
+-command_arguments(RENAME_PARAMS_VSX_NOFMA       cinz_ 2 4 vsxnofma)
++command_arguments(RENAME_PARAMS_VSXNOFMA        cinz_ 2 4 vsxnofma)
+ command_arguments(RENAME_PARAMS_PUREC_SCALAR    cinz_ 1 1 purec)
+ command_arguments(RENAME_PARAMS_PURECFMA_SCALAR finz_ 1 1 purecfma)
+ # The vector length parameters in SVE, for SP and DP, are chosen for
+ # the smallest SVE vector size (128-bit). The name is generated using
+ # the "x" token of VLA SVE vector functions.
+-command_arguments(RENAME_PARAMS_SVE             finz_ 2 4 sve)
+-command_arguments(RENAME_PARAMS_SVE_NOFMA       cinz_ 2 4 svenofma)
++command_arguments(RENAME_PARAMS_SVE             finz_ x x sve)
++command_arguments(RENAME_PARAMS_SVENOFMA        cinz_ x x svenofma)
+ 
+ command_arguments(RENAME_PARAMS_GNUABI_SSE2    sse2 b 2 4 _mm128d _mm128 _mm128i _mm128i __SSE2__)
+ command_arguments(RENAME_PARAMS_GNUABI_AVX     avx c 4 8 __m256d __m256 __m128i "struct { __m128i x, y$<SEMICOLON> }" __AVX__)
+@@ -187,7 +207,7 @@ command_arguments(RENAME_PARAMS_GNUABI_ADVSIMD advsimd n 2 4 float64x2_t float32
+ # The vector length parameters in SVE, for SP and DP, are chosen for
+ # the smallest SVE vector size (128-bit). The name is generated using
+ # the "x" token of VLA SVE vector functions.
+-command_arguments(RENAME_PARAMS_GNUABI_SVE sve s 2 4 svfloat64_t svfloat32_t svint32_t svint32_t __ARM_SVE)
++command_arguments(RENAME_PARAMS_GNUABI_SVE sve s x x svfloat64_t svfloat32_t svint32_t svint32_t __ARM_SVE)
+ 
+ command_arguments(MKMASKED_PARAMS_GNUABI_AVX512F_dp avx512f e 8)
+ command_arguments(MKMASKED_PARAMS_GNUABI_AVX512F_sp avx512f e -16)
+@@ -218,17 +238,17 @@ set(CLANG_FLAGS_ENABLE_FMA4 "-mfma4")
+ set(CLANG_FLAGS_ENABLE_AVX2 "-mavx2;-mfma")
+ set(CLANG_FLAGS_ENABLE_AVX2128 "-mavx2;-mfma")
+ set(CLANG_FLAGS_ENABLE_AVX512F "-mavx512f")
+-set(CLANG_FLAGS_ENABLE_AVX512F_NOFMA "-mavx512f")
++set(CLANG_FLAGS_ENABLE_AVX512FNOFMA "-mavx512f")
+ set(CLANG_FLAGS_ENABLE_NEON32 "--target=arm-linux-gnueabihf;-mcpu=cortex-a8")
+ set(CLANG_FLAGS_ENABLE_NEON32VFPV4 "-march=armv7-a;-mfpu=neon-vfpv4")
+ # Arm AArch64 vector extensions.
+ set(CLANG_FLAGS_ENABLE_ADVSIMD "-march=armv8-a+simd")
+-set(CLANG_FLAGS_ENABLE_ADVSIMD_NOFMA "-march=armv8-a+simd")
++set(CLANG_FLAGS_ENABLE_ADVSIMDNOFMA "-march=armv8-a+simd")
+ set(CLANG_FLAGS_ENABLE_SVE "-march=armv8-a+sve")
+-set(CLANG_FLAGS_ENABLE_SVE_NOFMA "-march=armv8-a+sve")
++set(CLANG_FLAGS_ENABLE_SVENOFMA "-march=armv8-a+sve")
+ # PPC64
+ set(CLANG_FLAGS_ENABLE_VSX "-mvsx")
+-set(CLANG_FLAGS_ENABLE_VSX_NOFMA "-mvsx")
++set(CLANG_FLAGS_ENABLE_VSXNOFMA "-mvsx")
+ 
+ # All variables storing compiler flags should be prefixed with FLAGS_
+ if(CMAKE_C_COMPILER_ID MATCHES "(GNU|Clang)")
+@@ -262,7 +282,7 @@ elseif(MSVC)
+   set(FLAGS_ENABLE_AVX2 /D__SSE2__ /D__SSE3__ /D__SSE4_1__ /D__AVX__ /D__AVX2__ /arch:AVX2)
+   set(FLAGS_ENABLE_AVX2128 /D__SSE2__ /D__SSE3__ /D__SSE4_1__ /D__AVX__ /D__AVX2__ /arch:AVX2)
+   set(FLAGS_ENABLE_AVX512F /D__SSE2__ /D__SSE3__ /D__SSE4_1__ /D__AVX__ /D__AVX2__ /D__AVX512F__ /arch:AVX2)
+-  set(FLAGS_ENABLE_AVX512F_NOFMA /D__SSE2__ /D__SSE3__ /D__SSE4_1__ /D__AVX__ /D__AVX2__ /D__AVX512F__ /arch:AVX2)
++  set(FLAGS_ENABLE_AVX512FNOFMA /D__SSE2__ /D__SSE3__ /D__SSE4_1__ /D__AVX__ /D__AVX2__ /D__AVX512F__ /arch:AVX2)
+   set(FLAGS_ENABLE_PURECFMA_SCALAR /D__SSE2__ /D__SSE3__ /D__SSE4_1__ /D__AVX__ /D__AVX2__ /arch:AVX2)
+   set(FLAGS_WALL "/D_CRT_SECURE_NO_WARNINGS")
+   set(FLAGS_NO_ERRNO "")
+@@ -273,7 +293,7 @@ elseif(CMAKE_C_COMPILER_ID MATCHES "Intel")
+   set(FLAGS_ENABLE_AVX2 "-march=core-avx2")
+   set(FLAGS_ENABLE_AVX2128 "-march=core-avx2")
+   set(FLAGS_ENABLE_AVX512F "-xCOMMON-AVX512")
+-  set(FLAGS_ENABLE_AVX512F_NOFMA "-xCOMMON-AVX512")
++  set(FLAGS_ENABLE_AVX512FNOFMA "-xCOMMON-AVX512")
+   set(FLAGS_ENABLE_PURECFMA_SCALAR "-march=core-avx2")
+   set(FLAGS_STRICTMATH "-fp-model strict -Qoption,cpp,--extended_float_type -qoverride-limits")
+   set(FLAGS_FASTMATH "-fp-model fast=2 -Qoption,cpp,--extended_float_type -qoverride-limits")
+@@ -374,7 +394,7 @@ CHECK_C_SOURCE_COMPILES("
+   COMPILER_SUPPORTS_SVE)
+ 
+ if(COMPILER_SUPPORTS_SVE)
+-  set(COMPILER_SUPPORTS_SVE_NOFMA 1)
++  set(COMPILER_SUPPORTS_SVENOFMA 1)
+ endif()
+ 
+ set (CMAKE_REQUIRED_FLAGS ${FLAGS_ENABLE_AVX512F})
+@@ -400,7 +420,7 @@ if(COMPILER_SUPPORTS_AVX2)
+ endif()
+ 
+ if (COMPILER_SUPPORTS_AVX512F)
+-  set(COMPILER_SUPPORTS_AVX512F_NOFMA 1)
++  set(COMPILER_SUPPORTS_AVX512FNOFMA 1)
+ endif()
+ 
+ set (CMAKE_REQUIRED_FLAGS ${FLAGS_ENABLE_VSX})
+@@ -413,7 +433,7 @@ CHECK_C_SOURCE_COMPILES("
+   COMPILER_SUPPORTS_VSX)
+ 
+ if (COMPILER_SUPPORTS_VSX)
+-  set(COMPILER_SUPPORTS_VSX_NOFMA 1)
++  set(COMPILER_SUPPORTS_VSXNOFMA 1)
+ endif()
+ 
+ # Check if compilation with OpenMP really succeeds
+diff --git a/Jenkinsfile b/Jenkinsfile
+index 4254a3ad3..3c91ab7f6 100644
+--- a/Jenkinsfile
++++ b/Jenkinsfile
+@@ -53,6 +53,7 @@ pipeline {
+                 	 echo "FMA4 on" `hostname`
+ 			 export PATH=$PATH:/opt/local/bin:/opt/bin:/opt/sde-external-8.16.0-2018-01-30-lin
+ 			 export LD_LIBRARY_PATH=/opt/local/lib:/opt/lib
++		         export CC=gcc-8.1.0
+ 			 rm -rf build
+  			 mkdir build
+ 			 cd build
+diff --git a/src/arch/helperadvsimd.h b/src/arch/helperadvsimd.h
+index 79552b5a7..e87b0dec6 100644
+--- a/src/arch/helperadvsimd.h
++++ b/src/arch/helperadvsimd.h
+@@ -147,6 +147,7 @@ static INLINE vfloat vdiv_vf_vf_vf(vfloat n, vfloat d) {
+ }
+ static INLINE vfloat vsqrt_vf_vf(vfloat d) { return vsqrtq_f32(d); }
+ 
++#if CONFIG == 1
+ // Multiply accumulate: z = z + x * y
+ static INLINE vfloat vmla_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) {
+   return vfmaq_f32(z, x, y);
+@@ -155,6 +156,10 @@ static INLINE vfloat vmla_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) {
+ static INLINE vfloat vmlanp_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) {
+   return vfmsq_f32(z, x, y);
+ }
++#else
++static INLINE vfloat vmla_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vadd_vf_vf_vf(vmul_vf_vf_vf(x, y), z); }
++static INLINE vfloat vmlanp_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vsub_vf_vf_vf(z, vmul_vf_vf_vf(x, y)); }
++#endif
+ 
+ // |x|, -x
+ static INLINE vfloat vabs_vf_vf(vfloat f) { return vabsq_f32(f); }
+@@ -286,6 +291,7 @@ static INLINE vdouble vmin_vd_vd_vd(vdouble x, vdouble y) {
+   return vminq_f64(x, y);
+ }
+ 
++#if CONFIG == 1
+ // Multiply accumulate: z = z + x * y
+ static INLINE vdouble vmla_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) {
+   return vfmaq_f64(z, x, y);
+@@ -295,6 +301,15 @@ static INLINE vdouble vmlanp_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) {
+   return vfmsq_f64(z, x, y);
+ }
+ 
++//[z = x * y - z]
++static INLINE vdouble vmlapn_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) {
++  return vneg_vd_vd(vfmsq_f64(z, x, y));
++}
++#else
++static INLINE vdouble vmla_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vadd_vd_vd_vd(vmul_vd_vd_vd(x, y), z); }
++static INLINE vdouble vmlapn_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vsub_vd_vd_vd(vmul_vd_vd_vd(x, y), z); }
++#endif
++
+ static INLINE vdouble vfma_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { // z + x * y
+   return vfmaq_f64(z, x, y);
+ }
+@@ -303,11 +318,6 @@ static INLINE vdouble vfmanp_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { // z
+   return vfmsq_f64(z, x, y);
+ }
+ 
+-//[z = x * y - z]
+-static INLINE vdouble vmlapn_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) {
+-  return vneg_vd_vd(vfmanp_vd_vd_vd_vd(x, y, z));
+-}
+-
+ static INLINE vdouble vfmapn_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { // x * y - z
+   return vneg_vd_vd(vfmanp_vd_vd_vd_vd(x, y, z));
+ }
+diff --git a/src/arch/helperavx512f.h b/src/arch/helperavx512f.h
+index f2306fb35..ebceabad3 100644
+--- a/src/arch/helperavx512f.h
++++ b/src/arch/helperavx512f.h
+@@ -174,11 +174,17 @@ static INLINE vdouble vrec_vd_vd(vdouble x) { return _mm512_div_pd(_mm512_set1_p
+ static INLINE vdouble vsqrt_vd_vd(vdouble x) { return _mm512_sqrt_pd(x); }
+ static INLINE vdouble vabs_vd_vd(vdouble d) { return vreinterpret_vd_vm(_mm512_andnot_si512(vreinterpret_vm_vd(_mm512_set1_pd(-0.0)), vreinterpret_vm_vd(d))); }
+ static INLINE vdouble vneg_vd_vd(vdouble d) { return vreinterpret_vd_vm(_mm512_xor_si512(vreinterpret_vm_vd(_mm512_set1_pd(-0.0)), vreinterpret_vm_vd(d))); }
++static INLINE vdouble vmax_vd_vd_vd(vdouble x, vdouble y) { return _mm512_max_pd(x, y); }
++static INLINE vdouble vmin_vd_vd_vd(vdouble x, vdouble y) { return _mm512_min_pd(x, y); }
++
++#if CONFIG == 1
+ static INLINE vdouble vmla_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return _mm512_fmadd_pd(x, y, z); }
+ static INLINE vdouble vmlapn_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return _mm512_fmsub_pd(x, y, z); }
+ static INLINE vdouble vmlanp_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return _mm512_fnmadd_pd(x, y, z); }
+-static INLINE vdouble vmax_vd_vd_vd(vdouble x, vdouble y) { return _mm512_max_pd(x, y); }
+-static INLINE vdouble vmin_vd_vd_vd(vdouble x, vdouble y) { return _mm512_min_pd(x, y); }
++#else
++static INLINE vdouble vmla_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vadd_vd_vd_vd(vmul_vd_vd_vd(x, y), z); }
++static INLINE vdouble vmlapn_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vsub_vd_vd_vd(vmul_vd_vd_vd(x, y), z); }
++#endif
+ 
+ static INLINE vdouble vfma_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return _mm512_fmadd_pd(x, y, z); }
+ static INLINE vdouble vfmapp_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return _mm512_fmadd_pd(x, y, z); }
+@@ -353,11 +359,17 @@ static INLINE vfloat vrec_vf_vf(vfloat x) { return vdiv_vf_vf_vf(vcast_vf_f(1.0f
+ static INLINE vfloat vsqrt_vf_vf(vfloat x) { return _mm512_sqrt_ps(x); }
+ static INLINE vfloat vabs_vf_vf(vfloat f) { return vreinterpret_vf_vm(vandnot_vm_vm_vm(vreinterpret_vm_vf(vcast_vf_f(-0.0f)), vreinterpret_vm_vf(f))); }
+ static INLINE vfloat vneg_vf_vf(vfloat d) { return vreinterpret_vf_vm(vxor_vm_vm_vm(vreinterpret_vm_vf(vcast_vf_f(-0.0f)), vreinterpret_vm_vf(d))); }
++static INLINE vfloat vmax_vf_vf_vf(vfloat x, vfloat y) { return _mm512_max_ps(x, y); }
++static INLINE vfloat vmin_vf_vf_vf(vfloat x, vfloat y) { return _mm512_min_ps(x, y); }
++
++#if CONFIG == 1
+ static INLINE vfloat vmla_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return _mm512_fmadd_ps(x, y, z); }
+ static INLINE vfloat vmlapn_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return _mm512_fmsub_ps(x, y, z); }
+ static INLINE vfloat vmlanp_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return _mm512_fnmadd_ps(x, y, z); }
+-static INLINE vfloat vmax_vf_vf_vf(vfloat x, vfloat y) { return _mm512_max_ps(x, y); }
+-static INLINE vfloat vmin_vf_vf_vf(vfloat x, vfloat y) { return _mm512_min_ps(x, y); }
++#else
++static INLINE vfloat vmla_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vadd_vf_vf_vf(vmul_vf_vf_vf(x, y), z); }
++static INLINE vfloat vmlanp_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vsub_vf_vf_vf(z, vmul_vf_vf_vf(x, y)); }
++#endif
+ 
+ static INLINE vfloat vfma_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return _mm512_fmadd_ps(x, y, z); }
+ static INLINE vfloat vfmapp_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return _mm512_fmadd_ps(x, y, z); }
+diff --git a/src/arch/helperpower_128.h b/src/arch/helperpower_128.h
+index 54b0668d6..6e7028fde 100644
+--- a/src/arch/helperpower_128.h
++++ b/src/arch/helperpower_128.h
+@@ -203,14 +203,20 @@ static INLINE vfloat vnegpos_vf_vf(vfloat d) { return vreinterpret_vf_vm(vxor_vm
+ //
+ 
+ static INLINE vdouble vabs_vd_vd(vdouble d) { return vec_abs(d); }
+-static INLINE vdouble vmla_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vec_madd(x, y, z); }
+-static INLINE vdouble vmlapn_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vec_msub(x, y, z); }
+ static INLINE vdouble vmax_vd_vd_vd(vdouble x, vdouble y) { return vec_max(x, y); }
+ static INLINE vdouble vmin_vd_vd_vd(vdouble x, vdouble y) { return vec_min(x, y); }
+ static INLINE vdouble vsubadd_vd_vd_vd(vdouble x, vdouble y) { return vadd_vd_vd_vd(x, vnegpos_vd_vd(y)); }
+-static INLINE vdouble vmlsubadd_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vmla_vd_vd_vd_vd(x, y, vnegpos_vd_vd(z)); }
+ static INLINE vdouble vsqrt_vd_vd(vdouble d) { return vec_sqrt(d); }
+ 
++#if CONFIG == 1
++static INLINE vdouble vmla_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vec_madd(x, y, z); }
++static INLINE vdouble vmlapn_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vec_msub(x, y, z); }
++#else
++static INLINE vdouble vmla_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vadd_vd_vd_vd(vmul_vd_vd_vd(x, y), z); }
++static INLINE vdouble vmlapn_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vsub_vd_vd_vd(vmul_vd_vd_vd(x, y), z); }
++#endif
++
++static INLINE vdouble vmlsubadd_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vmla_vd_vd_vd_vd(x, y, vnegpos_vd_vd(z)); }
+ static INLINE vdouble vfma_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vec_madd(x, y, z); }
+ static INLINE vdouble vfmapp_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vec_madd(x, y, z); }
+ static INLINE vdouble vfmapn_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vec_msub(x, y, z); }
+@@ -218,14 +224,20 @@ static INLINE vdouble vfmanp_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { retu
+ static INLINE vdouble vfmann_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vec_nmadd(x, y, z); }
+ 
+ static INLINE vfloat vabs_vf_vf(vfloat f) { return vec_abs(f); }
+-static INLINE vfloat vmla_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vec_madd(x, y, z); }
+-static INLINE vfloat vmlanp_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vec_nmsub(x, y, z); }
+ static INLINE vfloat vmax_vf_vf_vf(vfloat x, vfloat y) { return vec_max(x, y); }
+ static INLINE vfloat vmin_vf_vf_vf(vfloat x, vfloat y) { return vec_min(x, y); }
+ static INLINE vfloat vsubadd_vf_vf_vf(vfloat x, vfloat y) { return vadd_vf_vf_vf(x, vnegpos_vf_vf(y)); }
+-static INLINE vfloat vmlsubadd_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vmla_vf_vf_vf_vf(x, y, vnegpos_vf_vf(z)); }
+ static INLINE vfloat vsqrt_vf_vf(vfloat d) { return vec_sqrt(d); }
+ 
++#if CONFIG == 1
++static INLINE vfloat vmla_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vec_madd(x, y, z); }
++static INLINE vfloat vmlanp_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vec_nmsub(x, y, z); }
++#else
++static INLINE vfloat vmla_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vadd_vf_vf_vf(vmul_vf_vf_vf(x, y), z); }
++static INLINE vfloat vmlanp_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vsub_vf_vf_vf(z, vmul_vf_vf_vf(x, y)); }
++#endif
++
++static INLINE vfloat vmlsubadd_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vmla_vf_vf_vf_vf(x, y, vnegpos_vf_vf(z)); }
+ static INLINE vfloat vfma_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vec_madd(x, y, z); }
+ static INLINE vfloat vfmapp_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vec_madd(x, y, z); }
+ static INLINE vfloat vfmapn_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vec_msub(x, y, z); }
+diff --git a/src/arch/helpersve.h b/src/arch/helpersve.h
+index 030a4b126..0c7118fa4 100644
+--- a/src/arch/helpersve.h
++++ b/src/arch/helpersve.h
+@@ -220,6 +220,7 @@ static INLINE vint2 vrint_vi2_vf(vfloat d) {
+   return svcvt_s32_f32_x(ptrue, svrinta_f32_x(ptrue, d));
+ }
+ 
++#if CONFIG == 1
+ // Multiply accumulate: z = z + x * y
+ static INLINE vfloat vmla_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) {
+   return svmad_f32_x(ptrue, x, y, z);
+@@ -228,6 +229,10 @@ static INLINE vfloat vmla_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) {
+ static INLINE vfloat vmlanp_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) {
+   return svmsb_f32_x(ptrue, x, y, z);
+ }
++#else
++static INLINE vfloat vmla_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vadd_vf_vf_vf(vmul_vf_vf_vf(x, y), z); }
++static INLINE vfloat vmlanp_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vsub_vf_vf_vf(z, vmul_vf_vf_vf(x, y)); }
++#endif
+ 
+ // fused multiply add / sub
+ static INLINE vfloat vfma_vf_vf_vf_vf(vfloat x, vfloat y,
+@@ -526,11 +531,21 @@ static INLINE vdouble vmin_vd_vd_vd(vdouble x, vdouble y) {
+   return svmin_f64_x(ptrue, x, y);
+ }
+ 
++#if CONFIG == 1
+ // Multiply accumulate / subtract
+ static INLINE vdouble vmla_vd_vd_vd_vd(vdouble x, vdouble y,
+                                        vdouble z) { // z = x*y + z
+   return svmad_f64_x(ptrue, x, y, z);
+ }
++static INLINE vdouble vmlapn_vd_vd_vd_vd(vdouble x, vdouble y,
++                                         vdouble z) { // z = x * y - z
++  return svnmsb_f64_x(ptrue, x, y, z);
++}
++#else
++static INLINE vdouble vmla_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vadd_vd_vd_vd(vmul_vd_vd_vd(x, y), z); }
++static INLINE vdouble vmlapn_vd_vd_vd_vd(vdouble x, vdouble y, vdouble z) { return vsub_vd_vd_vd(vmul_vd_vd_vd(x, y), z); }
++#endif
++
+ static INLINE vdouble vfma_vd_vd_vd_vd(vdouble x, vdouble y,
+                                        vdouble z) { // z + x * y
+   return svmad_f64_x(ptrue, x, y, z);
+@@ -543,10 +558,6 @@ static INLINE vdouble vfmapn_vd_vd_vd_vd(vdouble x, vdouble y,
+                                          vdouble z) { // x * y - z
+   return svnmsb_f64_x(ptrue, x, y, z);
+ }
+-static INLINE vdouble vmlapn_vd_vd_vd_vd(vdouble x, vdouble y,
+-                                         vdouble z) { // z = x * y - z
+-  return svnmsb_f64_x(ptrue, x, y, z);
+-}
+ 
+ // Float comparison
+ static INLINE vopmask vlt_vo_vd_vd(vdouble x, vdouble y) {
+diff --git a/src/libm-tester/CMakeLists.txt b/src/libm-tester/CMakeLists.txt
+index 141ea8172..03fff529a 100644
+--- a/src/libm-tester/CMakeLists.txt
++++ b/src/libm-tester/CMakeLists.txt
+@@ -20,6 +20,22 @@ string(CONCAT CMAKE_C_FLAGS ${SLEEF_C_FLAGS})
+ 
+ #
+ 
++if (SLEEF_ARCH_X86)
++  set(TEST3_CINZ purec_scalar sse2 sse4 avx avx512fnofma)
++  set(TEST3_FINZ purecfma_scalar avx2128 avx2 avx512f)
++elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
++  set(TEST3_CINZ purec_scalar advsimdnofma svenofma)
++  set(TEST3_FINZ purecfma_scalar advsimd sve)
++elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm")
++  set(TEST3_CINZ purec_scalar)
++  set(TEST3_FINZ purecfma_scalar)
++elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(powerpc|ppc)64")
++  set(TEST3_CINZ purec_scalar vsxnofma)
++  set(TEST3_FINZ purecfma_scalar vsx)
++endif()
++
++#
++
+ function(add_test_iut IUT)
+   if (LIB_MPFR)
+     set(TESTER ${TARGET_TESTER})
+@@ -99,6 +115,42 @@ macro(test_extension SIMD)
+ 	      endif()
+       endforeach()
+     endif()
++
++    if(NOT ${SIMD} STREQUAL NEON32 AND NOT ${SIMD} STREQUAL NEON32VFPV4)
++      # Build tester3
++      string(TOLOWER ${SIMD} SCSIMD)
++      set(T "tester3${SCSIMD}")
++      add_executable(${T} tester3.c tester3main.c md5.c md5.h)
++      target_compile_options(${T} PRIVATE ${FLAGS_ENABLE_${SIMD}})
++      target_compile_definitions(${T} PRIVATE ${COMMON_TARGET_DEFINITIONS} ${TESTER3_DEFINITIONS_${SIMD}})
++      set_target_properties(${T} PROPERTIES C_STANDARD 99)
++      target_link_libraries(${T} ${TARGET_LIBSLEEF} ${LIBM})
++      add_dependencies(${T} ${TARGET_HEADERS})
++      add_dependencies(${T} ${TARGET_LIBSLEEF})
++
++      # Add test with tester3
++      list(FIND TEST3_CINZ ${SCSIMD} INDEX_TEST3_CINZ)
++      if (NOT INDEX_TEST3_CINZ EQUAL -1)
++	if (SDE_COMMAND)
++	  add_test(NAME tester3${SCSIMD} COMMAND ${SDE_COMMAND} "--" ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/tester3${SCSIMD} ${CMAKE_SOURCE_DIR}/src/libm-tester/hash_cinz.txt)
++	elseif(EMULATOR)
++	  add_test(NAME tester3${SCSIMD} COMMAND ${EMULATOR} ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/tester3${SCSIMD} ${CMAKE_SOURCE_DIR}/src/libm-tester/hash_cinz.txt)
++	else()
++	  add_test(NAME tester3${SCSIMD} COMMAND tester3${SCSIMD} ${CMAKE_SOURCE_DIR}/src/libm-tester/hash_cinz.txt)
++	endif()
++      endif()
++
++      list(FIND TEST3_FINZ ${SCSIMD} INDEX_TEST3_FINZ)
++      if (NOT INDEX_TEST3_FINZ EQUAL -1)
++	if (SDE_COMMAND)
++	  add_test(NAME tester3${SCSIMD} COMMAND ${SDE_COMMAND} "--" ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/tester3${SCSIMD} ${CMAKE_SOURCE_DIR}/src/libm-tester/hash_finz.txt)
++	elseif(EMULATOR)
++	  add_test(NAME tester3${SCSIMD} COMMAND ${EMULATOR} ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/tester3${SCSIMD} ${CMAKE_SOURCE_DIR}/src/libm-tester/hash_finz.txt)
++	else()
++	  add_test(NAME tester3${SCSIMD} COMMAND tester3${SCSIMD} ${CMAKE_SOURCE_DIR}/src/libm-tester/hash_finz.txt)
++	endif()
++      endif()
++    endif()
+   endif(COMPILER_SUPPORTS_${SIMD})
+ endmacro(test_extension)
+ 
+diff --git a/src/libm-tester/hash_cinz.txt b/src/libm-tester/hash_cinz.txt
+new file mode 100644
+index 000000000..6a2dca1a5
+--- /dev/null
++++ b/src/libm-tester/hash_cinz.txt
+@@ -0,0 +1,4 @@
++asin 1588c13c077d02f784cf2d63693a74c2
++acos 7a8cafabe67aa1c257ea6c6591f1b094
++asin d59f3ccaabc6e56d92d568b0532cf42b
++acos dd8ccf02dfbbd0582aaeb7b2853524cf
+diff --git a/src/libm-tester/hash_finz.txt b/src/libm-tester/hash_finz.txt
+new file mode 100644
+index 000000000..305d6f3a2
+--- /dev/null
++++ b/src/libm-tester/hash_finz.txt
+@@ -0,0 +1,4 @@
++asin 25382463092c463e29328ed5dedc3740
++acos 74fe6fda02f86c36ff49b93805369bc7
++asin 4f1478684ffbd730db3ca9bdfbd3e672
++acos 6789c8fd8ea0bd9ce8caab0f43510a81
+diff --git a/src/libm-tester/iut.c b/src/libm-tester/iut.c
+index db39afb28..370998a10 100644
+--- a/src/libm-tester/iut.c
++++ b/src/libm-tester/iut.c
+@@ -39,7 +39,7 @@
+ int main(int argc, char **argv) {
+   char buf[BUFSIZE];
+ 
+-  printf("3\n");
++  printf("11\n");
+   fflush(stdout);
+ 
+   //fprintf(stderr, "IUT start\n");
+diff --git a/src/libm-tester/iutsimd.c b/src/libm-tester/iutsimd.c
+index c0a6f3103..6bea66f3b 100644
+--- a/src/libm-tester/iutsimd.c
++++ b/src/libm-tester/iutsimd.c
+@@ -91,10 +91,10 @@ typedef Sleef___m512d_2 vdouble2;
+ typedef Sleef___m512_2 vfloat2;
+ #endif
+ 
+-#ifdef ENABLE_AVX512F_NOFMA
++#ifdef ENABLE_AVX512FNOFMA
+ #define CONFIG 2
+ #include "helperavx512f.h"
+-#include "renameavx512f_nofma.h"
++#include "renameavx512fnofma.h"
+ typedef Sleef___m512d_2 vdouble2;
+ typedef Sleef___m512_2 vfloat2;
+ #endif
+@@ -121,10 +121,10 @@ typedef Sleef_float64x2_t_2 vdouble2;
+ typedef Sleef_float32x4_t_2 vfloat2;
+ #endif
+ 
+-#ifdef ENABLE_ADVSIMD_NOFMA
++#ifdef ENABLE_ADVSIMDNOFMA
+ #define CONFIG 2
+ #include "helperadvsimd.h"
+-#include "renameadvsimd_nofma.h"
++#include "renameadvsimdnofma.h"
+ typedef Sleef_float64x2_t_2 vdouble2;
+ typedef Sleef_float32x4_t_2 vfloat2;
+ #endif
+@@ -145,10 +145,10 @@ typedef Sleef_svfloat64_t_2 vdouble2;
+ typedef Sleef_svfloat32_t_2 vfloat2;
+ #endif
+ 
+-#ifdef ENABLE_SVE_NOFMA
++#ifdef ENABLE_SVENOFMA
+ #define CONFIG 2
+ #include "helpersve.h"
+-#include "renamesve_nofma.h"
++#include "renamesvenofma.h"
+ typedef Sleef_svfloat64_t_2 vdouble2;
+ typedef Sleef_svfloat32_t_2 vfloat2;
+ #endif
+@@ -169,10 +169,10 @@ typedef Sleef_vector_double_2 vdouble2;
+ typedef Sleef_vector_float_2 vfloat2;
+ #endif
+ 
+-#ifdef ENABLE_VSX_NOFMA
++#ifdef ENABLE_VSXNOFMA
+ #define CONFIG 2
+ #include "helperpower_128.h"
+-#include "renamevsx_nofma.h"
++#include "renamevsxnofma.h"
+ typedef Sleef_vector_double_2 vdouble2;
+ typedef Sleef_vector_float_2 vfloat2;
+ #endif
+@@ -455,6 +455,9 @@ int do_test(int argc, char **argv) {
+ #elif defined(ENABLE_VECEXT)
+     if (vcast_f_vf(xpowf(vcast_vf_f(0.5f), vcast_vf_f(140))) == 0) k += 4;
+ #endif
++#if defined(ENABLE_DSP128) || defined(ENABLE_DSP256)
++    k += 8; // dispatcher
++#endif
+ 
+     printf("%d\n", k);
+     fflush(stdout);
+@@ -548,6 +551,11 @@ int do_test(int argc, char **argv) {
+     func_d_d("lgamma_u1", xlgamma_u1);
+     func_d_d("erf_u1", xerf_u1);
+     func_d_d("erfc_u15", xerfc_u15);
++
++#if !defined(ENABLE_DSP128) && !defined(ENABLE_DSP256)
++    func_d_d("yasin", yasin);
++    func_d_d("yacos", yacos);
++#endif
+ #endif
+ 
+ #ifdef ENABLE_SP
+@@ -625,6 +633,11 @@ int do_test(int argc, char **argv) {
+     func_f_f("lgammaf_u1", xlgammaf_u1);
+     func_f_f("erff_u1", xerff_u1);
+     func_f_f("erfcf_u15", xerfcf_u15);
++
++#if !defined(ENABLE_DSP128) && !defined(ENABLE_DSP256)
++    func_f_f("yasinf", yasinf);
++    func_f_f("yacosf", yacosf);
++#endif
+ #endif
+   }
+ 
+diff --git a/src/libm-tester/md5.c b/src/libm-tester/md5.c
+new file mode 100644
+index 000000000..b235e17a5
+--- /dev/null
++++ b/src/libm-tester/md5.c
+@@ -0,0 +1,291 @@
++/*
++ * This is an OpenSSL-compatible implementation of the RSA Data Security, Inc.
++ * MD5 Message-Digest Algorithm (RFC 1321).
++ *
++ * Homepage:
++ * http://openwall.info/wiki/people/solar/software/public-domain-source-code/md5
++ *
++ * Author:
++ * Alexander Peslyak, better known as Solar Designer <solar at openwall.com>
++ *
++ * This software was written by Alexander Peslyak in 2001.  No copyright is
++ * claimed, and the software is hereby placed in the public domain.
++ * In case this attempt to disclaim copyright and place the software in the
++ * public domain is deemed null and void, then the software is
++ * Copyright (c) 2001 Alexander Peslyak and it is hereby released to the
++ * general public under the following terms:
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted.
++ *
++ * There's ABSOLUTELY NO WARRANTY, express or implied.
++ *
++ * (This is a heavily cut-down "BSD license".)
++ *
++ * This differs from Colin Plumb's older public domain implementation in that
++ * no exactly 32-bit integer data type is required (any 32-bit or wider
++ * unsigned integer data type will do), there's no compile-time endianness
++ * configuration, and the function prototypes match OpenSSL's.  No code from
++ * Colin Plumb's implementation has been reused; this comment merely compares
++ * the properties of the two independent implementations.
++ *
++ * The primary goals of this implementation are portability and ease of use.
++ * It is meant to be fast, but not as fast as possible.  Some known
++ * optimizations are not included to reduce source code size and avoid
++ * compile-time configuration.
++ */
++
++#ifndef HAVE_OPENSSL
++
++#include <string.h>
++
++#include "md5.h"
++
++/*
++ * The basic MD5 functions.
++ *
++ * F and G are optimized compared to their RFC 1321 definitions for
++ * architectures that lack an AND-NOT instruction, just like in Colin Plumb's
++ * implementation.
++ */
++#define F(x, y, z)			((z) ^ ((x) & ((y) ^ (z))))
++#define G(x, y, z)			((y) ^ ((z) & ((x) ^ (y))))
++#define H(x, y, z)			(((x) ^ (y)) ^ (z))
++#define H2(x, y, z)			((x) ^ ((y) ^ (z)))
++#define I(x, y, z)			((y) ^ ((x) | ~(z)))
++
++/*
++ * The MD5 transformation for all four rounds.
++ */
++#define STEP(f, a, b, c, d, x, t, s) \
++	(a) += f((b), (c), (d)) + (x) + (t); \
++	(a) = (((a) << (s)) | (((a) & 0xffffffff) >> (32 - (s)))); \
++	(a) += (b);
++
++/*
++ * SET reads 4 input bytes in little-endian byte order and stores them in a
++ * properly aligned word in host byte order.
++ *
++ * The check for little-endian architectures that tolerate unaligned memory
++ * accesses is just an optimization.  Nothing will break if it fails to detect
++ * a suitable architecture.
++ *
++ * Unfortunately, this optimization may be a C strict aliasing rules violation
++ * if the caller's data buffer has effective type that cannot be aliased by
++ * MD5_u32plus.  In practice, this problem may occur if these MD5 routines are
++ * inlined into a calling function, or with future and dangerously advanced
++ * link-time optimizations.  For the time being, keeping these MD5 routines in
++ * their own translation unit avoids the problem.
++ */
++#if defined(__i386__) || defined(__x86_64__) || defined(__vax__)
++#define SET(n) \
++	(*(MD5_u32plus *)&ptr[(n) * 4])
++#define GET(n) \
++	SET(n)
++#else
++#define SET(n) \
++	(ctx->block[(n)] = \
++	(MD5_u32plus)ptr[(n) * 4] | \
++	((MD5_u32plus)ptr[(n) * 4 + 1] << 8) | \
++	((MD5_u32plus)ptr[(n) * 4 + 2] << 16) | \
++	((MD5_u32plus)ptr[(n) * 4 + 3] << 24))
++#define GET(n) \
++	(ctx->block[(n)])
++#endif
++
++/*
++ * This processes one or more 64-byte data blocks, but does NOT update the bit
++ * counters.  There are no alignment requirements.
++ */
++static const void *body(MD5_CTX *ctx, const void *data, unsigned long size)
++{
++	const unsigned char *ptr;
++	MD5_u32plus a, b, c, d;
++	MD5_u32plus saved_a, saved_b, saved_c, saved_d;
++
++	ptr = (const unsigned char *)data;
++
++	a = ctx->a;
++	b = ctx->b;
++	c = ctx->c;
++	d = ctx->d;
++
++	do {
++		saved_a = a;
++		saved_b = b;
++		saved_c = c;
++		saved_d = d;
++
++/* Round 1 */
++		STEP(F, a, b, c, d, SET(0), 0xd76aa478, 7)
++		STEP(F, d, a, b, c, SET(1), 0xe8c7b756, 12)
++		STEP(F, c, d, a, b, SET(2), 0x242070db, 17)
++		STEP(F, b, c, d, a, SET(3), 0xc1bdceee, 22)
++		STEP(F, a, b, c, d, SET(4), 0xf57c0faf, 7)
++		STEP(F, d, a, b, c, SET(5), 0x4787c62a, 12)
++		STEP(F, c, d, a, b, SET(6), 0xa8304613, 17)
++		STEP(F, b, c, d, a, SET(7), 0xfd469501, 22)
++		STEP(F, a, b, c, d, SET(8), 0x698098d8, 7)
++		STEP(F, d, a, b, c, SET(9), 0x8b44f7af, 12)
++		STEP(F, c, d, a, b, SET(10), 0xffff5bb1, 17)
++		STEP(F, b, c, d, a, SET(11), 0x895cd7be, 22)
++		STEP(F, a, b, c, d, SET(12), 0x6b901122, 7)
++		STEP(F, d, a, b, c, SET(13), 0xfd987193, 12)
++		STEP(F, c, d, a, b, SET(14), 0xa679438e, 17)
++		STEP(F, b, c, d, a, SET(15), 0x49b40821, 22)
++
++/* Round 2 */
++		STEP(G, a, b, c, d, GET(1), 0xf61e2562, 5)
++		STEP(G, d, a, b, c, GET(6), 0xc040b340, 9)
++		STEP(G, c, d, a, b, GET(11), 0x265e5a51, 14)
++		STEP(G, b, c, d, a, GET(0), 0xe9b6c7aa, 20)
++		STEP(G, a, b, c, d, GET(5), 0xd62f105d, 5)
++		STEP(G, d, a, b, c, GET(10), 0x02441453, 9)
++		STEP(G, c, d, a, b, GET(15), 0xd8a1e681, 14)
++		STEP(G, b, c, d, a, GET(4), 0xe7d3fbc8, 20)
++		STEP(G, a, b, c, d, GET(9), 0x21e1cde6, 5)
++		STEP(G, d, a, b, c, GET(14), 0xc33707d6, 9)
++		STEP(G, c, d, a, b, GET(3), 0xf4d50d87, 14)
++		STEP(G, b, c, d, a, GET(8), 0x455a14ed, 20)
++		STEP(G, a, b, c, d, GET(13), 0xa9e3e905, 5)
++		STEP(G, d, a, b, c, GET(2), 0xfcefa3f8, 9)
++		STEP(G, c, d, a, b, GET(7), 0x676f02d9, 14)
++		STEP(G, b, c, d, a, GET(12), 0x8d2a4c8a, 20)
++
++/* Round 3 */
++		STEP(H, a, b, c, d, GET(5), 0xfffa3942, 4)
++		STEP(H2, d, a, b, c, GET(8), 0x8771f681, 11)
++		STEP(H, c, d, a, b, GET(11), 0x6d9d6122, 16)
++		STEP(H2, b, c, d, a, GET(14), 0xfde5380c, 23)
++		STEP(H, a, b, c, d, GET(1), 0xa4beea44, 4)
++		STEP(H2, d, a, b, c, GET(4), 0x4bdecfa9, 11)
++		STEP(H, c, d, a, b, GET(7), 0xf6bb4b60, 16)
++		STEP(H2, b, c, d, a, GET(10), 0xbebfbc70, 23)
++		STEP(H, a, b, c, d, GET(13), 0x289b7ec6, 4)
++		STEP(H2, d, a, b, c, GET(0), 0xeaa127fa, 11)
++		STEP(H, c, d, a, b, GET(3), 0xd4ef3085, 16)
++		STEP(H2, b, c, d, a, GET(6), 0x04881d05, 23)
++		STEP(H, a, b, c, d, GET(9), 0xd9d4d039, 4)
++		STEP(H2, d, a, b, c, GET(12), 0xe6db99e5, 11)
++		STEP(H, c, d, a, b, GET(15), 0x1fa27cf8, 16)
++		STEP(H2, b, c, d, a, GET(2), 0xc4ac5665, 23)
++
++/* Round 4 */
++		STEP(I, a, b, c, d, GET(0), 0xf4292244, 6)
++		STEP(I, d, a, b, c, GET(7), 0x432aff97, 10)
++		STEP(I, c, d, a, b, GET(14), 0xab9423a7, 15)
++		STEP(I, b, c, d, a, GET(5), 0xfc93a039, 21)
++		STEP(I, a, b, c, d, GET(12), 0x655b59c3, 6)
++		STEP(I, d, a, b, c, GET(3), 0x8f0ccc92, 10)
++		STEP(I, c, d, a, b, GET(10), 0xffeff47d, 15)
++		STEP(I, b, c, d, a, GET(1), 0x85845dd1, 21)
++		STEP(I, a, b, c, d, GET(8), 0x6fa87e4f, 6)
++		STEP(I, d, a, b, c, GET(15), 0xfe2ce6e0, 10)
++		STEP(I, c, d, a, b, GET(6), 0xa3014314, 15)
++		STEP(I, b, c, d, a, GET(13), 0x4e0811a1, 21)
++		STEP(I, a, b, c, d, GET(4), 0xf7537e82, 6)
++		STEP(I, d, a, b, c, GET(11), 0xbd3af235, 10)
++		STEP(I, c, d, a, b, GET(2), 0x2ad7d2bb, 15)
++		STEP(I, b, c, d, a, GET(9), 0xeb86d391, 21)
++
++		a += saved_a;
++		b += saved_b;
++		c += saved_c;
++		d += saved_d;
++
++		ptr += 64;
++	} while (size -= 64);
++
++	ctx->a = a;
++	ctx->b = b;
++	ctx->c = c;
++	ctx->d = d;
++
++	return ptr;
++}
++
++void MD5_Init(MD5_CTX *ctx)
++{
++	ctx->a = 0x67452301;
++	ctx->b = 0xefcdab89;
++	ctx->c = 0x98badcfe;
++	ctx->d = 0x10325476;
++
++	ctx->lo = 0;
++	ctx->hi = 0;
++}
++
++void MD5_Update(MD5_CTX *ctx, const void *data, unsigned long size)
++{
++	MD5_u32plus saved_lo;
++	unsigned long used, available;
++
++	saved_lo = ctx->lo;
++	if ((ctx->lo = (saved_lo + size) & 0x1fffffff) < saved_lo)
++		ctx->hi++;
++	ctx->hi += size >> 29;
++
++	used = saved_lo & 0x3f;
++
++	if (used) {
++		available = 64 - used;
++
++		if (size < available) {
++			memcpy(&ctx->buffer[used], data, size);
++			return;
++		}
++
++		memcpy(&ctx->buffer[used], data, available);
++		data = (const unsigned char *)data + available;
++		size -= available;
++		body(ctx, ctx->buffer, 64);
++	}
++
++	if (size >= 64) {
++		data = body(ctx, data, size & ~(unsigned long)0x3f);
++		size &= 0x3f;
++	}
++
++	memcpy(ctx->buffer, data, size);
++}
++
++#define OUT(dst, src) \
++	(dst)[0] = (unsigned char)(src); \
++	(dst)[1] = (unsigned char)((src) >> 8); \
++	(dst)[2] = (unsigned char)((src) >> 16); \
++	(dst)[3] = (unsigned char)((src) >> 24);
++
++void MD5_Final(unsigned char *result, MD5_CTX *ctx)
++{
++	unsigned long used, available;
++
++	used = ctx->lo & 0x3f;
++
++	ctx->buffer[used++] = 0x80;
++
++	available = 64 - used;
++
++	if (available < 8) {
++		memset(&ctx->buffer[used], 0, available);
++		body(ctx, ctx->buffer, 64);
++		used = 0;
++		available = 64;
++	}
++
++	memset(&ctx->buffer[used], 0, available - 8);
++
++	ctx->lo <<= 3;
++	OUT(&ctx->buffer[56], ctx->lo)
++	OUT(&ctx->buffer[60], ctx->hi)
++
++	body(ctx, ctx->buffer, 64);
++
++	OUT(&result[0], ctx->a)
++	OUT(&result[4], ctx->b)
++	OUT(&result[8], ctx->c)
++	OUT(&result[12], ctx->d)
++
++	memset(ctx, 0, sizeof(*ctx));
++}
++
++#endif
+diff --git a/src/libm-tester/md5.h b/src/libm-tester/md5.h
+new file mode 100644
+index 000000000..2da44bf35
+--- /dev/null
++++ b/src/libm-tester/md5.h
+@@ -0,0 +1,45 @@
++/*
++ * This is an OpenSSL-compatible implementation of the RSA Data Security, Inc.
++ * MD5 Message-Digest Algorithm (RFC 1321).
++ *
++ * Homepage:
++ * http://openwall.info/wiki/people/solar/software/public-domain-source-code/md5
++ *
++ * Author:
++ * Alexander Peslyak, better known as Solar Designer <solar at openwall.com>
++ *
++ * This software was written by Alexander Peslyak in 2001.  No copyright is
++ * claimed, and the software is hereby placed in the public domain.
++ * In case this attempt to disclaim copyright and place the software in the
++ * public domain is deemed null and void, then the software is
++ * Copyright (c) 2001 Alexander Peslyak and it is hereby released to the
++ * general public under the following terms:
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted.
++ *
++ * There's ABSOLUTELY NO WARRANTY, express or implied.
++ *
++ * See md5.c for more information.
++ */
++
++#ifdef HAVE_OPENSSL
++#include <openssl/md5.h>
++#elif !defined(_MD5_H)
++#define _MD5_H
++
++/* Any 32-bit or wider unsigned integer data type will do */
++typedef unsigned int MD5_u32plus;
++
++typedef struct {
++	MD5_u32plus lo, hi;
++	MD5_u32plus a, b, c, d;
++	unsigned char buffer[64];
++	MD5_u32plus block[16];
++} MD5_CTX;
++
++extern void MD5_Init(MD5_CTX *ctx);
++extern void MD5_Update(MD5_CTX *ctx, const void *data, unsigned long size);
++extern void MD5_Final(unsigned char *result, MD5_CTX *ctx);
++
++#endif
+diff --git a/src/libm-tester/tester.c b/src/libm-tester/tester.c
+index 97652594c..344041c35 100644
+--- a/src/libm-tester/tester.c
++++ b/src/libm-tester/tester.c
+@@ -205,6 +205,9 @@ double child_lgamma_u1(double x) { child_d_d("lgamma_u1", x); }
+ double child_erf_u1(double x) { child_d_d("erf_u1", x); }
+ double child_erfc_u15(double x) { child_d_d("erfc_u15", x); }
+ 
++double child_yasin(double x) { child_d_d("yasin", x); }
++double child_yacos(double x) { child_d_d("yacos", x); }
++
+ //
+ 
+ double child_ldexp(double x, int q) {
+@@ -336,6 +339,9 @@ float child_lgammaf_u1(float x) { child_f_f("lgammaf_u1", x); }
+ float child_erff_u1(float x) { child_f_f("erff_u1", x); }
+ float child_erfcf_u15(float x) { child_f_f("erfcf_u15", x); }
+ 
++float child_yasinf(float x) { child_f_f("yasinf", x); }
++float child_yacosf(float x) { child_f_f("yacosf", x); }
++
+ float child_ldexpf(float x, int q) {
+   char str[256];
+   uint32_t u;
+@@ -372,7 +378,7 @@ void showResult(int success) {
+   }
+ }
+ 
+-int enableDP = 0, enableSP = 0;
++int enableDP = 0, enableSP = 0, noSupportForYFuncs = 0;
+ 
+ void do_test() {
+   mpfr_t frc, frt, frx, fry, frz;
+@@ -2336,6 +2342,14 @@ void do_test() {
+       showResult(success);
+     }
+ 
++    if (!noSupportForYFuncs) {
++      fprintf(stderr, "yasin denormal/nonnumber test : ");
++      double xa[] = { +0.0, -0.0, +1, -1, +1e+10, -1e+10, DBL_MAX, -DBL_MAX, DBL_MIN, -DBL_MIN,
++		      POSITIVE_INFINITY, NEGATIVE_INFINITY, NAN, nextafter(1, 2), nextafter(-1, -2) };
++      for(i=0;i<sizeof(xa)/sizeof(double) && success;i++) cmpDenorm_d(mpfr_asin, child_yasin, xa[i]);
++      showResult(success);
++    }
++
+     {
+       fprintf(stderr, "asin_u1 denormal/nonnumber test : ");
+       double xa[] = { +0.0, -0.0, +1, -1, +1e+10, -1e+10, DBL_MAX, -DBL_MAX, DBL_MIN, -DBL_MIN,
+@@ -2352,6 +2366,14 @@ void do_test() {
+       showResult(success);
+     }
+ 
++    if (!noSupportForYFuncs) {
++      fprintf(stderr, "yacos denormal/nonnumber test : ");
++      double xa[] = { +0.0, -0.0, +1, -1, +1e+10, -1e+10, DBL_MAX, -DBL_MAX, DBL_MIN, -DBL_MIN,
++		      POSITIVE_INFINITY, NEGATIVE_INFINITY, NAN, nextafter(1, 2), nextafter(-1, -2) };
++      for(i=0;i<sizeof(xa)/sizeof(double) && success;i++) cmpDenorm_d(mpfr_acos, child_yacos, xa[i]);
++      showResult(success);
++    }
++
+     {
+       fprintf(stderr, "acos_u1 denormal/nonnumber test : ");
+       double xa[] = { +0.0, -0.0, +1, -1, +1e+10, -1e+10, DBL_MAX, -DBL_MAX, DBL_MIN, -DBL_MIN,
+@@ -2880,6 +2902,20 @@ void do_test() {
+       showResult(success);
+     }
+ 
++    if (!noSupportForYFuncs) {
++      fprintf(stderr, "yasinf denormal/nonnumber test : ");
++      if (enableFlushToZero) {
++	float xa[] = { +0.0, -0.0, +1, -1, +1e+7, -1e+7, FLT_MAX, -FLT_MAX,
++		       POSITIVE_INFINITYf, NEGATIVE_INFINITYf, NAN, nextafterf(1, 2), nextafterf(-1, -2) };
++	for(i=0;i<sizeof(xa)/sizeof(float) && success;i++) cmpDenorm_f(mpfr_asin, child_yasinf, xa[i]);
++      } else {
++	float xa[] = { +0.0, -0.0, +1, -1, +1e+7, -1e+7, FLT_MAX, -FLT_MAX, FLT_MIN, -FLT_MIN,
++		       POSITIVE_INFINITYf, NEGATIVE_INFINITYf, NAN, nextafterf(1, 2), nextafterf(-1, -2) };
++	for(i=0;i<sizeof(xa)/sizeof(float) && success;i++) cmpDenorm_f(mpfr_asin, child_yasinf, xa[i]);
++      }
++      showResult(success);
++    }
++
+     {
+       fprintf(stderr, "asinf_u1 denormal/nonnumber test : ");
+       float xa[] = { +0.0, -0.0, +1, -1, +1e+7, -1e+7, FLT_MAX, -FLT_MAX, FLT_MIN, -FLT_MIN,
+@@ -2896,6 +2932,14 @@ void do_test() {
+       showResult(success);
+     }
+ 
++    if (!noSupportForYFuncs) {
++      fprintf(stderr, "yacosf denormal/nonnumber test : ");
++      float xa[] = { +0.0, -0.0, +1, -1, +1e+7, -1e+7, FLT_MAX, -FLT_MAX, FLT_MIN, -FLT_MIN,
++		     POSITIVE_INFINITYf, NEGATIVE_INFINITYf, NAN, nextafterf(1, 2), nextafterf(-1, -2) };
++      for(i=0;i<sizeof(xa)/sizeof(float) && success;i++) cmpDenorm_f(mpfr_acos, child_yacosf, xa[i]);
++      showResult(success);
++    }
++
+     {
+       fprintf(stderr, "acosf_u1 denormal/nonnumber test : ");
+       float xa[] = { +0.0, -0.0, +1, -1, +1e+7, -1e+7, FLT_MAX, -FLT_MAX, FLT_MIN, -FLT_MIN,
+@@ -3818,6 +3862,14 @@ void do_test() {
+ 
+     //
+ 
++    if (!noSupportForYFuncs) {
++      fprintf(stderr, "yasin : ");
++      for(d = -1;d < 1 && success;d += 0.0002) checkAccuracy_d(mpfr_asin, child_yasin, d, 3.5);
++      showResult(success);
++    }
++
++    //
++
+     fprintf(stderr, "asin_u1 : ");
+     for(d = -1;d < 1 && success;d += 0.0002) checkAccuracy_d(mpfr_asin, child_asin_u1, d, 1.0);
+     showResult(success);
+@@ -3830,6 +3882,14 @@ void do_test() {
+ 
+     //
+ 
++    if (!noSupportForYFuncs) {
++      fprintf(stderr, "yacos : ");
++      for(d = -1;d < 1 && success;d += 0.0002) checkAccuracy_d(mpfr_acos, child_yacos, d, 3.5);
++      showResult(success);
++    }
++
++    //
++
+     fprintf(stderr, "acos_u1 : ");
+     for(d = -1;d < 1 && success;d += 0.0002) checkAccuracy_d(mpfr_acos, child_acos_u1, d, 1.0);
+     showResult(success);
+@@ -4587,6 +4647,14 @@ void do_test() {
+ 
+     //
+ 
++    if (!noSupportForYFuncs) {
++      fprintf(stderr, "yasinf : ");
++      for(d = -1;d < 1 && success;d += 0.0002) checkAccuracy_f(mpfr_asin, child_yasinf, d, 3.5);
++      showResult(success);
++    }
++
++    //
++
+     fprintf(stderr, "asinf_u1 : ");
+     for(d = -1;d < 1 && success;d += 0.0002) checkAccuracy_f(mpfr_asin, child_asinf_u1, d, 1.0);
+     showResult(success);
+@@ -4599,6 +4667,13 @@ void do_test() {
+ 
+     //
+ 
++    if (!noSupportForYFuncs) {
++      fprintf(stderr, "yacosf : ");
++      for(d = -1;d < 1 && success;d += 0.0002) checkAccuracy_f(mpfr_acos, child_yacosf, d, 3.5);
++      showResult(success);
++    }
++    //
++
+     fprintf(stderr, "acosf_u1 : ");
+     for(d = -1;d < 1 && success;d += 0.0002) checkAccuracy_f(mpfr_acos, child_acosf_u1, d, 1.0);
+     showResult(success);
+@@ -4866,6 +4941,7 @@ int main(int argc, char **argv) {
+     enableDP = (u & 1) != 0;
+     enableSP = (u & 2) != 0;
+     enableFlushToZero |= ((u & 4) != 0);
++    noSupportForYFuncs = (u & 8) != 0;
+   }
+ 
+   if (enableFlushToZero) fprintf(stderr, "\n\n*** Flush to zero enabled\n");
+diff --git a/src/libm-tester/tester2simddp.c b/src/libm-tester/tester2simddp.c
+index 8faac6ce7..9b3093ef7 100644
+--- a/src/libm-tester/tester2simddp.c
++++ b/src/libm-tester/tester2simddp.c
+@@ -88,10 +88,10 @@ typedef Sleef___m512d_2 vdouble2;
+ typedef Sleef___m512_2 vfloat2;
+ #endif
+ 
+-#ifdef ENABLE_AVX512F_NOFMA
++#ifdef ENABLE_AVX512FNOFMA
+ #define CONFIG 2
+ #include "helperavx512f.h"
+-#include "renameavx512f_nofma.h"
++#include "renameavx512fnofma.h"
+ typedef Sleef___m512d_2 vdouble2;
+ typedef Sleef___m512_2 vfloat2;
+ #endif
+@@ -104,10 +104,10 @@ typedef Sleef_float64x2_t_2 vdouble2;
+ typedef Sleef_float32x4_t_2 vfloat2;
+ #endif
+ 
+-#ifdef ENABLE_ADVSIMD_NOFMA
++#ifdef ENABLE_ADVSIMDNOFMA
+ #define CONFIG 2
+ #include "helperadvsimd.h"
+-#include "renameadvsimd_nofma.h"
++#include "renameadvsimdnofma.h"
+ typedef Sleef_float64x2_t_2 vdouble2;
+ typedef Sleef_float32x4_t_2 vfloat2;
+ #endif
+@@ -120,10 +120,10 @@ typedef Sleef_svfloat64_t_2 vdouble2;
+ typedef Sleef_svfloat32_t_2 vfloat2;
+ #endif /* ENABLE_SVE */
+ 
+-#ifdef ENABLE_SVE_NOFMA
++#ifdef ENABLE_SVENOFMA
+ #define CONFIG 2
+ #include "helpersve.h"
+-#include "renamesve_nofma.h"
++#include "renamesvenofma.h"
+ typedef Sleef_svfloat64_t_2 vdouble2;
+ typedef Sleef_svfloat32_t_2 vfloat2;
+ #endif
+@@ -136,10 +136,10 @@ typedef Sleef_vector_double_2 vdouble2;
+ typedef Sleef_vector_float_2 vfloat2;
+ #endif
+ 
+-#ifdef ENABLE_VSX_NOFMA
++#ifdef ENABLE_VSXNOFMA
+ #define CONFIG 2
+ #include "helperpower_128.h"
+-#include "renamevsx_nofma.h"
++#include "renamevsxnofma.h"
+ typedef Sleef_vector_double_2 vdouble2;
+ typedef Sleef_vector_float_2 vfloat2;
+ #endif
+diff --git a/src/libm-tester/tester2simdsp.c b/src/libm-tester/tester2simdsp.c
+index 24b6e615e..478604230 100644
+--- a/src/libm-tester/tester2simdsp.c
++++ b/src/libm-tester/tester2simdsp.c
+@@ -89,10 +89,10 @@ typedef Sleef___m512d_2 vdouble2;
+ typedef Sleef___m512_2 vfloat2;
+ #endif
+ 
+-#ifdef ENABLE_AVX512F_NOFMA
++#ifdef ENABLE_AVX512FNOFMA
+ #define CONFIG 2
+ #include "helperavx512f.h"
+-#include "renameavx512f_nofma.h"
++#include "renameavx512fnofma.h"
+ typedef Sleef___m512d_2 vdouble2;
+ typedef Sleef___m512_2 vfloat2;
+ #endif
+@@ -111,10 +111,10 @@ typedef Sleef_float64x2_t_2 vdouble2;
+ typedef Sleef_float32x4_t_2 vfloat2;
+ #endif
+ 
+-#ifdef ENABLE_ADVSIMD_NOFMA
++#ifdef ENABLE_ADVSIMDNOFMA
+ #define CONFIG 2
+ #include "helperadvsimd.h"
+-#include "renameadvsimd_nofma.h"
++#include "renameadvsimdnofma.h"
+ typedef Sleef_float64x2_t_2 vdouble2;
+ typedef Sleef_float32x4_t_2 vfloat2;
+ #endif
+@@ -129,10 +129,10 @@ typedef Sleef_svfloat32_t_2 vfloat2;
+ #endif /* DORENAME */
+ #endif /* ENABLE_SVE */
+ 
+-#ifdef ENABLE_SVE_NOFMA
++#ifdef ENABLE_SVENOFMA
+ #define CONFIG 2
+ #include "helpersve.h"
+-#include "renamesve_nofma.h"
++#include "renamesvenofma.h"
+ typedef Sleef_svfloat64_t_2 vdouble2;
+ typedef Sleef_svfloat32_t_2 vfloat2;
+ #endif
+@@ -145,10 +145,10 @@ typedef Sleef_vector_double_2 vdouble2;
+ typedef Sleef_vector_float_2 vfloat2;
+ #endif
+ 
+-#ifdef ENABLE_VSX_NOFMA
++#ifdef ENABLE_VSXNOFMA
+ #define CONFIG 2
+ #include "helperpower_128.h"
+-#include "renamevsx_nofma.h"
++#include "renamevsxnofma.h"
+ typedef Sleef_vector_double_2 vdouble2;
+ typedef Sleef_vector_float_2 vfloat2;
+ #endif
+diff --git a/src/libm-tester/tester3.c b/src/libm-tester/tester3.c
+new file mode 100644
+index 000000000..d3d9932ed
+--- /dev/null
++++ b/src/libm-tester/tester3.c
+@@ -0,0 +1,282 @@
++//          Copyright Naoki Shibata 2010 - 2018.
++// Distributed under the Boost Software License, Version 1.0.
++//    (See accompanying file LICENSE.txt or copy at
++//          http://www.boost.org/LICENSE_1_0.txt)
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <stdint.h>
++#include <float.h>
++#include <limits.h>
++#include <string.h>
++#include <time.h>
++
++#include "md5.h"
++
++#include "sleef.h"
++#include "misc.h"
++#include "testerutil.h"
++
++#ifdef __VSX__
++typedef vector double vectordouble;
++typedef vector float  vectorfloat;
++#endif
++
++//
++
++static int32_t seed;
++
++// Fill memory with random bits
++static inline void memrand(void *p, int size) {
++  uint8_t *q = p;
++  for(int i=0;i<size;i++) {
++    q[i] = (seed >> 16) & 255;
++    seed = seed * 1103515245 + 12345; 
++  }
++}
++
++static inline void memranddp(double *p, int size) {
++  for(int i=0;i<size;i++) p[i] = (2.0 * rand() / RAND_MAX - 1) * 4 * M_PI;
++}
++
++static inline void memrandsp(float *p, int size) {
++  for(int i=0;i<size;i++) p[i] = (2.0 * rand() / RAND_MAX - 1) * 4 * M_PI;
++}
++
++//
++
++double setdouble(double d, int r) { return d; }
++double set2double(double d, int r) { return d; }
++double getdouble(double v, int r) { return v; }
++float setfloat(float d, int r) { return d; }
++float set2float(float d, int r) { return d; }
++float getfloat(float v, int r) { return v; }
++
++#if defined(__i386__) || defined(__x86_64__) || defined(_MSC_VER)
++__m128d set__m128d(double d, int r) { double a[2]; memrand(a, sizeof(a)); a[r & 1] = d; return _mm_loadu_pd(a); }
++double get__m128d(__m128d v, int r) { double a[2]; _mm_storeu_pd(a, v); return a[r & 1]; }
++__m128 set__m128(float d, int r) { float a[4]; memrand(a, sizeof(a)); a[r & 3] = d; return _mm_loadu_ps(a); }
++float get__m128(__m128 v, int r) { float a[4]; _mm_storeu_ps(a, v); return a[r & 3]; }
++
++#if defined(__AVX__)
++__m256d set__m256d(double d, int r) { double a[4]; memrand(a, sizeof(a)); a[r & 3] = d; return _mm256_loadu_pd(a); }
++double get__m256d(__m256d v, int r) { double a[4]; _mm256_storeu_pd(a, v); return a[r & 3]; }
++__m256 set__m256(float d, int r) { float a[8]; memrand(a, sizeof(a)); a[r & 7] = d; return _mm256_loadu_ps(a); }
++float get__m256(__m256 v, int r) { float a[8]; _mm256_storeu_ps(a, v); return a[r & 7]; }
++#endif
++
++#if defined(__AVX512F__)
++__m512d set__m512d(double d, int r) { double a[8]; memrand(a, sizeof(a)); a[r & 7] = d; return _mm512_loadu_pd(a); }
++double get__m512d(__m512d v, int r) { double a[8]; _mm512_storeu_pd(a, v); return a[r & 7]; }
++__m512 set__m512(float d, int r) { float a[16]; memrand(a, sizeof(a)); a[r & 15] = d; return _mm512_loadu_ps(a); }
++float get__m512(__m512 v, int r) { float a[16]; _mm512_storeu_ps(a, v); return a[r & 15]; }
++#endif
++#endif // #if defined(__i386__) || defined(__x86_64__) || defined(_MSC_VER)
++
++#if defined(__aarch64__) && defined(__ARM_NEON)
++float64x2_t setfloat64x2_t(double d, int r) { double a[2]; memrand(a, sizeof(a)); a[r & 1] = d; return vld1q_f64(a); }
++double getfloat64x2_t(float64x2_t v, int r) { double a[2]; vst1q_f64(a, v); return a[r & 1]; }
++float32x4_t setfloat32x4_t(float d, int r) { float a[4]; memrand(a, sizeof(a)); a[r & 3] = d; return vld1q_f32(a); }
++float getfloat32x4_t(float32x4_t v, int r) { float a[4]; vst1q_f32(a, v); return a[r & 3]; }
++#endif
++
++#ifdef __ARM_FEATURE_SVE
++svfloat64_t setsvfloat64_t(double d, int r) { double a[svcntd()]; memrand(a, sizeof(a)); a[r & (svcntd()-1)] = d; return svld1_f64(svptrue_b8(), a); }
++double getsvfloat64_t(svfloat64_t v, int r) { double a[svcntd()]; svst1_f64(svptrue_b8(), a, v); return a[r & (svcntd()-1)]; }
++svfloat32_t setsvfloat32_t(float d, int r)  { float  a[svcntw()]; memrand(a, sizeof(a)); a[r & (svcntw()-1)] = d; return svld1_f32(svptrue_b8(), a); }
++float getsvfloat32_t(svfloat32_t v, int r)  { float  a[svcntw()]; svst1_f32(svptrue_b8(), a, v); return a[r & (svcntw()-1)]; }
++#endif
++
++#ifdef __VSX__
++vectordouble setvectordouble(double d, int r) { double a[2]; memrand(a, sizeof(a)); a[r & 1] = d; return (vector double) ( a[0], a[1] ); }
++double getvectordouble(vector double v, int r) { double a[2]; return v[r & 1]; }
++vectorfloat setvectorfloat(float d, int r) { float a[4]; memrand(a, sizeof(a)); a[r & 3] = d; return (vector float) ( a[0], a[1], a[2], a[3] ); }
++float getvectorfloat(vectorfloat v, int r) { float a[4]; return v[r & 3]; }
++#endif
++
++//
++
++// ATR = "cinz_", NAME = sin, TYPE = d2, ULP = u35, EXT = sse2
++#define FUNC(ATR, NAME, TYPE, ULP, EXT) Sleef_ ## ATR ## NAME ## TYPE ## _ ## ULP ## EXT
++#define TYPE2(TYPE) Sleef_ ## TYPE ## _2
++#define SET(TYPE) set ## TYPE
++#define GET(TYPE) get ## TYPE
++
++//
++
++#define checkDigest(NAME) do {						\
++    unsigned char d[16], mes[64], buf[64];				\
++    MD5_Final(d, &ctx);							\
++    sprintf((char *)mes, "%s %02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",	\
++	    #NAME, d[0],d[1],d[2],d[3],d[4],d[5],d[6],d[7],		\
++	    d[8],d[9],d[10],d[11],d[12],d[13],d[14],d[15]);		\
++    if (fp != NULL) {							\
++      fgets((char *)buf, 60, fp);					\
++      puts((char *)mes);						\
++      puts((char *)buf);						\
++      if (strncmp((char *)mes, (char *)buf, strlen((char *)mes)) != 0) { \
++	fprintf(stderr, "%s\n", #NAME); exit(-1);			\
++      }									\
++    } else puts((char *)mes);						\
++  } while(0)
++
++//
++
++#define exec_d_d(ATR, NAME, ULP, TYPE, TSX, EXT, arg) do {		\
++    int r = rand();							\
++    DPTYPE vx = FUNC(ATR, NAME, TSX, ULP, EXT) (SET(TYPE) (arg, r));	\
++    double fx = GET(TYPE)(vx, r);					\
++    MD5_Update(&ctx, &fx, sizeof(double));				\
++  } while(0)
++
++#define test_d_d(NAME, ULP, START, END, NSTEP) do {		\
++    MD5_CTX ctx;						\
++    memset(&ctx, 1, sizeof(MD5_CTX));				\
++    MD5_Init(&ctx);						\
++    double step = ((double)(END) - (double)(START))/NSTEP;	\
++    for(double d = (START);d < (END);d += step)			\
++      exec_d_d(ATR, NAME, ULP, DPTYPE, DPTYPESPEC, EXTSPEC, d);	\
++    checkDigest(NAME);						\
++  } while(0)
++
++#define testu_d_d(NAME, ULP, START, END, NSTEP) do {			\
++    MD5_CTX ctx;							\
++    memset(&ctx, 1, sizeof(MD5_CTX));					\
++    MD5_Init(&ctx);							\
++    uint64_t step = (d2u(END) - d2u(START))/NSTEP;			\
++    for(uint64_t u = d2u(START);u < d2u(END);u += step)			\
++      exec_d_d(ATR, NAME, ULP, DPTYPE, DPTYPESPEC, EXTSPEC, u2d(u));	\
++    checkDigest(NAME);							\
++  } while(0)
++
++//
++
++#define exec_d2_d(ATR, NAME, ULP, TYPE, TSX, EXT, arg) do {		\
++    int r = rand();							\
++    TYPE2(TYPE) vx2 = FUNC(ATR, NAME, TSX, ULP, EXT) (SET(TYPE) (arg, r)); \
++    double fxx = GET(TYPE)(vx2.x, r), fxy = GET(TYPE)(vx2.y, r);	\
++    MD5_Update(&ctx, &fxx, sizeof(double));				\
++    MD5_Update(&ctx, &fxy, sizeof(double));				\
++  } while(0)
++
++#define test_d2_d(NAME, ULP, START, END, NSTEP) do {			\
++    MD5_CTX ctx;							\
++    MD5_Init(&ctx);							\
++    double step = ((double)(END) - (double)(START))/NSTEP;		\
++    for(double d = (START);d < (END);d += step)				\
++      exec_d2_d(ATR, NAME, ULP, DPTYPE, DPTYPESPEC, EXTSPEC, d);	\
++    checkDigest(NAME);							\
++  } while(0)
++
++//
++
++#define exec_d_d_d(ATR, NAME, ULP, TYPE, TSX, EXT, argu, argv) do {	\
++    int r = rand();							\
++    DPTYPE vx = FUNC(ATR, NAME, TSX, ULP, EXT) (SET(TYPE) (argu, r), SET(TYPE) (argv, r)); \
++    double fx = GET(TYPE)(vx, r);					\
++    MD5_Update(&ctx, &fx, sizeof(double));				\
++  } while(0)
++
++#define test_d_d_d(NAME, ULP, STARTU, ENDU, NSTEPU, STARTV, ENDV, NSTEPV) do { \
++    MD5_CTX ctx;							\
++    MD5_Init(&ctx);							\
++    double stepu = ((double)(ENDU) - (double)(STARTU))/NSTEPU;		\
++    double stepv = ((double)(ENDV) - (double)(STARTV))/NSTEPV;		\
++    for(double u = (STARTU);u < (ENDU);u += stepu)			\
++      for(double v = (STARTV);v < (ENDV);v += stepv)			\
++	exec_d_d_d(ATR, NAME, ULP, DPTYPE, DPTYPESPEC, EXTSPEC, u, v);	\
++    checkDigest(NAME);							\
++  } while(0)
++
++//
++
++#define exec_f_f(ATR, NAME, ULP, TYPE, TSX, EXT, arg) do {		\
++    int r = rand();							\
++    SPTYPE vx = FUNC(ATR, NAME, TSX, ULP, EXT) (SET(TYPE) (arg, r));	\
++    float fx = GET(TYPE)(vx, r);					\
++    MD5_Update(&ctx, &fx, sizeof(float));				\
++  } while(0)
++
++#define test_f_f(NAME, ULP, START, END, NSTEP) do {		\
++    MD5_CTX ctx;						\
++    MD5_Init(&ctx);						\
++    float step = ((double)(END) - (double)(START))/NSTEP;	\
++    for(float d = (START);d < (END);d += step)			\
++      exec_f_f(ATR, NAME, ULP, SPTYPE, SPTYPESPEC, EXTSPEC, d);	\
++    checkDigest(NAME);						\
++  } while(0)
++
++#define testu_f_f(NAME, ULP, START, END, NSTEP) do {			\
++    MD5_CTX ctx;							\
++    MD5_Init(&ctx);							\
++    uint32_t step = (f2u(END) - f2u(START))/NSTEP;			\
++    for(uint32_t u = f2u(START);u < f2u(END);u += step)			\
++      exec_f_f(ATR, NAME, ULP, SPTYPE, SPTYPESPEC, EXTSPEC, u2f(u));	\
++    checkDigest(NAME);							\
++  } while(0)
++
++//
++
++#define exec_f2_f(ATR, NAME, ULP, TYPE, TSX, EXT, arg) do {		\
++    int r = rand();							\
++    TYPE2(TYPE) vx2 = FUNC(ATR, NAME, TSX, ULP, EXT) (SET(TYPE) (arg, r)); \
++    float fxx = GET(TYPE)(vx2.x, r), fxy = GET(TYPE)(vx2.y, r);		\
++    MD5_Update(&ctx, &fxx, sizeof(float));				\
++    MD5_Update(&ctx, &fxy, sizeof(float));				\
++  } while(0)
++
++#define test_f2_f(NAME, ULP, START, END, NSTEP) do {			\
++    MD5_CTX ctx;							\
++    MD5_Init(&ctx);							\
++    float step = ((float)(END) - (float)(START))/NSTEP;			\
++    for(float d = (START);d < (END);d += step)				\
++      exec_f2_f(ATR, NAME, ULP, SPTYPE, SPTYPESPEC, EXTSPEC, d);	\
++    checkDigest(NAME);							\
++  } while(0)
++
++//
++
++#define exec_f_f_f(ATR, NAME, ULP, TYPE, TSX, EXT, argu, argv) do {	\
++    int r = rand();							\
++    SPTYPE vx = FUNC(ATR, NAME, TSX, ULP, EXT) (SET(TYPE) (argu, r), SET(TYPE) (argv, r)); \
++    float fx = GET(TYPE)(vx, r);					\
++    MD5_Update(&ctx, &fx, sizeof(float));				\
++  } while(0)
++
++#define test_f_f_f(NAME, ULP, STARTU, ENDU, NSTEPU, STARTV, ENDV, NSTEPV) do { \
++    MD5_CTX ctx;							\
++    MD5_Init(&ctx);							\
++    float stepu = ((float)(ENDU) - (float)(STARTU))/NSTEPU;		\
++    float stepv = ((float)(ENDV) - (float)(STARTV))/NSTEPV;		\
++    for(float u = (STARTU);u < (ENDU);u += stepu)			\
++      for(float v = (STARTV);v < (ENDV);v += stepv)			\
++	exec_f_f_f(ATR, NAME, ULP, SPTYPE, SPTYPESPEC, EXTSPEC, u, v);	\
++    checkDigest(NAME);							\
++  } while(0)
++
++//
++
++int do_test(int argc, char **argv)
++{
++  FILE *fp = NULL;
++
++  if (argc != 1) {
++    fp = fopen(argv[1], "r");
++    if (fp == NULL) {
++      fprintf(stderr, "Could not open %s\n", argv[1]);
++      exit(-1);
++    }
++  }
++
++  srand(seed = time(NULL));
++
++  test_d_d(asin, u35, -1.0, 1.0, 2000001);
++  test_d_d(acos, u35, -1.0, 1.0, 2000001);
++
++  test_f_f(asin, u35, -1.0, 1.0, 2000001);
++  test_f_f(acos, u35, -1.0, 1.0, 2000001);
++
++  if (fp != NULL) fclose(fp);
++
++  exit(0);
++}
+diff --git a/src/libm-tester/tester3main.c b/src/libm-tester/tester3main.c
+new file mode 100644
+index 000000000..ad9e31fdf
+--- /dev/null
++++ b/src/libm-tester/tester3main.c
+@@ -0,0 +1,25 @@
++//          Copyright Naoki Shibata 2010 - 2018.
++// Distributed under the Boost Software License, Version 1.0.
++//    (See accompanying file LICENSE.txt or copy at
++//          http://www.boost.org/LICENSE_1_0.txt)
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <stdint.h>
++#include <signal.h>
++#include <setjmp.h>
++
++int do_test(int argc, char **argv);
++
++static jmp_buf sigjmp;
++
++static void sighandler(int signum) {
++  longjmp(sigjmp, 1);
++}
++
++int main(int argc, char **argv) {
++  signal(SIGILL, sighandler);
++  if (setjmp(sigjmp) == 0) do_test(argc, argv);
++  signal(SIGILL, SIG_DFL);
++  exit(0);
++}
+diff --git a/src/libm/dd.h b/src/libm/dd.h
+index 69f208953..183c3115b 100644
+--- a/src/libm/dd.h
++++ b/src/libm/dd.h
+@@ -3,7 +3,7 @@
+ //    (See accompanying file LICENSE.txt or copy at
+ //          http://www.boost.org/LICENSE_1_0.txt)
+ 
+-#if defined(ENABLE_SVE) || defined(ENABLE_SVE_NOFMA)
++#if defined(ENABLE_SVE) || defined(ENABLE_SVENOFMA)
+ typedef __sizeless_struct vdouble2 {
+   svfloat64_t x;
+   svfloat64_t y;
+diff --git a/src/libm/df.h b/src/libm/df.h
+index 2899e8623..82b9d560b 100644
+--- a/src/libm/df.h
++++ b/src/libm/df.h
+@@ -3,7 +3,7 @@
+ //    (See accompanying file LICENSE.txt or copy at
+ //          http://www.boost.org/LICENSE_1_0.txt)
+ 
+-#if defined(ENABLE_SVE) || defined(ENABLE_SVE_NOFMA)
++#if defined(ENABLE_SVE) || defined(ENABLE_SVENOFMA)
+ typedef __sizeless_struct vfloat2 {
+   svfloat32_t x;
+   svfloat32_t y;
+diff --git a/src/libm/funcproto.h b/src/libm/funcproto.h
+index 821e6c4c1..b647aee84 100644
+--- a/src/libm/funcproto.h
++++ b/src/libm/funcproto.h
+@@ -49,7 +49,8 @@ funcSpec funcList[] = {
+   { "tan", 35, 0, 0, 0 },
+   { "asin", 35, 0, 0, 0 },
+   { "asin", 35, 0, 0, DET },
+-  { "acos", 35, 0, 0, 0 },
++  { "acos", 35, 0, 0 },
++  { "acos", 35, 0, 0, DET },
+   { "atan", 35, 0, 0, 0 },
+   { "atan2", 35, 0, 1, DET_COMMON },
+   { "log", 35, 0, 0, DET_COMMON },
+diff --git a/src/libm/mkrename.c b/src/libm/mkrename.c
+index a66c3a333..dee9897e4 100644
+--- a/src/libm/mkrename.c
++++ b/src/libm/mkrename.c
+@@ -41,9 +41,6 @@ int main(int argc, char **argv) {
+     char *isaname = argc == 4 ? "" : argv[4];
+     char *isaub = argc == 5 ? "_" : "";
+ 
+-    if (strcmp(isaname, "sve") == 0)
+-      wdp = wsp = "x";
+-
+     for(int i=0;funcList[i].name != NULL;i++) {
+       if ((funcList[i].flags & DET) != 0 && strcmp(atrPrefix, "-") == 0) continue;
+       if (funcList[i].ulp >= 0) {
+diff --git a/src/libm/norename.h b/src/libm/norename.h
+index 969bbe877..55d9afb74 100755
+--- a/src/libm/norename.h
++++ b/src/libm/norename.h
+@@ -1,4 +1,4 @@
+-//          Copyright Naoki Shibata 2010 - 2017.
++//          Copyright Naoki Shibata 2010 - 2018.
+ // Distributed under the Boost Software License, Version 1.0.
+ //    (See accompanying file LICENSE.txt or copy at
+ //          http://www.boost.org/LICENSE_1_0.txt)
+@@ -98,6 +98,9 @@ vdouble xtgamma_u1(vdouble);
+ 
+ vdouble xerf_u1(vdouble);
+ vdouble xerfc_u15(vdouble);
++
++vdouble yasin(vdouble s);
++vdouble yacos(vdouble s);
+ #endif
+ 
+ //
+@@ -194,4 +197,7 @@ vfloat xtgammaf_u1(vfloat);
+ 
+ vfloat xerff_u1(vfloat);
+ vfloat xerfcf_u15(vfloat);
++
++vfloat yasinf(vfloat s);
++vfloat yacosf(vfloat s);
+ #endif
+diff --git a/src/libm/sleeflibm_header.h.org b/src/libm/sleeflibm_header.h.org
+index 71ce0483d..d92ad02f9 100644
+--- a/src/libm/sleeflibm_header.h.org
++++ b/src/libm/sleeflibm_header.h.org
+@@ -15,7 +15,7 @@
+ #define CONST
+ #endif
+ 
+-#if defined(__AVX2__) || defined(__VSX__) || defined(__arm64__) || defined(__arm__)
++#if defined(__AVX2__) || defined(__aarch64__) || defined(__arm__) || defined(__powerpc64__)
+ #ifndef FP_FAST_FMA
+ #define FP_FAST_FMA
+ #endif
+diff --git a/src/libm/sleefsimddp.c b/src/libm/sleefsimddp.c
+index c1eb77826..0ba640dbb 100644
+--- a/src/libm/sleefsimddp.c
++++ b/src/libm/sleefsimddp.c
+@@ -96,11 +96,11 @@ extern const double rempitabdp[];
+ #endif
+ #endif
+ 
+-#ifdef ENABLE_AVX512F_NOFMA
++#ifdef ENABLE_AVX512FNOFMA
+ #define CONFIG 2
+ #include "helperavx512f.h"
+ #ifdef DORENAME
+-#include "renameavx512f_nofma.h"
++#include "renameavx512fnofma.h"
+ #endif
+ #endif
+ 
+@@ -116,11 +116,11 @@ extern const double rempitabdp[];
+ #endif
+ #endif
+ 
+-#ifdef ENABLE_ADVSIMD_NOFMA
++#ifdef ENABLE_ADVSIMDNOFMA
+ #define CONFIG 2
+ #include "helperadvsimd.h"
+ #ifdef DORENAME
+-#include "renameadvsimd_nofma.h"
++#include "renameadvsimdnofma.h"
+ #endif
+ #endif
+ 
+@@ -136,11 +136,11 @@ extern const double rempitabdp[];
+ #endif /* DORENAME */
+ #endif /* ENABLE_SVE */
+ 
+-#ifdef ENABLE_SVE_NOFMA
++#ifdef ENABLE_SVENOFMA
+ #define CONFIG 2
+ #include "helpersve.h"
+ #ifdef DORENAME
+-#include "renamesve_nofma.h"
++#include "renamesvenofma.h"
+ #endif /* DORENAME */
+ #endif /* ENABLE_SVE */
+ 
+@@ -152,11 +152,11 @@ extern const double rempitabdp[];
+ #endif
+ #endif
+ 
+-#ifdef ENABLE_VSX_NOFMA
++#ifdef ENABLE_VSXNOFMA
+ #define CONFIG 2
+ #include "helperpower_128.h"
+ #ifdef DORENAME
+-#include "renamevsx_nofma.h"
++#include "renamevsxnofma.h"
+ #endif
+ #endif
+ 
+@@ -265,7 +265,7 @@ static INLINE CONST vdouble vldexp3_vd_vd_vi(vdouble d, vint q) {
+   return vreinterpret_vd_vi2(vadd_vi2_vi2_vi2(vreinterpret_vi2_vd(d), vsll_vi2_vi2_i(vcastu_vi2_vi(q), 20)));
+ }
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+ static INLINE CONST vint vilogbk_vi_vd(vdouble d) {
+   vopmask o = vlt_vo_vd_vd(d, vcast_vd_d(4.9090934652977266E-91));
+   d = vsel_vd_vo_vd_vd(o, vmul_vd_vd_vd(vcast_vd_d(2.037035976334486E90), d), d);
+@@ -312,7 +312,7 @@ EXPORT CONST vint xilogb(vdouble d) {
+   return vrint_vi_vd(e);
+ }
+ 
+-#if defined(ENABLE_SVE) || defined(ENABLE_SVE_NOFMA)
++#if defined(ENABLE_SVE) || defined(ENABLE_SVENOFMA)
+ typedef __sizeless_struct {
+   vdouble d;
+   vint i;
+@@ -357,7 +357,7 @@ static INLINE CONST di_t rempisub(vdouble x) {
+ static INLINE CONST ddi_t rempi(vdouble a) {
+   vdouble2 x, y, z;
+   vint ex = vilogb2k_vi_vd(a), q;
+-#if defined(ENABLE_AVX512F) || defined(ENABLE_AVX512F_NOFMA)
++#if defined(ENABLE_AVX512F) || defined(ENABLE_AVX512FNOFMA)
+   ex = vandnot_vi_vi_vi(vsra_vi_vi_i(ex, 31), ex);
+   ex = vand_vi_vi_vi(ex, vcast_vi_i(1023));
+ #endif
+@@ -1474,32 +1474,6 @@ EXPORT CONST vdouble xasin(vdouble d) {
+   return vmulsign_vd_vd_vd(r, d);
+ }
+ 
+-#ifndef ENABLE_GNUABI
+-EXPORT CONST vdouble yasin(vdouble d) {
+-  vopmask o = vlt_vo_vd_vd(vabs_vd_vd(d), vcast_vd_d(0.5));
+-  vdouble x2 = vsel_vd_vo_vd_vd(o, vmul_vd_vd_vd(d, d), vmul_vd_vd_vd(vsub_vd_vd_vd(vcast_vd_d(1), vabs_vd_vd(d)), vcast_vd_d(0.5)));
+-  vdouble x = vsel_vd_vo_vd_vd(o, vabs_vd_vd(d), vsqrt_vd_vd(x2)), u;
+-
+-  u = vcast_vd_d(+0.3161587650653934628e-1);
+-  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(-0.1581918243329996643e-1));
+-  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.1929045477267910674e-1));
+-  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.6606077476277170610e-2));
+-  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.1215360525577377331e-1));
+-  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.1388715184501609218e-1));
+-  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.1735956991223614604e-1));
+-  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.2237176181932048341e-1));
+-  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.3038195928038132237e-1));
+-  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.4464285681377102438e-1));
+-  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.7500000000378581611e-1));
+-  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.1666666666666497543e+0));
+-
+-  u = vmla_vd_vd_vd_vd(u, vmul_vd_vd_vd(x, x2), x);
+-  
+-  vdouble r = vsel_vd_vo_vd_vd(o, u, vmla_vd_vd_vd_vd(u, vcast_vd_d(-2), vcast_vd_d(M_PI/2)));
+-  return vmulsign_vd_vd_vd(r, d);
+-}
+-#endif
+-
+ EXPORT CONST vdouble xasin_u1(vdouble d) {
+   vopmask o = vlt_vo_vd_vd(vabs_vd_vd(d), vcast_vd_d(0.5));
+   vdouble x2 = vsel_vd_vo_vd_vd(o, vmul_vd_vd_vd(d, d), vmul_vd_vd_vd(vsub_vd_vd_vd(vcast_vd_d(1), vabs_vd_vd(d)), vcast_vd_d(0.5))), u;
+@@ -1651,6 +1625,62 @@ EXPORT CONST vdouble xacos_u1(vdouble d) {
+   return vadd_vd_vd_vd(y.x, y.y);
+ }
+ 
++#ifndef ENABLE_GNUABI
++EXPORT CONST vdouble yasin(vdouble d) {
++  vopmask o = vlt_vo_vd_vd(vabs_vd_vd(d), vcast_vd_d(0.5));
++  vdouble x2 = vsel_vd_vo_vd_vd(o, vmul_vd_vd_vd(d, d), vmul_vd_vd_vd(vsub_vd_vd_vd(vcast_vd_d(1), vabs_vd_vd(d)), vcast_vd_d(0.5)));
++  vdouble x = vsel_vd_vo_vd_vd(o, vabs_vd_vd(d), vsqrt_vd_vd(x2)), u;
++
++  u = vcast_vd_d(+0.3161587650653934628e-1);
++  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(-0.1581918243329996643e-1));
++  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.1929045477267910674e-1));
++  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.6606077476277170610e-2));
++  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.1215360525577377331e-1));
++  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.1388715184501609218e-1));
++  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.1735956991223614604e-1));
++  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.2237176181932048341e-1));
++  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.3038195928038132237e-1));
++  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.4464285681377102438e-1));
++  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.7500000000378581611e-1));
++  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.1666666666666497543e+0));
++
++  u = vmla_vd_vd_vd_vd(u, vmul_vd_vd_vd(x, x2), x);
++  
++  vdouble r = vsel_vd_vo_vd_vd(o, u, vmla_vd_vd_vd_vd(u, vcast_vd_d(-2), vcast_vd_d(M_PI/2)));
++  return vmulsign_vd_vd_vd(r, d);
++}
++
++EXPORT CONST vdouble yacos(vdouble d) {
++  vopmask o = vlt_vo_vd_vd(vabs_vd_vd(d), vcast_vd_d(0.5));
++  vdouble x2 = vsel_vd_vo_vd_vd(o, vmul_vd_vd_vd(d, d),
++				vmul_vd_vd_vd(vsub_vd_vd_vd(vcast_vd_d(1), vabs_vd_vd(d)), vcast_vd_d(0.5))), u;
++  vdouble x = vsel_vd_vo_vd_vd(o, vabs_vd_vd(d), vsqrt_vd_vd(x2));
++  x = vsel_vd_vo_vd_vd(veq_vo_vd_vd(vabs_vd_vd(d), vcast_vd_d(1.0)), vcast_vd_d(0), x);
++
++  u = vcast_vd_d(+0.3161587650653934628e-1);
++  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(-0.1581918243329996643e-1));
++  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.1929045477267910674e-1));
++  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.6606077476277170610e-2));
++  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.1215360525577377331e-1));
++  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.1388715184501609218e-1));
++  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.1735956991223614604e-1));
++  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.2237176181932048341e-1));
++  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.3038195928038132237e-1));
++  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.4464285681377102438e-1));
++  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.7500000000378581611e-1));
++  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.1666666666666497543e+0));
++
++  u = vmul_vd_vd_vd(u, vmul_vd_vd_vd(x2, x));
++
++  vdouble y = vsub_vd_vd_vd(vcast_vd_d(M_PI/2), vadd_vd_vd_vd(vmulsign_vd_vd_vd(x, d), vmulsign_vd_vd_vd(u, d)));
++  x = vadd_vd_vd_vd(x, u);
++  vdouble r = vsel_vd_vo_vd_vd(o, y, vmul_vd_vd_vd(x, vcast_vd_d(2)));
++  return vsel_vd_vo_vd_vd(vandnot_vo_vo_vo(o, vlt_vo_vd_vd(d, vcast_vd_d(0))),
++			  ddadd_vd2_vd2_vd(vcast_vd2_d_d(3.141592653589793116, 1.2246467991473532072e-16),
++					   vneg_vd_vd(r)).x, r);
++}
++#endif
++
+ EXPORT CONST vdouble xatan_u1(vdouble d) {
+   vdouble2 d2 = atan2k_u1(vcast_vd2_vd_vd(vabs_vd_vd(d), vcast_vd_d(0)), vcast_vd2_d_d(1, 0));
+   vdouble r = vadd_vd_vd_vd(d2.x, d2.y);
+@@ -1736,7 +1766,7 @@ EXPORT CONST vdouble xlog(vdouble d) {
+   vdouble x, x2;
+   vdouble t, m;
+   
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   vopmask o = vlt_vo_vd_vd(d, vcast_vd_d(DBL_MIN));
+   d = vsel_vd_vo_vd_vd(o, vmul_vd_vd_vd(d, vcast_vd_d((double)(1LL << 32) * (double)(1LL << 32))), d);
+   vint e = vilogb2k_vi_vd(vmul_vd_vd_vd(d, vcast_vd_d(1.0/0.75)));
+@@ -1760,7 +1790,7 @@ EXPORT CONST vdouble xlog(vdouble d) {
+   t = vmla_vd_vd_vd_vd(t, x2, vcast_vd_d(0.6666666666667778740063));
+   t = vmla_vd_vd_vd_vd(t, x2, vcast_vd_d(2));
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   x = vmla_vd_vd_vd_vd(x, t, vmul_vd_vd_vd(vcast_vd_d(0.693147180559945286226764), vcast_vd_vi(e)));
+ 
+   x = vsel_vd_vo_vd_vd(vispinf_vo_vd(d), vcast_vd_d(SLEEF_INFINITY), x);
+@@ -1870,7 +1900,7 @@ static INLINE CONST vdouble2 logk(vdouble d) {
+   vdouble2 x, x2, s;
+   vdouble t, m;
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   vopmask o = vlt_vo_vd_vd(d, vcast_vd_d(DBL_MIN));
+   d = vsel_vd_vo_vd_vd(o, vmul_vd_vd_vd(d, vcast_vd_d((double)(1LL << 32) * (double)(1LL << 32))), d);
+   vint e = vilogb2k_vi_vd(vmul_vd_vd_vd(d, vcast_vd_d(1.0/0.75)));
+@@ -1896,7 +1926,7 @@ static INLINE CONST vdouble2 logk(vdouble d) {
+   t = vmla_vd_vd_vd_vd(t, x2.x, vcast_vd_d(0.400000000000000077715612));
+   vdouble2 c = vcast_vd2_d_d(0.666666666666666629659233, 3.80554962542412056336616e-17);
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   s = ddmul_vd2_vd2_vd(vcast_vd2_d_d(0.693147180559945286226764, 2.319046813846299558417771e-17), vcast_vd_vi(e));
+ #else
+   s = ddmul_vd2_vd2_vd(vcast_vd2_vd_vd(vcast_vd_d(0.693147180559945286226764), vcast_vd_d(2.319046813846299558417771e-17)), e);
+@@ -1912,7 +1942,7 @@ EXPORT CONST vdouble xlog_u1(vdouble d) {
+   vdouble2 x;
+   vdouble t, m, x2;
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   vopmask o = vlt_vo_vd_vd(d, vcast_vd_d(DBL_MIN));
+   d = vsel_vd_vo_vd_vd(o, vmul_vd_vd_vd(d, vcast_vd_d((double)(1LL << 32) * (double)(1LL << 32))), d);
+   vint e = vilogb2k_vi_vd(vmul_vd_vd_vd(d, vcast_vd_d(1.0/0.75)));
+@@ -1935,7 +1965,7 @@ EXPORT CONST vdouble xlog_u1(vdouble d) {
+   t = vmla_vd_vd_vd_vd(t, x2, vcast_vd_d(0.3999999999635251990e+0));
+   t = vmla_vd_vd_vd_vd(t, x2, vcast_vd_d(0.6666666666667333541e+0));
+   
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   vdouble2 s = ddmul_vd2_vd2_vd(vcast_vd2_d_d(0.693147180559945286226764, 2.319046813846299558417771e-17), vcast_vd_vi(e));
+ #else
+   vdouble2 s = ddmul_vd2_vd2_vd(vcast_vd2_d_d(0.693147180559945286226764, 2.319046813846299558417771e-17), e);
+@@ -1946,7 +1976,7 @@ EXPORT CONST vdouble xlog_u1(vdouble d) {
+ 
+   vdouble r = vadd_vd_vd_vd(s.x, s.y);
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   r = vsel_vd_vo_vd_vd(vispinf_vo_vd(d), vcast_vd_d(SLEEF_INFINITY), r);
+   r = vsel_vd_vo_vd_vd(vor_vo_vo_vo(vlt_vo_vd_vd(d, vcast_vd_d(0)), visnan_vo_vd(d)), vcast_vd_d(SLEEF_NAN), r);
+   r = vsel_vd_vo_vd_vd(veq_vo_vd_vd(d, vcast_vd_d(0)), vcast_vd_d(-SLEEF_INFINITY), r);
+@@ -2220,7 +2250,7 @@ EXPORT CONST vdouble xcbrt(vdouble d) {
+   vint e, qu, re;
+   vdouble t;
+ 
+-#if defined(ENABLE_AVX512F) || defined(ENABLE_AVX512F_NOFMA)
++#if defined(ENABLE_AVX512F) || defined(ENABLE_AVX512FNOFMA)
+   vdouble s = d;
+ #endif
+   e = vadd_vi_vi_vi(vilogbk_vi_vd(vabs_vd_vd(d)), vcast_vi_i(1));
+@@ -2249,7 +2279,7 @@ EXPORT CONST vdouble xcbrt(vdouble d) {
+   y = vmul_vd_vd_vd(vmul_vd_vd_vd(d, x), x);
+   y = vmul_vd_vd_vd(vsub_vd_vd_vd(y, vmul_vd_vd_vd(vmul_vd_vd_vd(vcast_vd_d(2.0 / 3.0), y), vmla_vd_vd_vd_vd(y, x, vcast_vd_d(-1.0)))), q);
+ 
+-#if defined(ENABLE_AVX512F) || defined(ENABLE_AVX512F_NOFMA)
++#if defined(ENABLE_AVX512F) || defined(ENABLE_AVX512FNOFMA)
+   y = vsel_vd_vo_vd_vd(visinf_vo_vd(s), vmulsign_vd_vd_vd(vcast_vd_d(SLEEF_INFINITY), s), y);
+   y = vsel_vd_vo_vd_vd(veq_vo_vd_vd(s, vcast_vd_d(0)), vmulsign_vd_vd_vd(vcast_vd_d(0), s), y);
+ #endif
+@@ -2262,7 +2292,7 @@ EXPORT CONST vdouble xcbrt_u1(vdouble d) {
+   vdouble2 q2 = vcast_vd2_d_d(1, 0), u, v;
+   vint e, qu, re;
+ 
+-#if defined(ENABLE_AVX512F) || defined(ENABLE_AVX512F_NOFMA)
++#if defined(ENABLE_AVX512F) || defined(ENABLE_AVX512FNOFMA)
+   vdouble s = d;
+ #endif
+   e = vadd_vi_vi_vi(vilogbk_vi_vd(vabs_vd_vd(d)), vcast_vi_i(1));
+@@ -2301,7 +2331,7 @@ EXPORT CONST vdouble xcbrt_u1(vdouble d) {
+   v = ddmul_vd2_vd2_vd2(v, q2);
+   z = vldexp2_vd_vd_vi(vadd_vd_vd_vd(v.x, v.y), vsub_vi_vi_vi(qu, vcast_vi_i(2048)));
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   z = vsel_vd_vo_vd_vd(visinf_vo_vd(d), vmulsign_vd_vd_vd(vcast_vd_d(SLEEF_INFINITY), q2.x), z);
+   z = vsel_vd_vo_vd_vd(veq_vo_vd_vd(d, vcast_vd_d(0)), vreinterpret_vd_vm(vsignbit_vm_vd(q2.x)), z);
+ #else
+@@ -2428,7 +2458,7 @@ EXPORT CONST vdouble xlog10(vdouble d) {
+   vdouble2 x;
+   vdouble t, m, x2;
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   vopmask o = vlt_vo_vd_vd(d, vcast_vd_d(DBL_MIN));
+   d = vsel_vd_vo_vd_vd(o, vmul_vd_vd_vd(d, vcast_vd_d((double)(1LL << 32) * (double)(1LL << 32))), d);
+   vint e = vilogb2k_vi_vd(vmul_vd_vd_vd(d, vcast_vd_d(1.0/0.75)));
+@@ -2451,7 +2481,7 @@ EXPORT CONST vdouble xlog10(vdouble d) {
+   t = vmla_vd_vd_vd_vd(t, x2, vcast_vd_d(+0.1737177927454605086e+0));
+   t = vmla_vd_vd_vd_vd(t, x2, vcast_vd_d(+0.2895296546021972617e+0));
+   
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   vdouble2 s = ddmul_vd2_vd2_vd(vcast_vd2_d_d(0.30102999566398119802, -2.803728127785170339e-18), vcast_vd_vi(e));
+ #else
+   vdouble2 s = ddmul_vd2_vd2_vd(vcast_vd2_d_d(0.30102999566398119802, -2.803728127785170339e-18), e);
+@@ -2462,7 +2492,7 @@ EXPORT CONST vdouble xlog10(vdouble d) {
+ 
+   vdouble r = vadd_vd_vd_vd(s.x, s.y);
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   r = vsel_vd_vo_vd_vd(vispinf_vo_vd(d), vcast_vd_d(SLEEF_INFINITY), r);
+   r = vsel_vd_vo_vd_vd(vor_vo_vo_vo(vlt_vo_vd_vd(d, vcast_vd_d(0)), visnan_vo_vd(d)), vcast_vd_d(SLEEF_NAN), r);
+   r = vsel_vd_vo_vd_vd(veq_vo_vd_vd(d, vcast_vd_d(0)), vcast_vd_d(-SLEEF_INFINITY), r);
+@@ -2477,7 +2507,7 @@ EXPORT CONST vdouble xlog2(vdouble d) {
+   vdouble2 x;
+   vdouble t, m, x2;
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   vopmask o = vlt_vo_vd_vd(d, vcast_vd_d(DBL_MIN));
+   d = vsel_vd_vo_vd_vd(o, vmul_vd_vd_vd(d, vcast_vd_d((double)(1LL << 32) * (double)(1LL << 32))), d);
+   vint e = vilogb2k_vi_vd(vmul_vd_vd_vd(d, vcast_vd_d(1.0/0.75)));
+@@ -2500,7 +2530,7 @@ EXPORT CONST vdouble xlog2(vdouble d) {
+   t = vmla_vd_vd_vd_vd(t, x2, vcast_vd_d(+0.5770780162997058982e+0));
+   t = vmla_vd_vd_vd_vd(t, x2, vcast_vd_d(+0.96179669392608091449  ));
+   
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   vdouble2 s = ddadd2_vd2_vd_vd2(vcast_vd_vi(e),
+ 				 ddmul_vd2_vd2_vd2(x, vcast_vd2_d_d(2.885390081777926774, 6.0561604995516736434e-18)));
+ #else
+@@ -2512,7 +2542,7 @@ EXPORT CONST vdouble xlog2(vdouble d) {
+ 
+   vdouble r = vadd_vd_vd_vd(s.x, s.y);
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   r = vsel_vd_vo_vd_vd(vispinf_vo_vd(d), vcast_vd_d(SLEEF_INFINITY), r);
+   r = vsel_vd_vo_vd_vd(vor_vo_vo_vo(vlt_vo_vd_vd(d, vcast_vd_d(0)), visnan_vo_vd(d)), vcast_vd_d(SLEEF_NAN), r);
+   r = vsel_vd_vo_vd_vd(veq_vo_vd_vd(d, vcast_vd_d(0)), vcast_vd_d(-SLEEF_INFINITY), r);
+@@ -2529,7 +2559,7 @@ EXPORT CONST vdouble xlog1p(vdouble d) {
+ 
+   vdouble dp1 = vadd_vd_vd_vd(d, vcast_vd_d(1));
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   vopmask o = vlt_vo_vd_vd(dp1, vcast_vd_d(DBL_MIN));
+   dp1 = vsel_vd_vo_vd_vd(o, vmul_vd_vd_vd(dp1, vcast_vd_d((double)(1LL << 32) * (double)(1LL << 32))), dp1);
+   vint e = vilogb2k_vi_vd(vmul_vd_vd_vd(dp1, vcast_vd_d(1.0/0.75)));
+@@ -2852,7 +2882,7 @@ EXPORT CONST vdouble xfmod(vdouble x, vdouble y) {
+   return ret;
+ }
+ 
+-#if defined(ENABLE_SVE) || defined(ENABLE_SVE_NOFMA)
++#if defined(ENABLE_SVE) || defined(ENABLE_SVENOFMA)
+   typedef __sizeless_struct {
+     vdouble2 a, b;
+   } dd2;
+diff --git a/src/libm/sleefsimdsp.c b/src/libm/sleefsimdsp.c
+index eb6f5d1e6..980a402d9 100644
+--- a/src/libm/sleefsimdsp.c
++++ b/src/libm/sleefsimdsp.c
+@@ -96,11 +96,11 @@ extern const float rempitabsp[];
+ #endif
+ #endif
+ 
+-#ifdef ENABLE_AVX512F_NOFMA
++#ifdef ENABLE_AVX512FNOFMA
+ #define CONFIG 2
+ #include "helperavx512f.h"
+ #ifdef DORENAME
+-#include "renameavx512f_nofma.h"
++#include "renameavx512fnofma.h"
+ #endif
+ #endif
+ 
+@@ -116,11 +116,11 @@ extern const float rempitabsp[];
+ #endif
+ #endif
+ 
+-#ifdef ENABLE_ADVSIMD_NOFMA
++#ifdef ENABLE_ADVSIMDNOFMA
+ #define CONFIG 2
+ #include "helperadvsimd.h"
+ #ifdef DORENAME
+-#include "renameadvsimd_nofma.h"
++#include "renameadvsimdnofma.h"
+ #endif
+ #endif
+ 
+@@ -136,11 +136,11 @@ extern const float rempitabsp[];
+ #endif /* DORENAME */
+ #endif /* ENABLE_SVE */
+ 
+-#ifdef ENABLE_SVE_NOFMA
++#ifdef ENABLE_SVENOFMA
+ #define CONFIG 2
+ #include "helpersve.h"
+ #ifdef DORENAME
+-#include "renamesve_nofma.h"
++#include "renamesvenofma.h"
+ #endif /* DORENAME */
+ #endif /* ENABLE_SVE */
+ 
+@@ -168,11 +168,11 @@ extern const float rempitabsp[];
+ #endif
+ #endif
+ 
+-#ifdef ENABLE_VSX_NOFMA
++#ifdef ENABLE_VSXNOFMA
+ #define CONFIG 2
+ #include "helperpower_128.h"
+ #ifdef DORENAME
+-#include "renamevsx_nofma.h"
++#include "renamevsxnofma.h"
+ #endif
+ #endif
+ 
+@@ -255,7 +255,7 @@ static INLINE CONST vopmask visint_vo_vf(vfloat y) { return veq_vo_vf_vf(vtrunca
+ 
+ static INLINE CONST vopmask visnumber_vo_vf(vfloat x) { return vnot_vo32_vo32(vor_vo_vo_vo(visinf_vo_vf(x), visnan_vo_vf(x))); }
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+ static INLINE CONST vint2 vilogbk_vi2_vf(vfloat d) {
+   vopmask o = vlt_vo_vf_vf(d, vcast_vf_f(5.421010862427522E-20f));
+   d = vsel_vf_vo_vf_vf(o, vmul_vf_vf_vf(vcast_vf_f(1.8446744073709552E19f), d), d);
+@@ -312,7 +312,7 @@ static INLINE CONST vfloat vldexp3_vf_vf_vi2(vfloat d, vint2 q) {
+ 
+ EXPORT CONST vfloat xldexpf(vfloat x, vint2 q) { return vldexp_vf_vf_vi2(x, q); }
+ 
+-#if defined(ENABLE_SVE) || defined(ENABLE_SVE_NOFMA)
++#if defined(ENABLE_SVE) || defined(ENABLE_SVENOFMA)
+ typedef __sizeless_struct {
+   vfloat d;
+   vint2 i;
+@@ -357,7 +357,7 @@ static INLINE CONST fi_t rempisubf(vfloat x) {
+ static INLINE CONST dfi_t rempif(vfloat a) {
+   vfloat2 x, y, z;
+   vint2 ex = vilogb2k_vi2_vf(a), q;
+-#if defined(ENABLE_AVX512F) || defined(ENABLE_AVX512F_NOFMA)
++#if defined(ENABLE_AVX512F) || defined(ENABLE_AVX512FNOFMA)
+   ex = vandnot_vi2_vi2_vi2(vsra_vi2_vi2_i(ex, 31), ex);
+   ex = vand_vi2_vi2_vi2(ex, vcast_vi2_i(127));
+ #endif
+@@ -1074,14 +1074,6 @@ EXPORT CONST vfloat xasinf(vfloat d) {
+   return vmulsign_vf_vf_vf(r, d);
+ }
+ 
+-#ifndef ENABLE_GNUABI
+-#ifdef ENABLE_ALIAS
+-EXPORT CONST vfloat yasinf(vfloat) __attribute__((alias( stringify(xasinf) )));
+-#else
+-EXPORT CONST vfloat yasinf(vfloat d) { return xasinf(d); }
+-#endif
+-#endif
+-
+ EXPORT CONST vfloat xacosf(vfloat d) {
+   vopmask o = vlt_vo_vf_vf(vabs_vf_vf(d), vcast_vf_f(0.5f));
+   vfloat x2 = vsel_vf_vo_vf_vf(o, vmul_vf_vf_vf(d, d),
+@@ -1104,6 +1096,16 @@ EXPORT CONST vfloat xacosf(vfloat d) {
+ 					   vneg_vf_vf(r)).x, r);
+ }
+ 
++#ifndef ENABLE_GNUABI
++#ifdef ENABLE_ALIAS
++EXPORT CONST vfloat yasinf(vfloat) __attribute__((alias( stringify(xasinf) )));
++EXPORT CONST vfloat yacosf(vfloat) __attribute__((alias( stringify(xacosf) )));
++#else
++EXPORT CONST vfloat yasinf(vfloat d) { return xasinf(d); }
++EXPORT CONST vfloat yacosf(vfloat d) { return xacosf(d); }
++#endif
++#endif
++
+ //
+ 
+ static INLINE CONST vfloat2 atan2kf_u1(vfloat2 y, vfloat2 x) {
+@@ -1218,7 +1220,7 @@ EXPORT CONST vfloat xatanf_u1(vfloat d) {
+ EXPORT CONST vfloat xlogf(vfloat d) {
+   vfloat x, x2, t, m;
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   vopmask o = vlt_vo_vf_vf(d, vcast_vf_f(FLT_MIN));
+   d = vsel_vf_vo_vf_vf(o, vmul_vf_vf_vf(d, vcast_vf_f((float)(1LL << 32) * (float)(1LL << 32))), d);
+   vint2 e = vilogb2k_vi2_vf(vmul_vf_vf_vf(d, vcast_vf_f(1.0f/0.75f)));
+@@ -1239,7 +1241,7 @@ EXPORT CONST vfloat xlogf(vfloat d) {
+   t = vmla_vf_vf_vf_vf(t, x2, vcast_vf_f(0.666666686534881591796875f));
+   t = vmla_vf_vf_vf_vf(t, x2, vcast_vf_f(2.0f));
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   x = vmla_vf_vf_vf_vf(x, t, vmul_vf_vf_vf(vcast_vf_f(0.693147180559945286226764f), vcast_vf_vi2(e)));
+   x = vsel_vf_vo_vf_vf(vispinf_vo_vf(d), vcast_vf_f(SLEEF_INFINITYf), x);
+   x = vsel_vf_vo_vf_vf(vor_vo_vo_vo(vlt_vo_vf_vf(d, vcast_vf_f(0)), visnan_vo_vf(d)), vcast_vf_f(SLEEF_NANf), x);
+@@ -1329,7 +1331,7 @@ EXPORT CONST vfloat xcbrtf(vfloat d) {
+   vfloat x, y, q = vcast_vf_f(1.0), t;
+   vint2 e, qu, re;
+ 
+-#if defined(ENABLE_AVX512F) || defined(ENABLE_AVX512F_NOFMA)
++#if defined(ENABLE_AVX512F) || defined(ENABLE_AVX512FNOFMA)
+   vfloat s = d;
+ #endif
+   e = vadd_vi2_vi2_vi2(vilogbk_vi2_vf(vabs_vf_vf(d)), vcast_vi2_i(1));
+@@ -1356,7 +1358,7 @@ EXPORT CONST vfloat xcbrtf(vfloat d) {
+   y = vmul_vf_vf_vf(vmul_vf_vf_vf(d, x), x);
+   y = vmul_vf_vf_vf(vsub_vf_vf_vf(y, vmul_vf_vf_vf(vmul_vf_vf_vf(vcast_vf_f(2.0f / 3.0f), y), vmla_vf_vf_vf_vf(y, x, vcast_vf_f(-1.0f)))), q);
+ 
+-#if defined(ENABLE_AVX512F) || defined(ENABLE_AVX512F_NOFMA)
++#if defined(ENABLE_AVX512F) || defined(ENABLE_AVX512FNOFMA)
+   y = vsel_vf_vo_vf_vf(visinf_vo_vf(s), vmulsign_vf_vf_vf(vcast_vf_f(SLEEF_INFINITYf), s), y);
+   y = vsel_vf_vo_vf_vf(veq_vo_vf_vf(s, vcast_vf_f(0)), vmulsign_vf_vf_vf(vcast_vf_f(0), s), y);
+ #endif
+@@ -1369,7 +1371,7 @@ EXPORT CONST vfloat xcbrtf_u1(vfloat d) {
+   vfloat2 q2 = vcast_vf2_f_f(1, 0), u, v;
+   vint2 e, qu, re;
+ 
+-#if defined(ENABLE_AVX512F) || defined(ENABLE_AVX512F_NOFMA)
++#if defined(ENABLE_AVX512F) || defined(ENABLE_AVX512FNOFMA)
+   vfloat s = d;
+ #endif
+   e = vadd_vi2_vi2_vi2(vilogbk_vi2_vf(vabs_vf_vf(d)), vcast_vi2_i(1));
+@@ -1411,7 +1413,7 @@ EXPORT CONST vfloat xcbrtf_u1(vfloat d) {
+   z = vsel_vf_vo_vf_vf(visinf_vo_vf(d), vmulsign_vf_vf_vf(vcast_vf_f(SLEEF_INFINITYf), q2.x), z);
+   z = vsel_vf_vo_vf_vf(veq_vo_vf_vf(d, vcast_vf_f(0)), vreinterpret_vf_vm(vsignbit_vm_vf(q2.x)), z);
+ 
+-#if defined(ENABLE_AVX512F) || defined(ENABLE_AVX512F_NOFMA)
++#if defined(ENABLE_AVX512F) || defined(ENABLE_AVX512FNOFMA)
+   z = vsel_vf_vo_vf_vf(visinf_vo_vf(s), vmulsign_vf_vf_vf(vcast_vf_f(SLEEF_INFINITYf), s), z);
+   z = vsel_vf_vo_vf_vf(veq_vo_vf_vf(s, vcast_vf_f(0)), vmulsign_vf_vf_vf(vcast_vf_f(0), s), z);
+ #endif
+@@ -1423,7 +1425,7 @@ static INLINE CONST vfloat2 logkf(vfloat d) {
+   vfloat2 x, x2;
+   vfloat t, m;
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   vopmask o = vlt_vo_vf_vf(d, vcast_vf_f(FLT_MIN));
+   d = vsel_vf_vo_vf_vf(o, vmul_vf_vf_vf(d, vcast_vf_f((float)(1LL << 32) * (float)(1LL << 32))), d);
+   vint2 e = vilogb2k_vi2_vf(vmul_vf_vf_vf(d, vcast_vf_f(1.0f/0.75f)));
+@@ -1443,7 +1445,7 @@ static INLINE CONST vfloat2 logkf(vfloat d) {
+   t = vmla_vf_vf_vf_vf(t, x2.x, vcast_vf_f(0.400007992982864379882812));
+   vfloat2 c = vcast_vf2_f_f(0.66666662693023681640625f, 3.69183861259614332084311e-09f);
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   vfloat2 s = dfmul_vf2_vf2_vf(vcast_vf2_f_f(0.69314718246459960938f, -1.904654323148236017e-09f), vcast_vf_vi2(e));
+ #else
+   vfloat2 s = dfmul_vf2_vf2_vf(vcast_vf2_f_f(0.69314718246459960938f, -1.904654323148236017e-09f), e);
+@@ -1459,7 +1461,7 @@ EXPORT CONST vfloat xlogf_u1(vfloat d) {
+   vfloat2 x;
+   vfloat t, m, x2;
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   vopmask o = vlt_vo_vf_vf(d, vcast_vf_f(FLT_MIN));
+   d = vsel_vf_vo_vf_vf(o, vmul_vf_vf_vf(d, vcast_vf_f((float)(1LL << 32) * (float)(1LL << 32))), d);
+   vint2 e = vilogb2k_vi2_vf(vmul_vf_vf_vf(d, vcast_vf_f(1.0f/0.75f)));
+@@ -1485,7 +1487,7 @@ EXPORT CONST vfloat xlogf_u1(vfloat d) {
+ 
+   vfloat r = vadd_vf_vf_vf(s.x, s.y);
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   r = vsel_vf_vo_vf_vf(vispinf_vo_vf(d), vcast_vf_f(SLEEF_INFINITYf), r);
+   r = vsel_vf_vo_vf_vf(vor_vo_vo_vo(vlt_vo_vf_vf(d, vcast_vf_f(0)), visnan_vo_vf(d)), vcast_vf_f(SLEEF_NANf), r);
+   r = vsel_vf_vo_vf_vf(veq_vo_vf_vf(d, vcast_vf_f(0)), vcast_vf_f(-SLEEF_INFINITYf), r);
+@@ -1678,7 +1680,7 @@ static INLINE CONST vfloat2 logk2f(vfloat2 d) {
+   vfloat t;
+   vint2 e;
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   e = vilogbk_vi2_vf(vmul_vf_vf_vf(d.x, vcast_vf_f(1.0f/0.75f)));
+ #else
+   e = vrint_vi2_vf(vgetexp_vf_vf(vmul_vf_vf_vf(d.x, vcast_vf_f(1.0f/0.75f))));
+@@ -1817,7 +1819,7 @@ EXPORT CONST vfloat xlog10f(vfloat d) {
+   vfloat2 x;
+   vfloat t, m, x2;
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   vopmask o = vlt_vo_vf_vf(d, vcast_vf_f(FLT_MIN));
+   d = vsel_vf_vo_vf_vf(o, vmul_vf_vf_vf(d, vcast_vf_f((float)(1LL << 32) * (float)(1LL << 32))), d);
+   vint2 e = vilogb2k_vi2_vf(vmul_vf_vf_vf(d, vcast_vf_f(1.0/0.75)));
+@@ -1836,7 +1838,7 @@ EXPORT CONST vfloat xlog10f(vfloat d) {
+   t = vmla_vf_vf_vf_vf(t, x2, vcast_vf_f( +0.1735493541e+0));
+   t = vmla_vf_vf_vf_vf(t, x2, vcast_vf_f( +0.2895309627e+0));
+   
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   vfloat2 s = dfmul_vf2_vf2_vf(vcast_vf2_f_f(0.30103001, -1.432098889e-08), vcast_vf_vi2(e));
+ #else
+   vfloat2 s = dfmul_vf2_vf2_vf(vcast_vf2_f_f(0.30103001, -1.432098889e-08), e);
+@@ -1847,7 +1849,7 @@ EXPORT CONST vfloat xlog10f(vfloat d) {
+ 
+   vfloat r = vadd_vf_vf_vf(s.x, s.y);
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   r = vsel_vf_vo_vf_vf(vispinf_vo_vf(d), vcast_vf_f(SLEEF_INFINITY), r);
+   r = vsel_vf_vo_vf_vf(vor_vo_vo_vo(vlt_vo_vf_vf(d, vcast_vf_f(0)), visnan_vo_vf(d)), vcast_vf_f(SLEEF_NAN), r);
+   r = vsel_vf_vo_vf_vf(veq_vo_vf_vf(d, vcast_vf_f(0)), vcast_vf_f(-SLEEF_INFINITY), r);
+@@ -1862,7 +1864,7 @@ EXPORT CONST vfloat xlog2f(vfloat d) {
+   vfloat2 x;
+   vfloat t, m, x2;
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   vopmask o = vlt_vo_vf_vf(d, vcast_vf_f(FLT_MIN));
+   d = vsel_vf_vo_vf_vf(o, vmul_vf_vf_vf(d, vcast_vf_f((float)(1LL << 32) * (float)(1LL << 32))), d);
+   vint2 e = vilogb2k_vi2_vf(vmul_vf_vf_vf(d, vcast_vf_f(1.0/0.75)));
+@@ -1881,7 +1883,7 @@ EXPORT CONST vfloat xlog2f(vfloat d) {
+   t = vmla_vf_vf_vf_vf(t, x2, vcast_vf_f(+0.5764790177e+0f));
+   t = vmla_vf_vf_vf_vf(t, x2, vcast_vf_f(+0.9618012905120f));
+   
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   vfloat2 s = dfadd2_vf2_vf_vf2(vcast_vf_vi2(e),
+ 				dfmul_vf2_vf2_vf2(x, vcast_vf2_f_f(2.8853900432586669922, 3.2734474483568488616e-08)));
+ #else
+@@ -1893,7 +1895,7 @@ EXPORT CONST vfloat xlog2f(vfloat d) {
+ 
+   vfloat r = vadd_vf_vf_vf(s.x, s.y);
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   r = vsel_vf_vo_vf_vf(vispinf_vo_vf(d), vcast_vf_f(SLEEF_INFINITY), r);
+   r = vsel_vf_vo_vf_vf(vor_vo_vo_vo(vlt_vo_vf_vf(d, vcast_vf_f(0)), visnan_vo_vf(d)), vcast_vf_f(SLEEF_NAN), r);
+   r = vsel_vf_vo_vf_vf(veq_vo_vf_vf(d, vcast_vf_f(0)), vcast_vf_f(-SLEEF_INFINITY), r);
+@@ -1910,7 +1912,7 @@ EXPORT CONST vfloat xlog1pf(vfloat d) {
+ 
+   vfloat dp1 = vadd_vf_vf_vf(d, vcast_vf_f(1));
+ 
+-#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512F_NOFMA)
++#if !defined(ENABLE_AVX512F) && !defined(ENABLE_AVX512FNOFMA)
+   vopmask o = vlt_vo_vf_vf(dp1, vcast_vf_f(FLT_MIN));
+   dp1 = vsel_vf_vo_vf_vf(o, vmul_vf_vf_vf(dp1, vcast_vf_f((float)(1LL << 32) * (float)(1LL << 32))), dp1);
+   vint2 e = vilogb2k_vi2_vf(vmul_vf_vf_vf(dp1, vcast_vf_f(1.0f/0.75f)));
+@@ -2314,7 +2316,7 @@ EXPORT CONST vfloat xcospif_u05(vfloat d) {
+   return r;
+ }
+ 
+-#if defined(ENABLE_SVE) || defined(ENABLE_SVE_NOFMA)
++#if defined(ENABLE_SVE) || defined(ENABLE_SVENOFMA)
+   typedef __sizeless_struct {
+     vfloat2 a, b;
+   } df2;

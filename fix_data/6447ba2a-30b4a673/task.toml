@@ -1,0 +1,39 @@
+schema_version = "1.3"
+
+[metadata]
+author_name = "anonymous"
+author_email = "anonymous@snorkel.ai"
+# --- swe_ultra_requirements §4 field names ---
+category = "implementation"
+subcategory = "bug_fix"
+coding_language = "csharp"
+repo_name = "seqcli"
+repo_license = "Apache-2.0"
+source_pr_url = "https://github.com/datalust/seqcli/pull/35"
+base_commit_sha = "c4b5813fedb85c5600f836879b43dd421e2663dc"
+model_difficulty = "hard"
+tags = ["stdin-streaming", "batching", "log-ingestion", "cli", "dotnet"]
+# --- legacy aliases (kept for backward-compatible internal consumers) ---
+difficulty = "hard"
+task_type = "implementation"
+task_subtype = "bug_fix"
+source = "https://github.com/datalust/seqcli/pull/35"
+language = "csharp"
+difficulty_explanation = "The task requires coordinating asynchronous open-ended input with bounded batching and HTTP delivery in two parsing modes. Correct solutions must distinguish temporary quiet periods from true end-of-input without busy-posting empty batches, preserve later input, handle exact batch boundaries, maintain extraction compatibility, and report server and malformed-input failures consistently. These interactions require deterministic asynchronous tests and changes across command, framing, reader, and shipping layers."
+expert_time_estimate_min = 90.0
+junior_time_estimate_min = 300.0
+pr_created_at = "2018-03-06T02:56:05Z"
+pr_merged_at = "2018-03-06T06:38:49Z"
+
+[verifier]
+timeout_sec = 1800.0
+
+[agent]
+timeout_sec = 1800.0
+
+[environment]
+build_timeout_sec = 900.0
+cpus = 4
+memory_mb = 8192
+storage_mb = 10240
+gpus = 0

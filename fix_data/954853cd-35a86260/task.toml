@@ -1,0 +1,87 @@
+schema_version = "1.3"
+
+[environment]
+os = "linux"
+build_timeout_sec = 900.0
+cpus = 4
+memory_mb = 8192
+storage_mb = 10240
+gpus = 0
+workdir = "/app"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0
+
+[metadata]
+task_id = "1957aa1f-3ca8-418d-b7bd-4448df096af5"
+author_name = "anonymous"
+author_email = "anonymous@snorkel.ai"
+category = "Software Engineering"
+subcategory = "Feature implementation"
+coding_language = "csharp"
+repo_name = "azure-functions-host"
+repo_license = "MIT"
+source_pr_url = "https://github.com/Azure/azure-functions-host/pull/11836"
+base_commit_sha = "05f132d3d24ff3eb98f4535dc7ca5cd93d7f40a4"
+model_difficulty = "medium"
+difficulty_explanation = "Medium: the change combines overload compatibility, stateful polling, transient-error discrimination, timeout diagnostics, and migration of varied integration-test callers. Recorded platform runs were GPT-5.5 4/8 and Opus-4.8 8/8."
+tags = [
+    "error-handling",
+    "race-condition",
+    "test-helper",
+    "blob-storage",
+    "retry",
+    "csharp",
+]
+difficulty = "medium"
+task_type = "correctness_and_robustness"
+task_subtype = "error_handling_and_validation"
+source = "https://github.com/Azure/azure-functions-host/pull/11836"
+language = "csharp"
+expert_time_estimate_min = 30.0
+junior_time_estimate_min = 90.0
+pr_created_at = "2026-06-16T16:36:38Z"
+pr_merged_at = "2026-06-16T17:59:16Z"
+gpt_5_2_accuracy = 0.0
+claude_opus_4_6_accuracy = 0.0
+submission_id = "1957aa1f-3ca8-418d-b7bd-4448df096af5"
+ec_task_name = "751af8ea_corrected_submission"
+static_asset_id = "6920a349-4d4a-40f6-ab5e-45311f756d25"
+vendor = "Snorkel AI / SweBench Custom"
+ec_category = "correctness_and_robustness"
+ec_subcategory = "error_handling_and_validation"
+task_objective = [
+    "Fix",
+    "Implement",
+    "Test",
+]
+artifact_type = [
+    "Codebase",
+    "Test suite or benchmark",
+]
+difficulty_source = "platform_fixed_version"
+platform_difficulty = "medium"
+pass_at_k_gpt_5_5 = "4/8"
+pass_at_k_opus_4_8 = "8/8"
+difficulty_log_runs = 16
+license_class = "permissive"
+requeued = "20260713"
+
+[metadata.difficulty_run_accuracies]
+claude-opus-4-8 = 1.0
+codex-gpt-5-5 = 0.5
+
+[task]
+name = "snorkel-ai/swe-bench-custom"
+description = "SWE-Bench Style Tasks"
+authors = [
+    { name = "Snorkel AI", email = "research@snorkel.ai" },
+]
+keywords = [
+    "code",
+    "swe",
+    "swe-bench",
+]

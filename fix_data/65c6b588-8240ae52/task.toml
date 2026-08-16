@@ -1,0 +1,42 @@
+schema_version = "1.3"
+
+[metadata]
+hardening_cycles = "1"
+agent_hardened = "true"
+author_name = "anonymous"
+author_email = "anonymous@snorkel.ai"
+# --- swe_ultra_requirements §4 field names ---
+category = "implementation"
+subcategory = "feature"
+coding_language = "python"
+repo_name = "claude-agent-sdk-python"
+repo_license = "MIT"
+source_pr_url = "https://github.com/anthropics/claude-agent-sdk-python/pull/837"
+base_commit_sha = "75cfe307e4d264fb985564940b72e66ea66e6b8d"
+model_difficulty = "hard"
+difficulty_explanation = "The change spans five new internal modules and eight existing ones, and the correct behaviour is only observable through the interaction of four subsystems: an adapter protocol with optional-method probing, an asynchronous write path that peels mirror frames out of the receive loop and batches them with eager count/byte flushing under concurrency, a read path that materialises a stored transcript into a throwaway CLAUDE_CONFIG_DIR with credential redaction, path-traversal guards and cleanup on every spawn-failure and cancellation path, and nine store-backed session helpers that must mirror the semantics of nine existing synchronous helpers without changing them. Failure modes are non-local (a missed flush before the result message, a temp directory leaked on one of seven abort paths, a project key that diverges from the CLI's own derivation) and are not discoverable by running the existing suite."
+tags = ["session-store", "adapter-protocol", "async", "transcript-mirroring", "session-resume", "typescript-parity"]
+# --- legacy aliases (kept for backward-compatible internal consumers) ---
+difficulty = "hard"
+task_type = "implementation"
+task_subtype = "feature"
+source = "https://github.com/anthropics/claude-agent-sdk-python/pull/837"
+language = "python"
+expert_time_estimate_min = 240.0
+junior_time_estimate_min = 900.0
+pr_created_at = "2026-04-17T21:18:38Z"
+pr_merged_at = "2026-04-19T06:07:45Z"
+
+[verifier]
+timeout_sec = 1800.0
+
+[agent]
+timeout_sec = 1800.0
+
+[environment]
+os = "linux"
+build_timeout_sec = 900.0
+cpus = 4
+memory_mb = 8192
+storage_mb = 10240
+gpus = 0

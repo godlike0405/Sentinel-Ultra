@@ -1,0 +1,2807 @@
+diff --git a/apps/geolibre-desktop/src/components/layout/DesktopShell.tsx b/apps/geolibre-desktop/src/components/layout/DesktopShell.tsx
+index ffd4ce50..e80981d0 100644
+--- a/apps/geolibre-desktop/src/components/layout/DesktopShell.tsx
++++ b/apps/geolibre-desktop/src/components/layout/DesktopShell.tsx
+@@ -310,6 +310,32 @@ const SegmentationDialog = lazy(() =>
+     }),
+ );
+ 
++const ObjectDetectionDialog = lazy(() =>
++  import("../processing/ObjectDetectionDialog")
++    .then((module) => ({
++      default: module.ObjectDetectionDialog,
++    }))
++    .catch((error) => {
++      console.error("Failed to load ObjectDetectionDialog", error);
++      const Fallback = (() =>
++        null) as unknown as typeof import("../processing/ObjectDetectionDialog").ObjectDetectionDialog;
++      return { default: Fallback };
++    }),
++);
++
++const SegmentEverythingPanel = lazy(() =>
++  import("../processing/SegmentEverythingPanel")
++    .then((module) => ({
++      default: module.SegmentEverythingPanel,
++    }))
++    .catch((error) => {
++      console.error("Failed to load SegmentEverythingPanel", error);
++      const Fallback = (() =>
++        null) as unknown as typeof import("../processing/SegmentEverythingPanel").SegmentEverythingPanel;
++      return { default: Fallback };
++    }),
++);
++
+ const SqlWorkspacePanel = lazy(() =>
+   import("../panels/SqlWorkspacePanel")
+     .then((module) => ({
+@@ -2013,6 +2039,12 @@ export function DesktopShell({
+                 onClose={() => setRasterSubsetLayer(null)}
+                 mapControllerRef={mapControllerRef}
+               />
++              <Suspense fallback={null}>
++                <ObjectDetectionDialog mapControllerRef={mapControllerRef} />
++              </Suspense>
++              <Suspense fallback={null}>
++                <SegmentEverythingPanel mapControllerRef={mapControllerRef} />
++              </Suspense>
+               <TerrainSettingsDialog mapControllerRef={mapControllerRef} />
+               <StoryMapComposeBar mapControllerRef={mapControllerRef} />
+             </MapGrid>
+diff --git a/apps/geolibre-desktop/src/components/layout/TopToolbar.tsx b/apps/geolibre-desktop/src/components/layout/TopToolbar.tsx
+index 50bb0699..73eeb5e9 100644
+--- a/apps/geolibre-desktop/src/components/layout/TopToolbar.tsx
++++ b/apps/geolibre-desktop/src/components/layout/TopToolbar.tsx
+@@ -310,6 +310,10 @@ export function TopToolbar({
+   const setModelBuilderOpen = useAppStore((s) => s.setModelBuilderOpen);
+   const setRasterToolOpen = useAppStore((s) => s.setRasterToolOpen);
+   const setSegmentationOpen = useAppStore((s) => s.setSegmentationOpen);
++  const setObjectDetectionOpen = useAppStore((s) => s.setObjectDetectionOpen);
++  const setSegmentEverythingOpen = useAppStore(
++    (s) => s.setSegmentEverythingOpen,
++  );
+   const setSqlWorkspaceOpen = useAppStore((s) => s.setSqlWorkspaceOpen);
+   const setLoadEditorFeaturesOpen = useAppStore(
+     (s) => s.setLoadEditorFeaturesOpen,
+@@ -716,6 +720,22 @@ export function TopToolbar({
+       icon: Sparkles,
+       run: () => setSegmentationOpen(true),
+     },
++    {
++      id: "proc.objectDetection",
++      title: t("toolbar.command.objectDetection"),
++      group: t("toolbar.commandGroup.processing"),
++      keywords: "object detection yolo onnx ai detect imagery boxes",
++      icon: Sparkles,
++      run: () => setObjectDetectionOpen(true),
++    },
++    {
++      id: "proc.segmentEverything",
++      title: t("toolbar.command.segmentEverything"),
++      group: t("toolbar.commandGroup.processing"),
++      keywords: "segment everything slimsam sam automatic mask imagery polygons",
++      icon: Sparkles,
++      run: () => setSegmentEverythingOpen(true),
++    },
+     ...CONVERSION_COMMANDS.map(({ kind, titleKey }) => ({
+       id: `proc.conversion.${kind}`,
+       title: t(titleKey),
+diff --git a/apps/geolibre-desktop/src/components/layout/toolbar/ProcessingMenu.tsx b/apps/geolibre-desktop/src/components/layout/toolbar/ProcessingMenu.tsx
+index f17442f9..a40f9458 100644
+--- a/apps/geolibre-desktop/src/components/layout/toolbar/ProcessingMenu.tsx
++++ b/apps/geolibre-desktop/src/components/layout/toolbar/ProcessingMenu.tsx
+@@ -49,6 +49,10 @@ export function ProcessingMenu({
+   const setModelBuilderOpen = useAppStore((s) => s.setModelBuilderOpen);
+   const setRasterToolOpen = useAppStore((s) => s.setRasterToolOpen);
+   const setSegmentationOpen = useAppStore((s) => s.setSegmentationOpen);
++  const setObjectDetectionOpen = useAppStore((s) => s.setObjectDetectionOpen);
++  const setSegmentEverythingOpen = useAppStore(
++    (s) => s.setSegmentEverythingOpen,
++  );
+   const setSqlWorkspaceOpen = useAppStore((s) => s.setSqlWorkspaceOpen);
+   const setPythonConsoleOpen = useAppStore((s) => s.setPythonConsoleOpen);
+   const setNotebookOpen = useAppStore((s) => s.setNotebookOpen);
+@@ -88,7 +92,9 @@ export function ProcessingMenu({
+   const showGeolibreActions =
+     show("processing.geocode") ||
+     show("processing.modelBuilder") ||
+-    (!mobile && show("processing.segmentation"));
++    (!mobile && show("processing.segmentation")) ||
++    show("processing.objectDetection") ||
++    show("processing.segmentEverything");
+   const showGeolibre = showGeolibreTools || showGeolibreActions;
+   const showWorkspacesOrServices =
+     show("processing.sqlWorkspace") ||
+@@ -509,6 +515,20 @@ export function ProcessingMenu({
+           <DropdownMenuItem onSelect={() => setSegmentationOpen(true)}>
+             {t("toolbar.command.segmentation")}
+           </DropdownMenuItem>
++        )}
++        {/* Detection runs client-side (onnxruntime-web), not via the sidecar,
++            so it stays available on mobile/web clients (no `!mobile` gate). */}
++        {show("processing.objectDetection") && (
++          <DropdownMenuItem onSelect={() => setObjectDetectionOpen(true)}>
++            {t("toolbar.command.objectDetection")}
++          </DropdownMenuItem>
++        )}
++        {/* SlimSAM "segment everything" also runs client-side (onnxruntime-web),
++            so it stays available on mobile/web clients (no `!mobile` gate). */}
++        {show("processing.segmentEverything") && (
++          <DropdownMenuItem onSelect={() => setSegmentEverythingOpen(true)}>
++            {t("toolbar.command.segmentEverything")}
++          </DropdownMenuItem>
+         )}
+           </DropdownMenuSubContent>
+         </DropdownMenuSub>
+diff --git a/apps/geolibre-desktop/src/components/processing/ObjectDetectionDialog.tsx b/apps/geolibre-desktop/src/components/processing/ObjectDetectionDialog.tsx
+new file mode 100644
+index 00000000..f133f1f3
+--- /dev/null
++++ b/apps/geolibre-desktop/src/components/processing/ObjectDetectionDialog.tsx
+@@ -0,0 +1,708 @@
++import { useAppStore } from "@geolibre/core";
++import type { MapController } from "@geolibre/map";
++import {
++  detectObjects,
++  readRasterData,
++  type Detection,
++  type RasterData,
++} from "@geolibre/processing";
++import { Button, Input, Label, Select } from "@geolibre/ui";
++import {
++  AlertCircle,
++  CheckCircle2,
++  FolderOpen,
++  GripVertical,
++  Info,
++  Loader2,
++  Play,
++  ScanSearch,
++  X,
++} from "lucide-react";
++import type { Feature, FeatureCollection } from "geojson";
++import {
++  useCallback,
++  useEffect,
++  useRef,
++  useState,
++  type PointerEvent as ReactPointerEvent,
++  type ReactElement,
++} from "react";
++import { useTranslation } from "react-i18next";
++import { clamp } from "../../lib/clamp";
++import { openLocalDataFileWithFallback } from "../../lib/tauri-io";
++import { reprojectFeatureCollectionToWgs84 } from "../../lib/duckdb-vector-loader";
++import {
++  BUILTIN_DETECTION_MODELS,
++  fetchDetectionModel,
++} from "../../lib/detection-models";
++
++interface ObjectDetectionDialogProps {
++  mapControllerRef: React.RefObject<MapController | null>;
++}
++
++const IMAGE_FILTERS = [
++  { name: "Imagery", extensions: ["tif", "tiff"] },
++];
++const IMAGE_ACCEPT = ".tif,.tiff";
++const MODEL_FILTERS = [{ name: "ONNX model", extensions: ["onnx"] }];
++const MODEL_ACCEPT = ".onnx";
++
++/** Default panel geometry (px); the user can drag it around the map area. */
++const PANEL_MARGIN = 12;
++
++interface PanelPos {
++  x: number;
++  y: number;
++}
++
++/**
++ * Read the source EPSG code from a raster's GeoTIFF GeoKeys.
++ *
++ * Prefers the projected CRS, falling back to the geographic one. The "user
++ * defined" sentinel (32767) and missing/zero codes return null so the caller
++ * can treat the detections as already in lon/lat.
++ *
++ * @param geoKeys The `geoKeys` carried on a {@link RasterData}.
++ * @returns The EPSG code, or null when none is declared.
++ */
++function epsgFromGeoKeys(geoKeys: Record<string, unknown>): number | null {
++  const proj = geoKeys?.ProjectedCSTypeGeoKey;
++  const geog = geoKeys?.GeographicTypeGeoKey;
++  const code =
++    typeof proj === "number" && proj > 0 && proj !== 32767
++      ? proj
++      : typeof geog === "number" && geog > 0 && geog !== 32767
++        ? geog
++        : null;
++  return code;
++}
++
++/**
++ * Resolve a class label for a detection from a user-supplied name list,
++ * falling back to `class_<index>` when the list is short or empty.
++ */
++function classLabel(names: string[], index: number): string {
++  return names[index]?.trim() || `class_${index}`;
++}
++
++/**
++ * Turn source-pixel detections into a georeferenced FeatureCollection.
++ *
++ * Each box becomes a rectangular polygon in the raster's CRS (via the
++ * geotransform), tagged with its class label and score, and a legacy `crs`
++ * member so {@link reprojectFeatureCollectionToWgs84} can lift it to WGS84.
++ *
++ * @param detections Boxes in source raster pixels.
++ * @param raster The source raster (for the geotransform + CRS).
++ * @param names Parsed class names.
++ * @returns A FeatureCollection ready to reproject.
++ */
++function detectionsToFeatureCollection(
++  detections: Detection[],
++  raster: RasterData,
++  names: string[],
++): FeatureCollection {
++  const { originX, originY, resX, resY, flipX, flipY } = raster;
++  // Map a source pixel to world coords, honouring the raster's resolution sign
++  // (flipX = east-to-west, flipY = south-up) so mirrored/flipped GeoTIFFs are
++  // georeferenced correctly instead of silently mislocated.
++  const worldX = (px: number) => (flipX ? originX - px * resX : originX + px * resX);
++  const worldY = (py: number) => (flipY ? originY + py * resY : originY - py * resY);
++  const features: Feature[] = detections.map((det) => {
++    const [minPxX, minPxY, maxPxX, maxPxY] = det.bbox;
++    const x1 = worldX(minPxX);
++    const x2 = worldX(maxPxX);
++    const y1 = worldY(minPxY);
++    const y2 = worldY(maxPxY);
++    const west = Math.min(x1, x2);
++    const east = Math.max(x1, x2);
++    const south = Math.min(y1, y2);
++    const north = Math.max(y1, y2);
++    return {
++      type: "Feature",
++      properties: {
++        class: classLabel(names, det.classIndex),
++        class_index: det.classIndex,
++        score: Number(det.score.toFixed(4)),
++      },
++      geometry: {
++        type: "Polygon",
++        coordinates: [
++          [
++            [west, south],
++            [east, south],
++            [east, north],
++            [west, north],
++            [west, south],
++          ],
++        ],
++      },
++    } satisfies Feature;
++  });
++  const epsg = epsgFromGeoKeys(raster.geoKeys);
++  const fc: FeatureCollection & { crs?: unknown } = {
++    type: "FeatureCollection",
++    features,
++  };
++  if (epsg && epsg !== 4326) {
++    fc.crs = { type: "name", properties: { name: `EPSG:${epsg}` } };
++  } else if (!epsg && (raster.originX !== 0 || raster.originY !== 0)) {
++    // No recognised EPSG (user-defined CRS, or WKT-only georeferencing): the
++    // boxes stay in the raster's native coordinates and are not reprojected, so
++    // a projected raster's detections can land far from their true location.
++    console.warn(
++      "objectDetection: no recognised EPSG code in the raster GeoKeys — detections will not be reprojected and may appear at the wrong location.",
++    );
++  }
++  return fc;
++}
++
++/**
++ * Object detection panel (issue #902). A floating, draggable panel (not a modal)
++ * that runs a user-supplied YOLO model exported to ONNX entirely in the browser
++ * (onnxruntime-web) against a chosen GeoTIFF, georeferences the detected boxes,
++ * and adds one GeoJSON layer per detected class. The map stays interactive while
++ * the panel is open, matching the Raster Subset / Pixel Time Series panels.
++ *
++ * Unlike AI Segmentation, inference is client-side, so this works in both the
++ * web and desktop builds with no Python sidecar.
++ */
++export function ObjectDetectionDialog({
++  mapControllerRef,
++}: ObjectDetectionDialogProps): ReactElement | null {
++  const { t } = useTranslation();
++  const open = useAppStore((s) => s.ui.objectDetectionOpen);
++  const setOpen = useAppStore((s) => s.setObjectDetectionOpen);
++  const addGeoJsonLayer = useAppStore((s) => s.addGeoJsonLayer);
++
++  const [imageBytes, setImageBytes] = useState<ArrayBuffer | null>(null);
++  const [imageName, setImageName] = useState("");
++  // Default to a built-in model so detection works out of the box with no file.
++  const [modelSource, setModelSource] = useState<"builtin" | "local">("builtin");
++  const [builtinModelId, setBuiltinModelId] = useState(
++    BUILTIN_DETECTION_MODELS[0].id,
++  );
++  const [modelBytes, setModelBytes] = useState<ArrayBuffer | null>(null);
++  const [modelName, setModelName] = useState("");
++  const [classNames, setClassNames] = useState(
++    BUILTIN_DETECTION_MODELS[0].classNames.join(", "),
++  );
++  const [confidence, setConfidence] = useState(0.25);
++  const [iou, setIou] = useState(0.45);
++  const [inputSize, setInputSize] = useState(640);
++  const [running, setRunning] = useState(false);
++  const [downloading, setDownloading] = useState(false);
++  const [error, setError] = useState<string | null>(null);
++  const [resultMessage, setResultMessage] = useState<string | null>(null);
++  // The real "is inference in flight" guard. It survives the dialog being
++  // closed and re-opened (the `running` state is only for the spinner), so a
++  // run started, dismissed, then restarted cannot spawn a second concurrent
++  // session that would add duplicate layers.
++  const inferringRef = useRef(false);
++
++  // Floating-panel drag state: `pos` is null until the user first drags, so the
++  // panel opens anchored to its default corner and only switches to absolute
++  // coordinates once moved (mirrors RasterSubsetPanel).
++  const panelRef = useRef<HTMLDivElement | null>(null);
++  const [pos, setPos] = useState<PanelPos | null>(null);
++
++  const handleDragStart = useCallback(
++    (event: ReactPointerEvent<HTMLDivElement>) => {
++      // Let clicks on the header's close button through without starting a drag.
++      if ((event.target as HTMLElement).closest("button")) return;
++      event.preventDefault();
++      const el = panelRef.current;
++      const parent =
++        (el?.offsetParent as HTMLElement | null) ?? el?.parentElement ?? null;
++      const pb = parent?.getBoundingClientRect();
++      const eb = el?.getBoundingClientRect();
++      const start: PanelPos = pos ?? {
++        x: (eb?.left ?? 0) - (pb?.left ?? 0),
++        y: (eb?.top ?? 0) - (pb?.top ?? 0),
++      };
++      if (!pos) setPos(start);
++      const handle = event.currentTarget;
++      handle.setPointerCapture(event.pointerId);
++      const startX = event.clientX;
++      const startY = event.clientY;
++      const w = eb?.width ?? 0;
++      const h = eb?.height ?? 0;
++      const move = (m: PointerEvent) => {
++        if (!panelRef.current) return;
++        const bounds = parent?.getBoundingClientRect();
++        const maxX = bounds
++          ? bounds.width - w - PANEL_MARGIN
++          : Number.POSITIVE_INFINITY;
++        const maxY = bounds
++          ? bounds.height - h - PANEL_MARGIN
++          : Number.POSITIVE_INFINITY;
++        setPos({
++          x: clamp(start.x + (m.clientX - startX), 0, Math.max(0, maxX)),
++          y: clamp(start.y + (m.clientY - startY), 0, Math.max(0, maxY)),
++        });
++      };
++      const end = () => {
++        if (handle.hasPointerCapture(event.pointerId))
++          handle.releasePointerCapture(event.pointerId);
++        handle.removeEventListener("pointermove", move);
++        handle.removeEventListener("pointerup", end);
++        handle.removeEventListener("pointercancel", end);
++      };
++      handle.addEventListener("pointermove", move);
++      handle.addEventListener("pointerup", end);
++      handle.addEventListener("pointercancel", end);
++    },
++    [pos],
++  );
++
++  useEffect(() => {
++    if (!open) return;
++    // Reset transient display state so a re-opened dialog never shows a stale
++    // error or result. `running` is intentionally not reset here: while real
++    // work is still in flight (tracked by inferringRef) the spinner must stay.
++    setError(null);
++    setResultMessage(null);
++  }, [open]);
++
++  const pickImage = useCallback(async () => {
++    const result = await openLocalDataFileWithFallback({
++      filters: IMAGE_FILTERS,
++      accept: IMAGE_ACCEPT,
++      readBinary: true,
++    });
++    if (result?.data) {
++      setImageBytes(result.data);
++      const name = (result.path || "image.tif").split(/[/\\]/).pop();
++      setImageName(name || "image.tif");
++    }
++  }, []);
++
++  const pickModel = useCallback(async () => {
++    const result = await openLocalDataFileWithFallback({
++      filters: MODEL_FILTERS,
++      accept: MODEL_ACCEPT,
++      readBinary: true,
++    });
++    if (result?.data) {
++      setModelBytes(result.data);
++      const name = (result.path || "model.onnx").split(/[/\\]/).pop();
++      setModelName(name || "model.onnx");
++      // Clear the built-in model's leftover class names so a custom model does
++      // not mislabel its detections by indexing into an unrelated COCO list;
++      // the field falls back to class_<index> until the user fills it in.
++      setClassNames("");
++    }
++  }, []);
++
++  // Picking a built-in model prefills the class names with that model's labels
++  // (in output order) so detections come out named without any typing.
++  const selectBuiltinModel = useCallback((id: string) => {
++    setBuiltinModelId(id);
++    const model = BUILTIN_DETECTION_MODELS.find((m) => m.id === id);
++    if (model) {
++      setClassNames(model.classNames.join(", "));
++      // Also apply the model's native input edge so a built-in exported at a
++      // non-640 size runs at its documented resolution rather than whatever the
++      // user last set.
++      setInputSize(model.inputSize);
++    }
++  }, []);
++
++  const handleRun = useCallback(async () => {
++    // Never start a second run while one is still in flight (e.g. the dialog was
++    // closed and re-opened mid-inference), which would add duplicate layers.
++    if (inferringRef.current) return;
++    setError(null);
++    setResultMessage(null);
++    if (!imageBytes) {
++      setError(t("objectDetection.error.chooseImage"));
++      return;
++    }
++    if (modelSource === "local" && !modelBytes) {
++      setError(t("objectDetection.error.chooseModel"));
++      return;
++    }
++    inferringRef.current = true;
++    setRunning(true);
++    try {
++      // Resolve the model bytes: download (and cache) the chosen built-in model,
++      // or use the user-supplied file.
++      let modelData = modelBytes;
++      if (modelSource === "builtin") {
++        const model = BUILTIN_DETECTION_MODELS.find(
++          (m) => m.id === builtinModelId,
++        );
++        if (!model) {
++          setError(t("objectDetection.error.chooseModel"));
++          return;
++        }
++        setDownloading(true);
++        try {
++          modelData = await fetchDetectionModel(model.url);
++        } catch {
++          setError(t("objectDetection.error.downloadModel"));
++          return;
++        } finally {
++          setDownloading(false);
++        }
++      }
++      if (!modelData) {
++        setError(t("objectDetection.error.chooseModel"));
++        return;
++      }
++      const raster = await readRasterData(imageBytes);
++      const detections = await detectObjects(raster, modelData, {
++        inputSize,
++        confidenceThreshold: confidence,
++        iouThreshold: iou,
++      });
++      if (!detections.length) {
++        setResultMessage(t("objectDetection.noObjects"));
++        return;
++      }
++      const names = classNames
++        .split(",")
++        .map((s) => s.trim())
++        .filter(Boolean);
++      const tagged = detectionsToFeatureCollection(detections, raster, names);
++      // Reproject once for the whole batch, then split by class so each class
++      // becomes its own layer (issue #902: "classes can be created as layers").
++      const fc = await reprojectFeatureCollectionToWgs84(tagged);
++      const byClass = new Map<string, Feature[]>();
++      for (const feature of fc.features) {
++        const cls = String(feature.properties?.class ?? "detection");
++        const list = byClass.get(cls);
++        if (list) list.push(feature);
++        else byClass.set(cls, [feature]);
++      }
++
++      for (const [cls, features] of byClass) {
++        addGeoJsonLayer(t("objectDetection.layerName", { class: cls }), {
++          type: "FeatureCollection",
++          features,
++        });
++      }
++      // Fit to the union of every detected box across all classes, not just the
++      // first class's layer, so no class's detections end up off-screen.
++      let minX = Infinity;
++      let minY = Infinity;
++      let maxX = -Infinity;
++      let maxY = -Infinity;
++      for (const feature of fc.features) {
++        if (feature.geometry?.type !== "Polygon") continue;
++        for (const ring of feature.geometry.coordinates) {
++          for (const [x, y] of ring) {
++            if (x < minX) minX = x;
++            if (x > maxX) maxX = x;
++            if (y < minY) minY = y;
++            if (y > maxY) maxY = y;
++          }
++        }
++      }
++      if (Number.isFinite(minX)) {
++        mapControllerRef.current?.fitBounds([minX, minY, maxX, maxY]);
++      }
++      setResultMessage(
++        t("objectDetection.added", {
++          count: detections.length,
++          classes: byClass.size,
++        }),
++      );
++    } catch (err) {
++      setError(
++        err instanceof Error ? err.message : t("objectDetection.error.failed"),
++      );
++    } finally {
++      inferringRef.current = false;
++      setRunning(false);
++    }
++  }, [
++    imageBytes,
++    modelSource,
++    modelBytes,
++    builtinModelId,
++    inputSize,
++    confidence,
++    iou,
++    classNames,
++    addGeoJsonLayer,
++    mapControllerRef,
++    t,
++  ]);
++
++  if (!open) return null;
++
++  return (
++    <div
++      ref={panelRef}
++      className={
++        pos
++          ? "pointer-events-auto absolute z-20 flex max-h-[calc(100%-2rem)] w-[min(24rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-lg border bg-background shadow-xl"
++          : "pointer-events-auto absolute right-3 top-16 z-20 flex max-h-[calc(100%-6rem)] w-[min(24rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-lg border bg-background shadow-xl"
++      }
++      style={pos ? { left: pos.x, top: pos.y } : undefined}
++      role="region"
++      aria-label={t("objectDetection.title")}
++      data-testid="object-detection-panel"
++    >
++      <div
++        className="flex cursor-move touch-none select-none items-center justify-between gap-2 border-b px-3 py-2"
++        onPointerDown={handleDragStart}
++      >
++        <div className="flex min-w-0 items-center gap-2 text-sm font-semibold">
++          <GripVertical
++            className="h-4 w-4 shrink-0 text-muted-foreground"
++            aria-hidden="true"
++          />
++          <ScanSearch
++            className="h-4 w-4 shrink-0 text-primary"
++            aria-hidden="true"
++          />
++          <span className="truncate">{t("objectDetection.title")}</span>
++        </div>
++        <button
++          type="button"
++          className="rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring"
++          onClick={() => setOpen(false)}
++          aria-label={t("common.close")}
++        >
++          <X className="h-4 w-4" />
++        </button>
++      </div>
++
++      <div className="flex flex-col overflow-auto p-3">
++        <p className="mb-2 text-xs text-muted-foreground">
++          {t("objectDetection.description")}
++        </p>
++        <div className="flex flex-col gap-3">
++          <p className="flex items-start gap-2 rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
++            <Info className="mt-0.5 h-4 w-4 shrink-0" />
++            {t("objectDetection.hint")}
++          </p>
++
++          {/* Image source */}
++          <div className="grid gap-1.5">
++            <Label htmlFor="det-image" className="text-xs">
++              {t("objectDetection.imageLabel")}
++              <span className="text-destructive"> *</span>
++            </Label>
++            <div className="grid grid-cols-[minmax(0,1fr)_2.25rem] gap-2">
++              <Input
++                id="det-image"
++                readOnly
++                value={imageName}
++                placeholder={t("objectDetection.imagePlaceholder")}
++              />
++              <Button
++                type="button"
++                variant="outline"
++                size="icon"
++                title={t("objectDetection.chooseImage")}
++                onClick={() => void pickImage()}
++              >
++                <FolderOpen className="h-4 w-4" />
++              </Button>
++            </div>
++          </div>
++
++          {/* Model source: a built-in model that downloads on demand, or a
++              user-supplied .onnx file. */}
++          <div className="grid gap-1.5">
++            <Label htmlFor="det-model-source" className="text-xs">
++              {t("objectDetection.modelLabel")}
++              <span className="text-destructive"> *</span>
++            </Label>
++            <Select
++              id="det-model-source"
++              value={modelSource}
++              onChange={(e) => {
++                const next = e.target.value as "builtin" | "local";
++                setModelSource(next);
++                // Switching back to a built-in repopulates its class names (and
++                // input size); pickModel clears them for a local file, and the
++                // built-in dropdown's own onChange doesn't fire on this switch.
++                if (next === "builtin") selectBuiltinModel(builtinModelId);
++              }}
++            >
++              <option value="builtin">
++                {t("objectDetection.modelSourceBuiltin")}
++              </option>
++              <option value="local">
++                {t("objectDetection.modelSourceLocal")}
++              </option>
++            </Select>
++          </div>
++
++          {modelSource === "builtin" ? (
++            <div className="grid gap-1.5">
++              <Label htmlFor="det-builtin-model" className="text-xs">
++                {t("objectDetection.builtinModelLabel")}
++              </Label>
++              <Select
++                id="det-builtin-model"
++                value={builtinModelId}
++                onChange={(e) => selectBuiltinModel(e.target.value)}
++              >
++                {BUILTIN_DETECTION_MODELS.map((model) => (
++                  <option key={model.id} value={model.id}>
++                    {model.label}
++                  </option>
++                ))}
++              </Select>
++            </div>
++          ) : (
++            <div className="grid gap-1.5">
++              <Label htmlFor="det-model" className="text-xs">
++                {t("objectDetection.modelFileLabel")}
++              </Label>
++              <div className="grid grid-cols-[minmax(0,1fr)_2.25rem] gap-2">
++                <Input
++                  id="det-model"
++                  readOnly
++                  value={modelName}
++                  placeholder={t("objectDetection.modelPlaceholder")}
++                />
++                <Button
++                  type="button"
++                  variant="outline"
++                  size="icon"
++                  title={t("objectDetection.chooseModel")}
++                  onClick={() => void pickModel()}
++                >
++                  <FolderOpen className="h-4 w-4" />
++                </Button>
++              </div>
++            </div>
++          )}
++
++          {/* Class names */}
++          <div className="grid gap-1.5">
++            <Label htmlFor="det-classes" className="text-xs">
++              {t("objectDetection.classNamesLabel")}
++            </Label>
++            <Input
++              id="det-classes"
++              value={classNames}
++              placeholder={t("objectDetection.classNamesPlaceholder")}
++              onChange={(e) => setClassNames(e.target.value)}
++            />
++          </div>
++
++          <div className="grid grid-cols-3 gap-2">
++            <div className="grid gap-1.5">
++              <Label htmlFor="det-confidence" className="text-xs">
++                {t("objectDetection.confidenceLabel")}
++              </Label>
++              <Input
++                id="det-confidence"
++                type="number"
++                min={0}
++                max={1}
++                step={0.05}
++                value={String(confidence)}
++                onChange={(e) => {
++                  if (e.target.value === "") {
++                    setConfidence(0.25);
++                    return;
++                  }
++                  const parsed = Number(e.target.value);
++                  if (!Number.isFinite(parsed)) return;
++                  setConfidence(Math.min(1, Math.max(0, parsed)));
++                }}
++              />
++            </div>
++            <div className="grid gap-1.5">
++              <Label htmlFor="det-iou" className="text-xs">
++                {t("objectDetection.iouLabel")}
++              </Label>
++              <Input
++                id="det-iou"
++                type="number"
++                min={0}
++                max={1}
++                step={0.05}
++                value={String(iou)}
++                onChange={(e) => {
++                  if (e.target.value === "") {
++                    setIou(0.45);
++                    return;
++                  }
++                  const parsed = Number(e.target.value);
++                  if (!Number.isFinite(parsed)) return;
++                  setIou(Math.min(1, Math.max(0, parsed)));
++                }}
++              />
++            </div>
++            <div className="grid gap-1.5">
++              <Label htmlFor="det-size" className="text-xs">
++                {t("objectDetection.inputSizeLabel")}
++              </Label>
++              <Input
++                id="det-size"
++                type="number"
++                min={32}
++                max={4096}
++                step={32}
++                value={String(inputSize)}
++                onChange={(e) => {
++                  // Accept any in-range intermediate value while typing (e.g.
++                  // "3" on the way to "320"); a controlled input that rejected
++                  // <32 would revert the keystroke and make the field untypable.
++                  const parsed = Number(e.target.value);
++                  if (e.target.value !== "" && !Number.isFinite(parsed)) return;
++                  setInputSize(e.target.value === "" ? 0 : parsed);
++                }}
++                onBlur={() =>
++                  // Snap to a valid multiple of 32 (YOLO stride) in [32, 4096]:
++                  // the HTML step/max are advisory, and a non-multiple or
++                  // oversized input yields a misaligned or huge inference tensor.
++                  setInputSize((prev) =>
++                    Math.min(4096, Math.max(32, Math.round(prev / 32) * 32)),
++                  )
++                }
++              />
++            </div>
++          </div>
++
++          <div className="flex items-center gap-3">
++            <Button
++              onClick={() => void handleRun()}
++              disabled={
++                running ||
++                !imageBytes ||
++                (modelSource === "local" && !modelBytes)
++              }
++              className="gap-2"
++            >
++              {running ? (
++                <Loader2 className="h-4 w-4 animate-spin" />
++              ) : (
++                <Play className="h-4 w-4" />
++              )}
++              {t("objectDetection.detect")}
++            </Button>
++            {downloading && (
++              <span className="flex items-center gap-2 text-sm text-muted-foreground">
++                <Loader2 className="h-4 w-4 animate-spin" />
++                {t("objectDetection.downloadingModel")}
++              </span>
++            )}
++          </div>
++
++          {error && (
++            <p className="flex items-center gap-2 text-sm text-destructive">
++              <AlertCircle className="h-4 w-4" />
++              {error}
++            </p>
++          )}
++          {resultMessage && !error && (
++            <p className="flex items-center gap-2 text-sm text-emerald-700">
++              <CheckCircle2 className="h-4 w-4" />
++              {resultMessage}
++            </p>
++          )}
++        </div>
++      </div>
++    </div>
++  );
++}
+diff --git a/apps/geolibre-desktop/src/components/processing/SegmentEverythingPanel.tsx b/apps/geolibre-desktop/src/components/processing/SegmentEverythingPanel.tsx
+new file mode 100644
+index 00000000..f6425253
+--- /dev/null
++++ b/apps/geolibre-desktop/src/components/processing/SegmentEverythingPanel.tsx
+@@ -0,0 +1,471 @@
++import { useAppStore } from "@geolibre/core";
++import type { MapController } from "@geolibre/map";
++import {
++  readRasterData,
++  segmentEverything,
++  type RasterData,
++  type SegmentMask,
++} from "@geolibre/processing";
++import { Button, Input, Label } from "@geolibre/ui";
++import {
++  AlertCircle,
++  CheckCircle2,
++  FolderOpen,
++  GripVertical,
++  Info,
++  Loader2,
++  Play,
++  Shapes,
++  X,
++} from "lucide-react";
++import type { Feature, FeatureCollection } from "geojson";
++import {
++  useCallback,
++  useEffect,
++  useRef,
++  useState,
++  type PointerEvent as ReactPointerEvent,
++  type ReactElement,
++} from "react";
++import { useTranslation } from "react-i18next";
++import { clamp } from "../../lib/clamp";
++import { openLocalDataFileWithFallback } from "../../lib/tauri-io";
++import { reprojectFeatureCollectionToWgs84 } from "../../lib/duckdb-vector-loader";
++import {
++  fetchSegmentModel,
++  SLIMSAM_DECODER_URL,
++  SLIMSAM_ENCODER_URL,
++} from "../../lib/segment-models";
++
++interface SegmentEverythingPanelProps {
++  mapControllerRef: React.RefObject<MapController | null>;
++}
++
++const IMAGE_FILTERS = [{ name: "Imagery", extensions: ["tif", "tiff"] }];
++const IMAGE_ACCEPT = ".tif,.tiff";
++const PANEL_MARGIN = 12;
++
++interface PanelPos {
++  x: number;
++  y: number;
++}
++
++/** Read the source EPSG code from a raster's GeoTIFF GeoKeys (see
++ * ObjectDetectionDialog); null for user-defined/missing codes. */
++function epsgFromGeoKeys(geoKeys: Record<string, unknown>): number | null {
++  const proj = geoKeys?.ProjectedCSTypeGeoKey;
++  const geog = geoKeys?.GeographicTypeGeoKey;
++  return typeof proj === "number" && proj > 0 && proj !== 32767
++    ? proj
++    : typeof geog === "number" && geog > 0 && geog !== 32767
++      ? geog
++      : null;
++}
++
++/** Turn source-pixel mask polygons into a georeferenced FeatureCollection. */
++function masksToFeatureCollection(
++  masks: SegmentMask[],
++  raster: RasterData,
++): FeatureCollection {
++  const { originX, originY, resX, resY, flipX, flipY } = raster;
++  // Honour the raster's resolution sign (flipX = east-to-west, flipY = south-up)
++  // so mirrored/flipped GeoTIFFs are georeferenced correctly, not mislocated.
++  const worldX = (px: number) => (flipX ? originX - px * resX : originX + px * resX);
++  const worldY = (py: number) => (flipY ? originY + py * resY : originY - py * resY);
++  const features: Feature[] = masks.map((mask, index) => {
++    const ring = mask.polygon.map(([px, py]) => [worldX(px), worldY(py)]);
++    return {
++      type: "Feature",
++      properties: {
++        id: index,
++        score: Number(mask.score.toFixed(4)),
++        area: Math.round(mask.area),
++      },
++      geometry: { type: "Polygon", coordinates: [ring] },
++    } satisfies Feature;
++  });
++  const epsg = epsgFromGeoKeys(raster.geoKeys);
++  const fc: FeatureCollection & { crs?: unknown } = {
++    type: "FeatureCollection",
++    features,
++  };
++  if (epsg && epsg !== 4326) {
++    fc.crs = { type: "name", properties: { name: `EPSG:${epsg}` } };
++  } else if (!epsg && (raster.originX !== 0 || raster.originY !== 0)) {
++    console.warn(
++      "segmentEverything: no recognised EPSG code in the raster GeoKeys — polygons will not be reprojected and may appear at the wrong location.",
++    );
++  }
++  return fc;
++}
++
++/**
++ * "Segment Everything" panel (issue #902). A floating, draggable panel that runs
++ * SlimSAM automatically over a chosen GeoTIFF entirely in the browser
++ * (onnxruntime-web): the encoder runs once, a grid of points is fed through the
++ * mask decoder, and every surviving mask becomes a georeferenced polygon added
++ * as a single GeoJSON layer. Classless (no labels), fully client-side, so it
++ * works in both the web and desktop builds with no Python sidecar.
++ */
++export function SegmentEverythingPanel({
++  mapControllerRef,
++}: SegmentEverythingPanelProps): ReactElement | null {
++  const { t } = useTranslation();
++  const open = useAppStore((s) => s.ui.segmentEverythingOpen);
++  const setOpen = useAppStore((s) => s.setSegmentEverythingOpen);
++  const addGeoJsonLayer = useAppStore((s) => s.addGeoJsonLayer);
++
++  const [imageBytes, setImageBytes] = useState<ArrayBuffer | null>(null);
++  const [imageName, setImageName] = useState("");
++  const [pointsPerSide, setPointsPerSide] = useState(16);
++  const [quality, setQuality] = useState(0.85);
++  const [minSize, setMinSize] = useState(0.08); // percent of image area
++  const [running, setRunning] = useState(false);
++  const [downloading, setDownloading] = useState(false);
++  const [progress, setProgress] = useState<{ done: number; total: number } | null>(
++    null,
++  );
++  const [error, setError] = useState<string | null>(null);
++  const [resultMessage, setResultMessage] = useState<string | null>(null);
++
++  // Real "is inference in flight" guard: survives the panel being closed and
++  // re-opened so a run started, dismissed, then restarted cannot spawn a second
++  // concurrent session that would add duplicate layers.
++  const inferringRef = useRef(false);
++  // Cancels an in-flight run (between decoder batches) when the panel closes.
++  const abortRef = useRef<AbortController | null>(null);
++  useEffect(() => () => abortRef.current?.abort(), []);
++
++  // Floating-panel drag state (mirrors RasterSubsetPanel / ObjectDetectionDialog).
++  const panelRef = useRef<HTMLDivElement | null>(null);
++  const [pos, setPos] = useState<PanelPos | null>(null);
++
++  const handleDragStart = useCallback(
++    (event: ReactPointerEvent<HTMLDivElement>) => {
++      if ((event.target as HTMLElement).closest("button")) return;
++      event.preventDefault();
++      const el = panelRef.current;
++      const parent =
++        (el?.offsetParent as HTMLElement | null) ?? el?.parentElement ?? null;
++      const pb = parent?.getBoundingClientRect();
++      const eb = el?.getBoundingClientRect();
++      const start: PanelPos = pos ?? {
++        x: (eb?.left ?? 0) - (pb?.left ?? 0),
++        y: (eb?.top ?? 0) - (pb?.top ?? 0),
++      };
++      if (!pos) setPos(start);
++      const handle = event.currentTarget;
++      handle.setPointerCapture(event.pointerId);
++      const startX = event.clientX;
++      const startY = event.clientY;
++      const w = eb?.width ?? 0;
++      const h = eb?.height ?? 0;
++      const move = (m: PointerEvent) => {
++        if (!panelRef.current) return;
++        const bounds = parent?.getBoundingClientRect();
++        const maxX = bounds
++          ? bounds.width - w - PANEL_MARGIN
++          : Number.POSITIVE_INFINITY;
++        const maxY = bounds
++          ? bounds.height - h - PANEL_MARGIN
++          : Number.POSITIVE_INFINITY;
++        setPos({
++          x: clamp(start.x + (m.clientX - startX), 0, Math.max(0, maxX)),
++          y: clamp(start.y + (m.clientY - startY), 0, Math.max(0, maxY)),
++        });
++      };
++      const end = () => {
++        if (handle.hasPointerCapture(event.pointerId))
++          handle.releasePointerCapture(event.pointerId);
++        handle.removeEventListener("pointermove", move);
++        handle.removeEventListener("pointerup", end);
++        handle.removeEventListener("pointercancel", end);
++      };
++      handle.addEventListener("pointermove", move);
++      handle.addEventListener("pointerup", end);
++      handle.addEventListener("pointercancel", end);
++    },
++    [pos],
++  );
++
++  useEffect(() => {
++    if (!open) return;
++    setError(null);
++    setResultMessage(null);
++  }, [open]);
++
++  const pickImage = useCallback(async () => {
++    const result = await openLocalDataFileWithFallback({
++      filters: IMAGE_FILTERS,
++      accept: IMAGE_ACCEPT,
++      readBinary: true,
++    });
++    if (result?.data) {
++      setImageBytes(result.data);
++      const name = (result.path || "image.tif").split(/[/\\]/).pop();
++      setImageName(name || "image.tif");
++    }
++  }, []);
++
++  const handleClose = useCallback(() => {
++    abortRef.current?.abort();
++    setOpen(false);
++  }, [setOpen]);
++
++  const handleRun = useCallback(async () => {
++    if (inferringRef.current) return;
++    setError(null);
++    setResultMessage(null);
++    if (!imageBytes) {
++      setError(t("segmentEverything.error.chooseImage"));
++      return;
++    }
++    inferringRef.current = true;
++    setRunning(true);
++    setProgress(null);
++    const controller = new AbortController();
++    abortRef.current = controller;
++    try {
++      setDownloading(true);
++      let encoder: ArrayBuffer;
++      let decoder: ArrayBuffer;
++      try {
++        [encoder, decoder] = await Promise.all([
++          fetchSegmentModel(SLIMSAM_ENCODER_URL),
++          fetchSegmentModel(SLIMSAM_DECODER_URL),
++        ]);
++      } catch {
++        setError(t("segmentEverything.error.downloadModel"));
++        return;
++      } finally {
++        setDownloading(false);
++      }
++
++      const raster = await readRasterData(imageBytes);
++      const masks = await segmentEverything(raster, encoder, decoder, {
++        pointsPerSide,
++        predIouThreshold: quality,
++        minAreaFraction: minSize / 100,
++        signal: controller.signal,
++        onProgress: (done, total) => setProgress({ done, total }),
++      });
++      if (controller.signal.aborted) return;
++      if (!masks.length) {
++        setResultMessage(t("segmentEverything.noObjects"));
++        return;
++      }
++      const tagged = masksToFeatureCollection(masks, raster);
++      const fc = await reprojectFeatureCollectionToWgs84(tagged);
++      const layerId = addGeoJsonLayer(t("segmentEverything.layerName"), fc);
++      const layer = useAppStore
++        .getState()
++        .layers.find((item) => item.id === layerId);
++      if (layer) mapControllerRef.current?.fitLayer(layer);
++      setResultMessage(
++        t("segmentEverything.added", { count: masks.length }),
++      );
++    } catch (err) {
++      if (controller.signal.aborted) return;
++      setError(
++        err instanceof Error ? err.message : t("segmentEverything.error.failed"),
++      );
++    } finally {
++      if (abortRef.current === controller) abortRef.current = null;
++      inferringRef.current = false;
++      setRunning(false);
++      setProgress(null);
++    }
++  }, [
++    imageBytes,
++    pointsPerSide,
++    quality,
++    minSize,
++    addGeoJsonLayer,
++    mapControllerRef,
++    t,
++  ]);
++
++  if (!open) return null;
++
++  return (
++    <div
++      ref={panelRef}
++      className={
++        pos
++          ? "pointer-events-auto absolute z-20 flex max-h-[calc(100%-2rem)] w-[min(22rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-lg border bg-background shadow-xl"
++          : "pointer-events-auto absolute right-3 top-16 z-20 flex max-h-[calc(100%-6rem)] w-[min(22rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-lg border bg-background shadow-xl"
++      }
++      style={pos ? { left: pos.x, top: pos.y } : undefined}
++      role="region"
++      aria-label={t("segmentEverything.title")}
++      data-testid="segment-everything-panel"
++    >
++      <div
++        className="flex cursor-move touch-none select-none items-center justify-between gap-2 border-b px-3 py-2"
++        onPointerDown={handleDragStart}
++      >
++        <div className="flex min-w-0 items-center gap-2 text-sm font-semibold">
++          <GripVertical
++            className="h-4 w-4 shrink-0 text-muted-foreground"
++            aria-hidden="true"
++          />
++          <Shapes className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
++          <span className="truncate">{t("segmentEverything.title")}</span>
++        </div>
++        <button
++          type="button"
++          className="rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring"
++          onClick={handleClose}
++          aria-label={t("common.close")}
++        >
++          <X className="h-4 w-4" />
++        </button>
++      </div>
++
++      <div className="flex flex-col overflow-auto p-3">
++        <p className="mb-2 text-xs text-muted-foreground">
++          {t("segmentEverything.description")}
++        </p>
++        <div className="flex flex-col gap-3">
++          <p className="flex items-start gap-2 rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
++            <Info className="mt-0.5 h-4 w-4 shrink-0" />
++            {t("segmentEverything.hint")}
++          </p>
++
++          {/* Image source */}
++          <div className="grid gap-1.5">
++            <Label htmlFor="seg-image" className="text-xs">
++              {t("segmentEverything.imageLabel")}
++              <span className="text-destructive"> *</span>
++            </Label>
++            <div className="grid grid-cols-[minmax(0,1fr)_2.25rem] gap-2">
++              <Input
++                id="seg-image"
++                readOnly
++                value={imageName}
++                placeholder={t("segmentEverything.imagePlaceholder")}
++              />
++              <Button
++                type="button"
++                variant="outline"
++                size="icon"
++                title={t("segmentEverything.chooseImage")}
++                onClick={() => void pickImage()}
++              >
++                <FolderOpen className="h-4 w-4" />
++              </Button>
++            </div>
++          </div>
++
++          <div className="grid grid-cols-3 gap-2">
++            <div className="grid gap-1.5">
++              <Label htmlFor="seg-grid" className="text-xs">
++                {t("segmentEverything.gridLabel")}
++              </Label>
++              <Input
++                id="seg-grid"
++                type="number"
++                min={4}
++                max={48}
++                step={4}
++                value={String(pointsPerSide)}
++                onChange={(e) => {
++                  const parsed = Number(e.target.value);
++                  if (!Number.isFinite(parsed) || parsed < 4) return;
++                  setPointsPerSide(Math.min(48, Math.round(parsed / 4) * 4));
++                }}
++              />
++            </div>
++            <div className="grid gap-1.5">
++              <Label htmlFor="seg-quality" className="text-xs">
++                {t("segmentEverything.qualityLabel")}
++              </Label>
++              <Input
++                id="seg-quality"
++                type="number"
++                min={0}
++                max={1}
++                step={0.05}
++                value={String(quality)}
++                onChange={(e) => {
++                  if (e.target.value === "") {
++                    setQuality(0.85);
++                    return;
++                  }
++                  const parsed = Number(e.target.value);
++                  if (!Number.isFinite(parsed)) return;
++                  setQuality(Math.min(1, Math.max(0, parsed)));
++                }}
++              />
++            </div>
++            <div className="grid gap-1.5">
++              <Label htmlFor="seg-minsize" className="text-xs">
++                {t("segmentEverything.minSizeLabel")}
++              </Label>
++              <Input
++                id="seg-minsize"
++                type="number"
++                min={0}
++                max={100}
++                step={0.05}
++                value={String(minSize)}
++                onChange={(e) => {
++                  if (e.target.value === "") {
++                    setMinSize(0.08);
++                    return;
++                  }
++                  const parsed = Number(e.target.value);
++                  if (!Number.isFinite(parsed)) return;
++                  setMinSize(Math.min(100, Math.max(0, parsed)));
++                }}
++              />
++            </div>
++          </div>
++
++          <div className="flex items-center gap-3">
++            <Button
++              onClick={() => void handleRun()}
++              disabled={running || !imageBytes}
++              className="gap-2"
++            >
++              {running ? (
++                <Loader2 className="h-4 w-4 animate-spin" />
++              ) : (
++                <Play className="h-4 w-4" />
++              )}
++              {t("segmentEverything.run")}
++            </Button>
++            {downloading && (
++              <span className="flex items-center gap-2 text-sm text-muted-foreground">
++                <Loader2 className="h-4 w-4 animate-spin" />
++                {t("segmentEverything.downloadingModel")}
++              </span>
++            )}
++            {running && !downloading && progress && (
++              <span className="flex items-center gap-2 text-sm text-muted-foreground">
++                <Loader2 className="h-4 w-4 animate-spin" />
++                {t("segmentEverything.progress", {
++                  done: progress.done,
++                  total: progress.total,
++                })}
++              </span>
++            )}
++          </div>
++
++          {error && (
++            <p className="flex items-center gap-2 text-sm text-destructive">
++              <AlertCircle className="h-4 w-4" />
++              {error}
++            </p>
++          )}
++          {resultMessage && !error && (
++            <p className="flex items-center gap-2 text-sm text-emerald-700">
++              <CheckCircle2 className="h-4 w-4" />
++              {resultMessage}
++            </p>
++          )}
++        </div>
++      </div>
++    </div>
++  );
++}
+diff --git a/apps/geolibre-desktop/src/i18n/locales/en.json b/apps/geolibre-desktop/src/i18n/locales/en.json
+index c168dd2a..532932e4 100644
+--- a/apps/geolibre-desktop/src/i18n/locales/en.json
++++ b/apps/geolibre-desktop/src/i18n/locales/en.json
+@@ -1602,6 +1602,8 @@
+       "planetaryComputer": "Planetary Computer",
+       "earthEngine": "Earth Engine",
+       "segmentation": "AI Segmentation",
++      "objectDetection": "Object Detection",
++      "segmentEverything": "Segment Everything",
+       "toggleControl": "Toggle {{name}} Control",
+       "toggleAtmosphereEffects": "Toggle Atmospheric Effects",
+       "toggleDirections": "Toggle Directions",
+@@ -2614,6 +2616,59 @@
+       "stepStartServerDesktop": "Click \"Start server\" above to launch it, then wait a few seconds for the model to come online."
+     }
+   },
++  "objectDetection": {
++    "title": "Object Detection",
++    "description": "Run a YOLO model exported to ONNX over a GeoTIFF, fully in the browser. Detected boxes are georeferenced and each class is added as its own layer.",
++    "hint": "Use a built-in COCO model (downloaded and cached once) or bring your own YOLOv5/v8/v11 ONNX. Detection runs locally in the browser. Built-in models detect everyday objects; for aerial imagery, supply your own overhead-trained model.",
++    "imageLabel": "Image (GeoTIFF)",
++    "imagePlaceholder": "Choose a GeoTIFF…",
++    "chooseImage": "Choose image",
++    "modelLabel": "Model",
++    "modelSourceBuiltin": "Built-in (download)",
++    "modelSourceLocal": "Local file",
++    "builtinModelLabel": "Built-in model",
++    "modelFileLabel": "Model file (ONNX)",
++    "modelPlaceholder": "Choose a .onnx model…",
++    "chooseModel": "Choose model",
++    "downloadingModel": "Downloading model…",
++    "classNamesLabel": "Class names (comma-separated, optional)",
++    "classNamesPlaceholder": "e.g. car, tree, building",
++    "confidenceLabel": "Confidence",
++    "iouLabel": "IoU (NMS)",
++    "inputSizeLabel": "Input size",
++    "detect": "Detect",
++    "noObjects": "No objects detected. Try lowering the confidence threshold.",
++    "added": "Added {{count}} detection(s) across {{classes}} class(es).",
++    "layerName": "Detection: {{class}}",
++    "error": {
++      "chooseImage": "Choose an image (GeoTIFF) to run detection on.",
++      "chooseModel": "Choose a YOLO model exported to ONNX (.onnx).",
++      "downloadModel": "Could not download the model. Check your connection and try again.",
++      "failed": "Detection failed."
++    }
++  },
++  "segmentEverything": {
++    "title": "Segment Everything",
++    "description": "Run SlimSAM automatically over a GeoTIFF, fully in the browser. Every detected object becomes a georeferenced polygon added as one layer.",
++    "hint": "A grid of points is sampled across the image and segmented with SlimSAM (downloaded and cached once). No clicks or labels — denser grids find more objects but take longer.",
++    "imageLabel": "Image (GeoTIFF)",
++    "imagePlaceholder": "Choose a GeoTIFF…",
++    "chooseImage": "Choose image",
++    "gridLabel": "Grid",
++    "qualityLabel": "Quality",
++    "minSizeLabel": "Min size %",
++    "run": "Segment",
++    "downloadingModel": "Downloading model…",
++    "progress": "Segmenting… {{done}}/{{total}}",
++    "noObjects": "No objects segmented. Try a denser grid or a lower quality threshold.",
++    "added": "Added {{count}} segment(s).",
++    "layerName": "Segments",
++    "error": {
++      "chooseImage": "Choose an image (GeoTIFF) to segment.",
++      "downloadModel": "Could not download the model. Check your connection and try again.",
++      "failed": "Segmentation failed."
++    }
++  },
+   "pluginPanel": {
+     "expand": "Expand panel",
+     "collapse": "Collapse panel",
+diff --git a/apps/geolibre-desktop/src/lib/detection-models.ts b/apps/geolibre-desktop/src/lib/detection-models.ts
+new file mode 100644
+index 00000000..e47f90bd
+--- /dev/null
++++ b/apps/geolibre-desktop/src/lib/detection-models.ts
+@@ -0,0 +1,118 @@
++/**
++ * Built-in object-detection models for the Object Detection dialog (issue #902).
++ *
++ * These are stock COCO YOLO models exported to ONNX, hosted on jsDelivr (which
++ * serves with permissive CORS, so the browser/webview can fetch them directly)
++ * and pinned to immutable commit SHAs so the file can never change under us.
++ * They let a user run detection without supplying their own `.onnx`.
++ *
++ * Source repos (MIT-licensed browser demos); the YOLOv5/v8 weights themselves
++ * are AGPL-3.0 from Ultralytics. We link and download at runtime rather than
++ * bundle them. Because they are COCO/ground-level models they detect everyday
++ * objects well but perform poorly on top-down aerial imagery, where a
++ * user-supplied overhead-trained model is the better choice.
++ *
++ * Provenance/trust note: these URLs point at a third-party individual's public
++ * repos, not an official Ultralytics/ONNX-zoo source. The immutable commit-SHA
++ * pin is the main mitigation (jsDelivr serves that exact byte content); the
++ * remaining risk is availability if the account/repo is ever deleted. Follow-up:
++ * mirror these files into a GeoLibre-controlled repo so the built-in option does
++ * not depend on an external account.
++ */
++
++/** The 80 COCO class names, in model output order. */
++export const COCO_CLASSES = [
++  "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
++  "truck", "boat", "traffic light", "fire hydrant", "stop sign",
++  "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
++  "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag",
++  "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball", "kite",
++  "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket",
++  "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana",
++  "apple", "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza",
++  "donut", "cake", "chair", "couch", "potted plant", "bed", "dining table",
++  "toilet", "tv", "laptop", "mouse", "remote", "keyboard", "cell phone",
++  "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock",
++  "vase", "scissors", "teddy bear", "hair drier", "toothbrush",
++] as const;
++
++/** A downloadable built-in detection model. */
++export interface BuiltinDetectionModel {
++  /** Stable id used in the dropdown and as a cache key discriminator. */
++  id: string;
++  /** Human label shown in the dropdown. */
++  label: string;
++  /** Direct, CORS-enabled URL to the `.onnx` file (pinned to a commit SHA). */
++  url: string;
++  /** Class names in model output order, used to name the detection layers. */
++  classNames: readonly string[];
++  /** The square input edge the model was exported with. */
++  inputSize: number;
++}
++
++export const BUILTIN_DETECTION_MODELS: readonly BuiltinDetectionModel[] = [
++  {
++    id: "yolov8n-coco",
++    label: "YOLOv8n (COCO, 80 classes)",
++    url: "https://cdn.jsdelivr.net/gh/Hyuto/yolov8-onnxruntime-web@fc4a52c466d15ad4519873a0cef22fbc935b93b6/public/model/yolov8n.onnx",
++    classNames: COCO_CLASSES,
++    inputSize: 640,
++  },
++  {
++    id: "yolov5n-coco",
++    label: "YOLOv5n (COCO, 80 classes)",
++    url: "https://cdn.jsdelivr.net/gh/Hyuto/yolov5-onnxruntime-web@203637cc45962e40a81b2a7e78f98813f93971db/public/model/yolov5n.onnx",
++    classNames: COCO_CLASSES,
++    inputSize: 640,
++  },
++];
++
++/** Cache bucket holding downloaded model files so a model is fetched once. */
++const MODEL_CACHE = "geolibre-detection-models";
++
++/**
++ * Download a built-in model's bytes, caching the response so subsequent runs
++ * (and offline use) are instant.
++ *
++ * Uses the Cache API when available (and falls back to a plain fetch otherwise,
++ * e.g. in a non-secure context). The jsDelivr URLs send permissive CORS
++ * headers, so the response is readable and cacheable rather than opaque.
++ *
++ * @param url The model URL (from {@link BUILTIN_DETECTION_MODELS}).
++ * @returns The `.onnx` file bytes.
++ * @throws If the download fails (non-2xx or network error).
++ */
++export async function fetchDetectionModel(url: string): Promise<ArrayBuffer> {
++  // Keep the Cache API operations in their own try/catch so only *cache*
++  // failures are swallowed. A failed network fetch (404/5xx) must surface, not
++  // be mistaken for a cache miss and silently retried; and a successful
++  // download must never be discarded just because writing it to the cache
++  // failed (quota/private mode).
++  let cache: Cache | null = null;
++  try {
++    if (typeof caches !== "undefined") {
++      cache = await caches.open(MODEL_CACHE);
++      const cached = await cache.match(url);
++      if (cached) return await cached.arrayBuffer();
++    }
++  } catch (err) {
++    // Cache API unavailable (insecure context, quota, etc.): proceed uncached.
++    console.debug("detection-models: cache unavailable, fetching directly", err);
++    cache = null;
++  }
++
++  const response = await fetch(url, { mode: "cors" });
++  if (!response.ok) {
++    throw new Error(`Failed to download model (HTTP ${response.status}).`);
++  }
++  if (cache) {
++    try {
++      // Store a clone so the body we read below is not consumed.
++      await cache.put(url, response.clone());
++    } catch (err) {
++      // A cache write failure must not discard the already-downloaded bytes.
++      console.debug("detection-models: cache write failed", err);
++    }
++  }
++  return await response.arrayBuffer();
++}
+diff --git a/apps/geolibre-desktop/src/lib/segment-models.ts b/apps/geolibre-desktop/src/lib/segment-models.ts
+new file mode 100644
+index 00000000..2395112f
+--- /dev/null
++++ b/apps/geolibre-desktop/src/lib/segment-models.ts
+@@ -0,0 +1,61 @@
++/**
++ * SlimSAM model files for the in-browser "Segment Everything" panel (issue #902).
++ *
++ * SlimSAM is a pruned Segment Anything model exported to ONNX by transformers.js.
++ * Two files are needed: a ~23 MB image encoder and a ~16 MB prompt/mask decoder,
++ * both self-contained single `.onnx` files small enough to run in
++ * onnxruntime-web's CPU/WASM backend. The fp32 (not fp16) exports are used so
++ * the `pixel_values`/`input_points` tensors we build stay plain Float32Array.
++ * They are hosted on HuggingFace, which reflects the request Origin in its CORS
++ * headers, so an anonymous cross-origin fetch from the app is allowed. Pinned to
++ * an immutable commit SHA so the files can never change under us. Apache-2.0.
++ */
++
++const HF_BASE =
++  "https://huggingface.co/Xenova/slimsam-77-uniform/resolve/5850ab45f587c112167512ffef949107115e26a0";
++
++/** SlimSAM image encoder (fp32, single-file ONNX). */
++export const SLIMSAM_ENCODER_URL = `${HF_BASE}/onnx/vision_encoder.onnx`;
++/** SlimSAM prompt-encoder + mask-decoder (fp32, single-file ONNX). */
++export const SLIMSAM_DECODER_URL = `${HF_BASE}/onnx/prompt_encoder_mask_decoder.onnx`;
++
++/** Cache bucket holding the downloaded model files so they are fetched once. */
++const MODEL_CACHE = "geolibre-segment-models";
++
++/**
++ * Download a model file's bytes, caching the response so subsequent runs (and
++ * offline use) are instant. Mirrors {@link import("./detection-models")}'s
++ * fetcher: cache failures are swallowed (proceed uncached), but a failed network
++ * fetch surfaces and a successful download is never discarded on a cache-write
++ * failure.
++ *
++ * @param url The model URL.
++ * @returns The `.onnx` file bytes.
++ * @throws If the download fails (non-2xx or network error).
++ */
++export async function fetchSegmentModel(url: string): Promise<ArrayBuffer> {
++  let cache: Cache | null = null;
++  try {
++    if (typeof caches !== "undefined") {
++      cache = await caches.open(MODEL_CACHE);
++      const cached = await cache.match(url);
++      if (cached) return await cached.arrayBuffer();
++    }
++  } catch (err) {
++    console.debug("segment-models: cache unavailable, fetching directly", err);
++    cache = null;
++  }
++
++  const response = await fetch(url, { mode: "cors" });
++  if (!response.ok) {
++    throw new Error(`Failed to download model (HTTP ${response.status}).`);
++  }
++  if (cache) {
++    try {
++      await cache.put(url, response.clone());
++    } catch (err) {
++      console.debug("segment-models: cache write failed", err);
++    }
++  }
++  return await response.arrayBuffer();
++}
+diff --git a/apps/geolibre-desktop/src/lib/ui-profile.ts b/apps/geolibre-desktop/src/lib/ui-profile.ts
+index bc550705..9ce7bf3a 100644
+--- a/apps/geolibre-desktop/src/lib/ui-profile.ts
++++ b/apps/geolibre-desktop/src/lib/ui-profile.ts
+@@ -242,6 +242,8 @@ export const MENU_ITEM_CATALOG: readonly MenuItemCatalogEntry[] = [
+   { id: "processing.geocode", menuId: "processing", labelKey: "toolbar.item.geocode", tier: "intermediate" },
+   { id: "processing.modelBuilder", menuId: "processing", labelKey: "toolbar.item.modelBuilder", tier: "advanced" },
+   { id: "processing.segmentation", menuId: "processing", labelKey: "toolbar.command.segmentation", tier: "advanced" },
++  { id: "processing.objectDetection", menuId: "processing", labelKey: "toolbar.command.objectDetection", tier: "advanced" },
++  { id: "processing.segmentEverything", menuId: "processing", labelKey: "toolbar.command.segmentEverything", tier: "advanced" },
+   { id: "processing.sqlWorkspace", menuId: "processing", labelKey: "toolbar.command.sqlWorkspace", tier: "intermediate" },
+   { id: "processing.pythonConsole", menuId: "processing", labelKey: "toolbar.command.pythonConsole", tier: "advanced" },
+   { id: "processing.notebook", menuId: "processing", labelKey: "toolbar.command.notebook", tier: "advanced" },
+diff --git a/package-lock.json b/package-lock.json
+index 2e70eb5b..4b1f5584 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -14498,6 +14498,12 @@
+         "webidl-conversions": "^3.0.0"
+       }
+     },
++    "node_modules/guid-typescript": {
++      "version": "1.0.9",
++      "resolved": "https://registry.npmjs.org/guid-typescript/-/guid-typescript-1.0.9.tgz",
++      "integrity": "sha512-Y8T4vYhEfwJOTbouREvG+3XDsjr8E3kIr7uf+JZ0BYloFsttiHU0WfvANVsR7TxNUJa/WpCnw/Ino/p+DeBhBQ==",
++      "license": "ISC"
++    },
+     "node_modules/h3-js": {
+       "version": "4.5.0",
+       "resolved": "https://registry.npmjs.org/h3-js/-/h3-js-4.5.0.tgz",
+@@ -17407,6 +17413,32 @@
+         "wrappy": "1"
+       }
+     },
++    "node_modules/onnxruntime-common": {
++      "version": "1.27.0",
++      "resolved": "https://registry.npmjs.org/onnxruntime-common/-/onnxruntime-common-1.27.0.tgz",
++      "integrity": "sha512-3KxL5wIVqa8Ex08jxSzncm9CMgw8CjOFyOQ7SxvG9o0cVLlhTNKXyIQuTbtX4tGPJEf73OER2xrjt4HJSBL4ow==",
++      "license": "MIT"
++    },
++    "node_modules/onnxruntime-web": {
++      "version": "1.27.0",
++      "resolved": "https://registry.npmjs.org/onnxruntime-web/-/onnxruntime-web-1.27.0.tgz",
++      "integrity": "sha512-ogDLsqIozHZwifPuN37OproAo0byX6t43/bP8GzeZWBWD6MOGExswFAx3up4NS/vvWBOg2u2PXomDt3rMmdQSg==",
++      "license": "MIT",
++      "dependencies": {
++        "flatbuffers": "^25.1.24",
++        "guid-typescript": "^1.0.9",
++        "long": "^5.2.3",
++        "onnxruntime-common": "1.27.0",
++        "platform": "^1.3.6",
++        "protobufjs": "^7.2.4"
++      }
++    },
++    "node_modules/onnxruntime-web/node_modules/long": {
++      "version": "5.3.2",
++      "resolved": "https://registry.npmjs.org/long/-/long-5.3.2.tgz",
++      "integrity": "sha512-mNAgZ1GmyNhD7AuqnTG3/VQ26o760+ZYBPKjPvugO8+nLbYfX6TVpJPseBvopbdY+qpZ/lKUnmEc1LeZYS3QAA==",
++      "license": "Apache-2.0"
++    },
+     "node_modules/openai": {
+       "version": "6.45.0",
+       "resolved": "https://registry.npmjs.org/openai/-/openai-6.45.0.tgz",
+@@ -17769,6 +17801,12 @@
+         "node": ">=16.20.0"
+       }
+     },
++    "node_modules/platform": {
++      "version": "1.3.6",
++      "resolved": "https://registry.npmjs.org/platform/-/platform-1.3.6.tgz",
++      "integrity": "sha512-fnWVljUchTro6RiCFvCXBbNhJc2NijN7oIQxbwsyL0buWJPG85v81ehlHI9fXrJsMNgTofEoWIQeClKpgxFLrg==",
++      "license": "MIT"
++    },
+     "node_modules/playwright": {
+       "version": "1.61.1",
+       "resolved": "https://registry.npmjs.org/playwright/-/playwright-1.61.1.tgz",
+@@ -21400,7 +21438,8 @@
+         "@turf/voronoi": "^7.3.5",
+         "fflate": "^0.8.3",
+         "geolibre-wasm": "^0.6.0",
+-        "geotiff": "^3.0.5"
++        "geotiff": "^3.0.5",
++        "onnxruntime-web": "1.27.0"
+       },
+       "devDependencies": {
+         "@types/geojson": "^7946.0.16",
+diff --git a/packages/core/src/store.ts b/packages/core/src/store.ts
+index e0464a4f..0269cd86 100644
+--- a/packages/core/src/store.ts
++++ b/packages/core/src/store.ts
+@@ -204,6 +204,8 @@ export interface AppState {
+     statisticsToolOpen: StatisticsToolKind | null;
+     rasterToolOpen: RasterToolKind | null;
+     segmentationOpen: boolean;
++    objectDetectionOpen: boolean;
++    segmentEverythingOpen: boolean;
+     geocodeOpen: boolean;
+     sqlWorkspaceOpen: boolean;
+     loadEditorFeaturesOpen: boolean;
+@@ -320,6 +322,8 @@ export interface AppState {
+   setStatisticsToolOpen: (kind: StatisticsToolKind | null) => void;
+   setRasterToolOpen: (kind: RasterToolKind | null) => void;
+   setSegmentationOpen: (open: boolean) => void;
++  setObjectDetectionOpen: (open: boolean) => void;
++  setSegmentEverythingOpen: (open: boolean) => void;
+   setGeocodeOpen: (open: boolean) => void;
+   setSqlWorkspaceOpen: (open: boolean) => void;
+   setLoadEditorFeaturesOpen: (open: boolean, layerId?: string | null) => void;
+@@ -659,6 +663,8 @@ export const useAppStore = create<AppState>()(
+         statisticsToolOpen: null,
+         rasterToolOpen: null,
+         segmentationOpen: false,
++        objectDetectionOpen: false,
++        segmentEverythingOpen: false,
+         geocodeOpen: false,
+         sqlWorkspaceOpen: false,
+         loadEditorFeaturesOpen: false,
+@@ -910,6 +916,10 @@ export const useAppStore = create<AppState>()(
+         set((s) => ({ ui: { ...s.ui, rasterToolOpen: kind } })),
+       setSegmentationOpen: (open) =>
+         set((s) => ({ ui: { ...s.ui, segmentationOpen: open } })),
++      setObjectDetectionOpen: (open) =>
++        set((s) => ({ ui: { ...s.ui, objectDetectionOpen: open } })),
++      setSegmentEverythingOpen: (open) =>
++        set((s) => ({ ui: { ...s.ui, segmentEverythingOpen: open } })),
+       setGeocodeOpen: (open) =>
+         set((s) => ({ ui: { ...s.ui, geocodeOpen: open } })),
+       setSqlWorkspaceOpen: (open) =>
+diff --git a/packages/processing/package.json b/packages/processing/package.json
+index b490be47..811df63d 100644
+--- a/packages/processing/package.json
++++ b/packages/processing/package.json
+@@ -34,7 +34,8 @@
+     "@turf/voronoi": "^7.3.5",
+     "fflate": "^0.8.3",
+     "geolibre-wasm": "^0.6.0",
+-    "geotiff": "^3.0.5"
++    "geotiff": "^3.0.5",
++    "onnxruntime-web": "1.27.0"
+   },
+   "devDependencies": {
+     "@types/geojson": "^7946.0.16",
+diff --git a/packages/processing/src/index.ts b/packages/processing/src/index.ts
+index a6097b0c..b7e9aeca 100644
+--- a/packages/processing/src/index.ts
++++ b/packages/processing/src/index.ts
+@@ -172,6 +172,21 @@ export {
+   convertGeoTiffToCog,
+   type GeoTiffInfo,
+ } from "./cog-convert";
++export {
++  detectObjects,
++  decodeYolo,
++  nonMaxSuppression,
++  rgbBands,
++  ORT_VERSION,
++  type Candidate,
++  type Detection,
++  type DetectionOptions,
++} from "./object-detection";
++export {
++  segmentEverything,
++  type SegmentMask,
++  type SegmentEverythingOptions,
++} from "./segment-everything";
+ export {
+   extractCogSubset,
+   extractWmsSubset,
+diff --git a/packages/processing/src/object-detection.ts b/packages/processing/src/object-detection.ts
+new file mode 100644
+index 00000000..48b3d012
+--- /dev/null
++++ b/packages/processing/src/object-detection.ts
+@@ -0,0 +1,457 @@
++/**
++ * In-browser object detection with ONNX/YOLO models (issue #902).
++ *
++ * Complements the AI Segmentation toolbox (which proxies SAM3 through the Python
++ * sidecar) with a fully client-side path: a user-supplied YOLO model exported to
++ * ONNX runs against a chosen raster via `onnxruntime-web`, and the detected
++ * bounding boxes come back in source-raster pixel coordinates. The caller
++ * (the detection dialog) georeferences those pixel boxes with the raster's
++ * geotransform and turns each class into a GeoJSON layer.
++ *
++ * Keeping inference in the browser means detection works in the web build with
++ * no sidecar, mirroring how the client raster tools (`raster-client.ts`) run on
++ * `geotiff.js` alone. The heavy `onnxruntime-web` module is imported lazily so
++ * this file (and the rest of `@geolibre/processing`) loads without pulling the
++ * WASM runtime until a detection is actually requested.
++ *
++ * Supported model outputs: the standard Ultralytics exports for YOLOv8/v11
++ * (`[1, 4 + numClasses, anchors]`, boxes in input pixels, class scores already
++ * sigmoid-activated) and YOLOv5 (`[1, anchors, 5 + numClasses]`, with an extra
++ * objectness channel). Both decode to the same detection list.
++ */
++
++import { loadOrt } from "./ort";
++import type { RasterData } from "./raster-client";
++
++/** A single detection in **source raster pixel** coordinates. */
++export interface Detection {
++  /** Bounding box `[minX, minY, maxX, maxY]` in source pixels (top-left origin). */
++  bbox: [number, number, number, number];
++  /** Zero-based class index from the model output. */
++  classIndex: number;
++  /** Confidence score in `[0, 1]`. */
++  score: number;
++}
++
++/** Tuning knobs for {@link detectObjects}. */
++export interface DetectionOptions {
++  /** Square model input size in pixels (YOLO default 640). */
++  inputSize?: number;
++  /** Minimum confidence to keep a detection. */
++  confidenceThreshold?: number;
++  /** IoU threshold for non-maximum suppression. */
++  iouThreshold?: number;
++}
++
++const DEFAULT_INPUT_SIZE = 640;
++// Upper bound on the model input edge. A 4096 input allocates
++// 3 × 4096² × 4 ≈ 200 MB of Float32, which is the most we let a single
++// detection tensor consume; larger values are rejected before allocation so a
++// stray/huge `inputSize` cannot OOM the tab.
++const MAX_INPUT_SIZE = 4096;
++const DEFAULT_CONFIDENCE = 0.25;
++const DEFAULT_IOU = 0.45;
++/** Letterbox padding colour (YOLO uses 114/255 grey). */
++const PAD_VALUE = 114 / 255;
++
++// Re-exported for the guard test (tests/object-detection.test.ts), which asserts
++// the CDN WASM version matches the pinned onnxruntime-web dependency.
++export { ORT_VERSION } from "./ort";
++
++/**
++ * Pull three colour channels and a normalisation divisor out of a
++ * {@link RasterData}.
++ *
++ * Uses the first three bands as R/G/B; a single-band raster is replicated to
++ * greyscale. The divisor maps raw band values to roughly 0-1 for the model:
++ * data already in 0-1 is left as-is, 8-bit imagery is scaled by 255, and
++ * higher-bit-depth data (e.g. 16-bit) is scaled by its own observed maximum so
++ * it still lands in 0-1 rather than feeding the model values far above 1.
++ * NoData and non-finite samples are excluded from that maximum so a sea of
++ * NoData (or a few sentinel pixels) cannot skew the scale.
++ *
++ * @param raster The decoded source raster.
++ * @returns The per-channel band arrays, the divisor, and the source NoData.
++ */
++export function rgbBands(raster: RasterData): {
++  r: Float32Array;
++  g: Float32Array;
++  b: Float32Array;
++  divisor: number;
++  nodata: number | null;
++} {
++  const { bands, nodata } = raster;
++  const r = bands[0];
++  const g = bands.length > 1 ? bands[1] : bands[0];
++  const b = bands.length > 2 ? bands[2] : bands[0];
++  // Sample the red band to decide the value range, ignoring NoData/non-finite
++  // pixels. Aerial/RGB imagery is almost always 8-bit (0-255); reflectance
++  // products may already be 0-1; higher-bit-depth data exceeds 255.
++  let max = 0;
++  let hasValid = false;
++  const step = Math.max(1, Math.floor(r.length / 4096));
++  for (let i = 0; i < r.length; i += step) {
++    const v = r[i];
++    if (!Number.isFinite(v) || v === nodata) continue;
++    hasValid = true;
++    if (v > max) max = v;
++  }
++  // If sampling found no valid pixels (e.g. the stride skipped every valid one
++  // in a mostly-NoData raster), assume 8-bit range so the tensor receives 0-1
++  // values rather than raw 0-255 counts.
++  if (!hasValid) max = 255;
++  // Only treat a raster as 8-bit when its sampled max is a whole number in
++  // (1.5, 255]: floats never land on exact integers, so a reflectance/index/DEM
++  // raster peaking in that range auto-scales by its own max instead of being
++  // divided by 255 (which would push a value of 2.0 to a near-black 0.008).
++  const divisor = max <= 1.5 ? 1 : max <= 255 && Number.isInteger(max) ? 255 : max;
++  return { r, g, b, divisor, nodata };
++}
++
++/**
++ * Bilinear sample of a band at fractional source pixel `(x, y)`.
++ *
++ * Returns `NaN` when any of the four contributing pixels is NoData or
++ * non-finite, so the caller can substitute the padding value instead of
++ * blending an invalid pixel into the model input.
++ */
++function sampleBilinear(
++  band: Float32Array,
++  width: number,
++  height: number,
++  x: number,
++  y: number,
++  nodata: number | null,
++): number {
++  const x0 = Math.floor(x);
++  const y0 = Math.floor(y);
++  const x1 = Math.min(width - 1, x0 + 1);
++  const y1 = Math.min(height - 1, y0 + 1);
++  const cx0 = Math.min(width - 1, Math.max(0, x0));
++  const cy0 = Math.min(height - 1, Math.max(0, y0));
++  const dx = x - x0;
++  const dy = y - y0;
++  const v00 = band[cy0 * width + cx0];
++  const v10 = band[cy0 * width + x1];
++  const v01 = band[y1 * width + cx0];
++  const v11 = band[y1 * width + x1];
++  // Unrolled (no array allocation) since this runs once per input pixel/channel.
++  if (!Number.isFinite(v00) || v00 === nodata) return NaN;
++  if (!Number.isFinite(v10) || v10 === nodata) return NaN;
++  if (!Number.isFinite(v01) || v01 === nodata) return NaN;
++  if (!Number.isFinite(v11) || v11 === nodata) return NaN;
++  const top = v00 + (v10 - v00) * dx;
++  const bottom = v01 + (v11 - v01) * dx;
++  return top + (bottom - top) * dy;
++}
++
++/** Geometry of the letterbox transform from source pixels to model input. */
++interface Letterbox {
++  scale: number;
++  padX: number;
++  padY: number;
++}
++
++/**
++ * Resize a raster into a square `inputSize` NCHW float tensor, letterboxed to
++ * preserve aspect ratio (padding the short side with grey).
++ *
++ * @returns The `[1, 3, inputSize, inputSize]` data and the {@link Letterbox}
++ *   needed to map detections back to source pixels.
++ */
++function preprocess(
++  raster: RasterData,
++  inputSize: number,
++): { data: Float32Array; letterbox: Letterbox } {
++  const { width, height } = raster;
++  const { r, g, b, divisor, nodata } = rgbBands(raster);
++  const scale = Math.min(inputSize / width, inputSize / height);
++  const newW = Math.round(width * scale);
++  const newH = Math.round(height * scale);
++  const padX = (inputSize - newW) / 2;
++  const padY = (inputSize - newH) / 2;
++
++  const plane = inputSize * inputSize;
++  const data = new Float32Array(3 * plane).fill(PAD_VALUE);
++  const channels: [Float32Array, number][] = [
++    [r, 0],
++    [g, plane],
++    [b, 2 * plane],
++  ];
++  // NOTE: this loop is O(inputSize²) and runs synchronously on the main thread.
++  // At the default 640 it is imperceptible; near the 4096 cap it can stall the
++  // UI for a second or two. Running it (and the WASM inference) in a Web Worker
++  // is the proper fix and a tracked follow-up.
++  for (let dy = 0; dy < inputSize; dy += 1) {
++    const sy = (dy + 0.5 - padY) / scale - 0.5;
++    if (sy < -0.5 || sy > height - 0.5) continue;
++    for (let dx = 0; dx < inputSize; dx += 1) {
++      const sx = (dx + 0.5 - padX) / scale - 0.5;
++      if (sx < -0.5 || sx > width - 0.5) continue;
++      const dst = dy * inputSize + dx;
++      for (const [band, offset] of channels) {
++        const sampled = sampleBilinear(band, width, height, sx, sy, nodata);
++        // NoData/invalid pixels keep the prefilled padding value; valid pixels
++        // are normalised and clamped so non-8-bit overshoot never exceeds 0-1.
++        if (Number.isFinite(sampled)) {
++          data[offset + dst] = Math.min(1, Math.max(0, sampled / divisor));
++        }
++      }
++    }
++  }
++  return { data, letterbox: { scale, padX, padY } };
++}
++
++/** Intersection-over-union of two `[x1, y1, x2, y2]` boxes. */
++function iou(a: [number, number, number, number], b: [number, number, number, number]): number {
++  const ix1 = Math.max(a[0], b[0]);
++  const iy1 = Math.max(a[1], b[1]);
++  const ix2 = Math.min(a[2], b[2]);
++  const iy2 = Math.min(a[3], b[3]);
++  const iw = Math.max(0, ix2 - ix1);
++  const ih = Math.max(0, iy2 - iy1);
++  const inter = iw * ih;
++  if (inter <= 0) return 0;
++  const areaA = (a[2] - a[0]) * (a[3] - a[1]);
++  const areaB = (b[2] - b[0]) * (b[3] - b[1]);
++  return inter / (areaA + areaB - inter);
++}
++
++export interface Candidate {
++  box: [number, number, number, number];
++  classIndex: number;
++  score: number;
++}
++
++/**
++ * Greedy per-class non-maximum suppression.
++ *
++ * @param candidates Detections (input-space boxes) to filter.
++ * @param iouThreshold Boxes overlapping a kept box above this IoU are dropped.
++ * @returns The surviving detections, highest score first.
++ */
++export function nonMaxSuppression(
++  candidates: Candidate[],
++  iouThreshold: number,
++): Candidate[] {
++  const sorted = [...candidates].sort((p, q) => q.score - p.score);
++  const kept: Candidate[] = [];
++  for (const cand of sorted) {
++    let overlaps = false;
++    for (const keep of kept) {
++      if (keep.classIndex === cand.classIndex && iou(keep.box, cand.box) > iouThreshold) {
++        overlaps = true;
++        break;
++      }
++    }
++    if (!overlaps) kept.push(cand);
++  }
++  return kept;
++}
++
++/**
++ * Decode a YOLO output tensor into candidate boxes (input-pixel space).
++ *
++ * Auto-detects the Ultralytics YOLOv8/v11 layout (`[1, 4 + nc, anchors]`, no
++ * objectness) versus the YOLOv5 layout (`[1, anchors, 5 + nc]`, with an
++ * objectness channel) by matching each trailing dim against the anchor count a
++ * standard head produces at `inputSize`.
++ *
++ * Assumes the model output is already sigmoid-activated, which is true of the
++ * standard Ultralytics ONNX export (`yolo export format=onnx`) for both v5 and
++ * v8/v11. A raw-logit export (rare) would need a sigmoid applied here; we do not
++ * apply one unconditionally because that would double-activate the common case.
++ *
++ * @param data Flat output values.
++ * @param dims Output tensor dimensions.
++ * @param confidenceThreshold Minimum score to keep a box.
++ * @param inputSize The square model input edge (drives the anchor-count match).
++ * @returns Candidate detections before NMS.
++ */
++export function decodeYolo(
++  data: Float32Array,
++  dims: readonly number[],
++  confidenceThreshold: number,
++  inputSize: number,
++): Candidate[] {
++  if (dims.length !== 3) {
++    throw new Error(
++      `Unexpected model output shape [${dims.join(", ")}]. Export the model with a single [1, C, N] detection head.`,
++    );
++  }
++  if (dims[0] !== 1) {
++    throw new Error(
++      `Unexpected model output batch dimension ${dims[0]}; only a batch size of 1 is supported.`,
++    );
++  }
++  const expectedLength = dims[0] * dims[1] * dims[2];
++  if (!Number.isSafeInteger(expectedLength) || expectedLength <= 0 || data.length !== expectedLength) {
++    throw new Error(
++      `Model output data length ${data.length} does not match shape [${dims.join(", ")}].`,
++    );
++  }
++  const d1 = dims[1];
++  const d2 = dims[2];
++  // Standard v8/v11 exports emit one prediction per grid location, while v5
++  // emits three anchor predictions per location. Compare each format against
++  // its own expected anchor count so normal [1,25200,85] v5 heads and small
++  // v8 heads with more channels than anchors are both classified correctly.
++  const gridLocations =
++    (inputSize / 8) ** 2 + (inputSize / 16) ** 2 + (inputSize / 32) ** 2;
++  const v8Distance = Math.abs(d2 - gridLocations) / Math.max(1, gridLocations);
++  const v5Anchors = 3 * gridLocations;
++  const v5Distance = Math.abs(d1 - v5Anchors) / Math.max(1, v5Anchors);
++  const v8 = v8Distance <= v5Distance;
++  const numAnchors = v8 ? d2 : d1;
++  const numChannels = v8 ? d1 : d2;
++  const hasObjectness = !v8;
++  const numClasses = numChannels - (hasObjectness ? 5 : 4);
++  if (numClasses < 1) {
++    throw new Error(
++      `Model output has too few channels (${numChannels}) to contain class scores.`,
++    );
++  }
++
++  // Read one channel `c` of anchor `i` from either memory layout.
++  const at = v8
++    ? (c: number, i: number) => data[c * numAnchors + i]
++    : (c: number, i: number) => data[i * numChannels + c];
++
++  const candidates: Candidate[] = [];
++  const classOffset = hasObjectness ? 5 : 4;
++  for (let i = 0; i < numAnchors; i += 1) {
++    const objectness = hasObjectness ? at(4, i) : 1;
++    // v5 only: skip anchors whose objectness is already below the threshold.
++    // (For v8/v11 objectness is a constant 1, so this guard is a no-op there.)
++    if (hasObjectness && objectness < confidenceThreshold) continue;
++    let bestClass = 0;
++    let bestProb = -Infinity;
++    for (let c = 0; c < numClasses; c += 1) {
++      const prob = at(classOffset + c, i);
++      if (prob > bestProb) {
++        bestProb = prob;
++        bestClass = c;
++      }
++    }
++    const score = bestProb * objectness;
++    if (score < confidenceThreshold) continue;
++    const cx = at(0, i);
++    const cy = at(1, i);
++    const w = at(2, i);
++    const h = at(3, i);
++    candidates.push({
++      box: [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2],
++      classIndex: bestClass,
++      score,
++    });
++  }
++  return candidates;
++}
++
++/**
++ * Run an ONNX YOLO model over a raster and return the detected boxes in source
++ * raster pixel coordinates.
++ *
++ * @param raster The decoded source raster (from `readRasterData`).
++ * @param modelBytes The `.onnx` model file bytes.
++ * @param options Input size and confidence/NMS thresholds.
++ * @returns Detections in source-pixel space, after non-maximum suppression.
++ * @throws If the model cannot be loaded or produces an unrecognised output.
++ */
++export async function detectObjects(
++  raster: RasterData,
++  modelBytes: ArrayBuffer,
++  options: DetectionOptions = {},
++): Promise<Detection[]> {
++  const inputSize = options.inputSize ?? DEFAULT_INPUT_SIZE;
++  const confidenceThreshold = options.confidenceThreshold ?? DEFAULT_CONFIDENCE;
++  const iouThreshold = options.iouThreshold ?? DEFAULT_IOU;
++
++  // Validate the knobs before allocating anything: `inputSize` drives a
++  // `3 * inputSize²` Float32 allocation, and out-of-range thresholds silently
++  // break filtering/NMS. Fail fast with a clear message instead of OOMing or
++  // returning nonsense.
++  if (
++    !Number.isInteger(inputSize) ||
++    inputSize < 32 ||
++    inputSize > MAX_INPUT_SIZE
++  ) {
++    throw new Error(`inputSize must be an integer between 32 and ${MAX_INPUT_SIZE}.`);
++  }
++  if (!Number.isFinite(confidenceThreshold) || confidenceThreshold < 0 || confidenceThreshold > 1) {
++    throw new Error("confidenceThreshold must be between 0 and 1.");
++  }
++  if (!Number.isFinite(iouThreshold) || iouThreshold < 0 || iouThreshold > 1) {
++    throw new Error("iouThreshold must be between 0 and 1.");
++  }
++
++  const ort = await loadOrt();
++  let session: import("onnxruntime-web/wasm").InferenceSession;
++  try {
++    session = await ort.InferenceSession.create(new Uint8Array(modelBytes), {
++      executionProviders: ["wasm"],
++    });
++  } catch (err) {
++    throw new Error(
++      `Could not load the ONNX model: ${err instanceof Error ? err.message : String(err)}`,
++    );
++  }
++
++  // Always release the session's WASM heap (model weights/graph), even on
++  // error: onnxruntime-web does not free it deterministically on GC, so
++  // repeated detection runs would otherwise leak unbounded native memory.
++  try {
++    const { data, letterbox } = preprocess(raster, inputSize);
++    const inputName = session.inputNames[0];
++    const tensor = new ort.Tensor("float32", data, [1, 3, inputSize, inputSize]);
++    const outputs = await session.run({ [inputName]: tensor });
++    const outputName = session.outputNames[0];
++    const output = outputs[outputName];
++    if (!output) {
++      throw new Error(
++        `Model produced no usable output. Available outputs: ${session.outputNames.join(", ")}. ` +
++          "Export a detection model with a single [1, C, N] head (no baked-in NMS).",
++      );
++    }
++    // decodeYolo reads the buffer as float32. A model exported with an fp16 or
++    // int8-quantised output head returns a Uint16Array/Uint8Array here (ORT does
++    // not upcast), so the values would be misread as garbage boxes/scores; fail
++    // with a clear message instead. Re-export the model with a float32 head.
++    if (output.type !== "float32") {
++      throw new Error(
++        `Model output dtype "${output.type}" is not supported. Export the model with a float32 detection head.`,
++      );
++    }
++    const outData = output.data as Float32Array;
++
++    const candidates = decodeYolo(
++      outData,
++      output.dims,
++      confidenceThreshold,
++      inputSize,
++    );
++    const kept = nonMaxSuppression(candidates, iouThreshold);
++
++    // Undo the letterbox (input pixels -> source pixels) and clamp to the raster.
++    const { scale, padX, padY } = letterbox;
++    const { width, height } = raster;
++    const toSrcX = (x: number) => Math.min(width, Math.max(0, (x - padX) / scale));
++    const toSrcY = (y: number) => Math.min(height, Math.max(0, (y - padY) / scale));
++    return kept.map((cand) => ({
++      bbox: [
++        toSrcX(cand.box[0]),
++        toSrcY(cand.box[1]),
++        toSrcX(cand.box[2]),
++        toSrcY(cand.box[3]),
++      ] as [number, number, number, number],
++      classIndex: cand.classIndex,
++      score: cand.score,
++    }));
++  } finally {
++    // Swallow a cleanup failure so it can never replace the primary error (a
++    // decode/inference throw in the try) as the caller-visible message.
++    await session.release().catch((err) => {
++      console.warn("object-detection: session.release() failed", err);
++    });
++  }
++}
+diff --git a/packages/processing/src/ort.ts b/packages/processing/src/ort.ts
+new file mode 100644
+index 00000000..1eb9accc
+--- /dev/null
++++ b/packages/processing/src/ort.ts
+@@ -0,0 +1,50 @@
++// Shared onnxruntime-web loader for the client-side ML tools (object detection,
++// SAM "segment everything"). Both import the `/wasm` subpath and force
++// single-threaded WASM so no tool needs SharedArrayBuffer / cross-origin
++// isolation, and both point `wasmPaths` at the pinned CDN copy.
++
++// onnxruntime-web ships its WASM artifacts in its own dist/. Bundlers do not
++// rewrite the runtime's internal fetch of those files, so point the runtime at
++// the pinned CDN copy (already allowed by the Tauri CSP's jsdelivr/npm entry).
++// MUST stay in lockstep with the `onnxruntime-web` pin in
++// packages/processing/package.json; a guard test asserts they match
++// (tests/object-detection.test.ts) so a dependency bump that forgets this
++// constant fails CI instead of breaking inference at runtime.
++export const ORT_VERSION = "1.27.0";
++const ORT_WASM_BASE = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dist/`;
++
++// A promise singleton: the import-and-configure runs exactly once and every
++// caller awaits the same settled promise, so concurrent tool calls cannot race
++// on configuration.
++let ortPromise: Promise<typeof import("onnxruntime-web/wasm")> | null = null;
++
++/**
++ * Lazily import and configure `onnxruntime-web` (CPU WASM backend only).
++ *
++ * Imports the `/wasm` subpath rather than the default entry, which also bundles
++ * the ~26 MB WebGPU/jsep WASM; we force the WASM execution provider anyway, so
++ * that artifact is dead weight and (being over Cloudflare Pages' 25 MiB per-file
++ * limit) breaks the preview deploy. Forces single-threaded WASM to avoid
++ * `SharedArrayBuffer`, and points `wasmPaths` at the CDN so the runtime can
++ * fetch its `.wasm`.
++ */
++export function loadOrt(): Promise<typeof import("onnxruntime-web/wasm")> {
++  if (!ortPromise) {
++    ortPromise = import("onnxruntime-web/wasm")
++      .then((ort) => {
++        ort.env.wasm.numThreads = 1;
++        // Node-based verification can resolve the package's local WASM assets;
++        // browser builds use the matching pinned CDN artifacts.
++        if (typeof window !== "undefined") ort.env.wasm.wasmPaths = ORT_WASM_BASE;
++        return ort;
++      })
++      .catch((err) => {
++        // Clear the singleton so a transient failure (network blip, blocked
++        // CDN) does not permanently poison every later retry with the same
++        // rejected promise; the next call re-attempts the import.
++        ortPromise = null;
++        throw err;
++      });
++  }
++  return ortPromise;
++}
+diff --git a/packages/processing/src/raster-client.ts b/packages/processing/src/raster-client.ts
+index b9b9074f..ae11d1d4 100644
+--- a/packages/processing/src/raster-client.ts
++++ b/packages/processing/src/raster-client.ts
+@@ -33,10 +33,17 @@ export interface RasterData {
+   originX: number;
+   /** World Y of the top-left corner of pixel (0, 0). */
+   originY: number;
+-  /** Pixel width in CRS units (positive). */
++  /** Pixel width in CRS units (positive; see `flipX` for the original sign). */
+   resX: number;
+-  /** Pixel height in CRS units (positive). */
++  /** Pixel height in CRS units (positive; see `flipY` for the original sign). */
+   resY: number;
++  /** True when the source pixel X resolution was negative (east-to-west, rare):
++   * world X decreases with pixel column. Absent/false = normal west-to-east. */
++  flipX?: boolean;
++  /** True when the source pixel Y resolution was positive (south-up): world Y
++   * increases with pixel row. Absent/false = normal north-up (originY is the
++   * northern edge). Lets georeferencing consumers handle flipped rasters. */
++  flipY?: boolean;
+   /** NoData value, or null when the source declares none. */
+   nodata: number | null;
+   /** GeoTIFF GeoKeys carried through to the output so the CRS is preserved. */
+@@ -109,6 +116,11 @@ export async function readRasterData(bytes: ArrayBuffer): Promise<RasterData> {
+     originY,
+     resX: Math.abs(resolutionX),
+     resY: Math.abs(resolutionY),
++    // Preserve the resolution sign (discarded by the abs above) so georeferencing
++    // consumers can handle mirrored / south-up rasters instead of silently
++    // placing features at the wrong location.
++    flipX: resolutionX < 0,
++    flipY: resolutionY > 0,
+     nodata: noData != null && Number.isFinite(noData) ? noData : null,
+     geoKeys: (image.getGeoKeys() as Record<string, unknown>) ?? {},
+   };
+diff --git a/packages/processing/src/segment-everything.ts b/packages/processing/src/segment-everything.ts
+new file mode 100644
+index 00000000..6a9804a2
+--- /dev/null
++++ b/packages/processing/src/segment-everything.ts
+@@ -0,0 +1,488 @@
++/**
++ * In-browser automatic "segment everything" with SlimSAM (issue #902).
++ *
++ * Runs a lightweight Segment Anything model (SlimSAM, exported to ONNX by
++ * transformers.js) fully client-side via `onnxruntime-web`: the image encoder
++ * runs once, then a grid of foreground points is fed through the prompt/mask
++ * decoder to produce a mask per object with no user clicks — the browser
++ * equivalent of samgeo's automatic mask generator. Each surviving mask is traced
++ * to a polygon in source-raster pixel coordinates; the caller georeferences
++ * those with the raster's geotransform and adds them as a GeoJSON layer.
++ *
++ * SAM has no in-browser automatic-mask pipeline, so the grid sampling, mask
++ * selection (multimask + predicted-IoU + stability), de-duplication (box NMS),
++ * and mask→polygon tracing are implemented here.
++ */
++
++import { loadOrt } from "./ort";
++import type { RasterData } from "./raster-client";
++
++/** A single automatic mask, as a polygon in **source raster pixel** coords. */
++export interface SegmentMask {
++  /** Closed exterior ring `[[x, y], …]` in source pixels (top-left origin). */
++  polygon: [number, number][];
++  /** Predicted IoU / quality score for the mask. */
++  score: number;
++  /** Mask area in source pixels². */
++  area: number;
++}
++
++/** Tuning knobs for {@link segmentEverything}. */
++export interface SegmentEverythingOptions {
++  /** Points sampled per image edge (grid is `pointsPerSide²`). Default 16. */
++  pointsPerSide?: number;
++  /** Minimum predicted IoU to keep a mask. Default 0.85. */
++  predIouThreshold?: number;
++  /** Minimum stability score to keep a mask. Default 0.9. */
++  stabilityScoreThreshold?: number;
++  /** Minimum mask area, as a fraction of the image area. Default 0.0008. */
++  minAreaFraction?: number;
++  /** Box-IoU above which the lower-scoring of two masks is dropped. Default 0.7. */
++  boxNmsThreshold?: number;
++  /** Points per decoder call. Default 64 (caps the output-tensor memory). */
++  pointBatchSize?: number;
++  /** Progress callback: `done`/`total` grid-point batches. */
++  onProgress?: (done: number, total: number) => void;
++  /** Abort signal; checked between decoder batches. */
++  signal?: AbortSignal;
++}
++
++const SAM_INPUT = 1024;
++const MASK_SIZE = 256;
++const MASK_UPSCALE = SAM_INPUT / MASK_SIZE; // 4
++// SAM ImageNet normalisation (applied after the raster is scaled to 0-1).
++const MEAN = [0.485, 0.456, 0.406];
++const STD = [0.229, 0.224, 0.225];
++// Logit offset for the stability score (SAM's default mask threshold is 0).
++const STABILITY_OFFSET = 1.0;
++const DEFAULT_POINTS_PER_SIDE = 16;
++const DEFAULT_PRED_IOU = 0.85;
++const DEFAULT_STABILITY = 0.9;
++const DEFAULT_MIN_AREA_FRACTION = 0.0008;
++const DEFAULT_BOX_NMS = 0.7;
++const DEFAULT_POINT_BATCH = 64;
++const MAX_POINTS_PER_SIDE = 48;
++
++/** Bilinear sample of a band at fractional source `(x, y)`; NaN on NoData. */
++function sampleBilinear(
++  band: Float32Array,
++  width: number,
++  height: number,
++  x: number,
++  y: number,
++  nodata: number | null,
++): number {
++  const x0 = Math.floor(x);
++  const y0 = Math.floor(y);
++  const x1 = Math.min(width - 1, x0 + 1);
++  const y1 = Math.min(height - 1, y0 + 1);
++  const cx0 = Math.min(width - 1, Math.max(0, x0));
++  const cy0 = Math.min(height - 1, Math.max(0, y0));
++  const dx = x - x0;
++  const dy = y - y0;
++  const v00 = band[cy0 * width + cx0];
++  const v10 = band[cy0 * width + x1];
++  const v01 = band[y1 * width + cx0];
++  const v11 = band[y1 * width + x1];
++  if (!Number.isFinite(v00) || v00 === nodata) return NaN;
++  if (!Number.isFinite(v10) || v10 === nodata) return NaN;
++  if (!Number.isFinite(v01) || v01 === nodata) return NaN;
++  if (!Number.isFinite(v11) || v11 === nodata) return NaN;
++  const top = v00 + (v10 - v00) * dx;
++  const bottom = v01 + (v11 - v01) * dx;
++  return top + (bottom - top) * dy;
++}
++
++/** Observed max of the raster's red band (ignoring NoData), to scale to 0-1. */
++function bandDivisor(r: Float32Array, nodata: number | null): number {
++  let max = 0;
++  let hasValid = false;
++  const step = Math.max(1, Math.floor(r.length / 4096));
++  for (let i = 0; i < r.length; i += step) {
++    const v = r[i];
++    if (!Number.isFinite(v) || v === nodata) continue;
++    hasValid = true;
++    if (v > max) max = v;
++  }
++  if (!hasValid) max = 255;
++  return max <= 1.5 ? 1 : max <= 255 && Number.isInteger(max) ? 255 : max;
++}
++
++interface Preprocessed {
++  pixelValues: Float32Array;
++  scale: number;
++  newW: number;
++  newH: number;
++}
++
++/**
++ * Resize a raster to SAM's 1024-longest-edge input (aspect preserved, padded
++ * bottom/right with zeros) and normalise into an NCHW float tensor.
++ */
++function preprocess(raster: RasterData): Preprocessed {
++  const { width, height, bands, nodata } = raster;
++  const r = bands[0];
++  const g = bands.length > 1 ? bands[1] : bands[0];
++  const b = bands.length > 2 ? bands[2] : bands[0];
++  const divisor = bandDivisor(r, nodata);
++  const scale = SAM_INPUT / Math.max(width, height);
++  const newW = Math.round(width * scale);
++  const newH = Math.round(height * scale);
++
++  const plane = SAM_INPUT * SAM_INPUT;
++  const data = new Float32Array(3 * plane); // zeros = padding (post-normalise)
++  const channels: [Float32Array, number, number, number][] = [
++    [r, 0, MEAN[0], STD[0]],
++    [g, plane, MEAN[1], STD[1]],
++    [b, 2 * plane, MEAN[2], STD[2]],
++  ];
++  for (let dy = 0; dy < newH; dy += 1) {
++    const sy = (dy + 0.5) / scale - 0.5;
++    for (let dx = 0; dx < newW; dx += 1) {
++      const sx = (dx + 0.5) / scale - 0.5;
++      const dst = dy * SAM_INPUT + dx;
++      for (const [band, offset, mean, std] of channels) {
++        const sampled = sampleBilinear(band, width, height, sx, sy, nodata);
++        // NoData/invalid pixels stay at the padding value (0 after normalise).
++        if (Number.isFinite(sampled)) {
++          const v01 = Math.min(1, Math.max(0, sampled / divisor));
++          data[offset + dst] = (v01 - mean) / std;
++        }
++      }
++    }
++  }
++  return { pixelValues: data, scale, newW, newH };
++}
++
++/** Trace the exterior boundary of the mask's first component (Moore-neighbour,
++ * 8-connected). Returns a pixel ring in mask (256) coordinates, or null. */
++function traceContour(
++  mask: Uint8Array,
++  w: number,
++  h: number,
++): [number, number][] | null {
++  const at = (x: number, y: number): number =>
++    x < 0 || y < 0 || x >= w || y >= h ? 0 : mask[y * w + x];
++  let sx = -1;
++  let sy = -1;
++  outer: for (let y = 0; y < h; y += 1) {
++    for (let x = 0; x < w; x += 1) {
++      if (mask[y * w + x]) {
++        sx = x;
++        sy = y;
++        break outer;
++      }
++    }
++  }
++  if (sx < 0) return null;
++  // Neighbour offsets, clockwise starting north.
++  const N8 = [
++    [0, -1],
++    [1, -1],
++    [1, 0],
++    [1, 1],
++    [0, 1],
++    [-1, 1],
++    [-1, 0],
++    [-1, -1],
++  ];
++  const ring: [number, number][] = [[sx, sy]];
++  let cx = sx;
++  let cy = sy;
++  // Enter the start pixel from the west (background side while scan-finding it).
++  let backDir = 6;
++  const maxSteps = w * h * 8;
++  for (let step = 0; step < maxSteps; step += 1) {
++    let found = false;
++    for (let k = 1; k <= 8; k += 1) {
++      const dir = (backDir + k) % 8;
++      const nx = cx + N8[dir][0];
++      const ny = cy + N8[dir][1];
++      if (at(nx, ny)) {
++        cx = nx;
++        cy = ny;
++        // New backtrack points from the entered pixel back to where we came.
++        backDir = (dir + 4) % 8;
++        ring.push([nx, ny]);
++        found = true;
++        break;
++      }
++    }
++    if (!found) break; // isolated pixel
++    if (cx === sx && cy === sy) break; // closed the loop
++  }
++  return ring.length >= 3 ? ring : null;
++}
++
++/** Perpendicular distance of point p from the line a→b. */
++function perpDist(
++  p: [number, number],
++  a: [number, number],
++  b: [number, number],
++): number {
++  const dx = b[0] - a[0];
++  const dy = b[1] - a[1];
++  const len = Math.hypot(dx, dy);
++  if (len === 0) return Math.hypot(p[0] - a[0], p[1] - a[1]);
++  return Math.abs((p[0] - a[0]) * dy - (p[1] - a[1]) * dx) / len;
++}
++
++/** Douglas–Peucker ring simplification (open polyline; caller re-closes). */
++function simplifyRing(
++  ring: [number, number][],
++  epsilon: number,
++): [number, number][] {
++  if (ring.length < 3) return ring;
++  let maxDist = 0;
++  let index = 0;
++  const end = ring.length - 1;
++  for (let i = 1; i < end; i += 1) {
++    const d = perpDist(ring[i], ring[0], ring[end]);
++    if (d > maxDist) {
++      maxDist = d;
++      index = i;
++    }
++  }
++  if (maxDist <= epsilon) return [ring[0], ring[end]];
++  const left = simplifyRing(ring.slice(0, index + 1), epsilon);
++  const right = simplifyRing(ring.slice(index), epsilon);
++  return [...left.slice(0, -1), ...right];
++}
++
++interface Candidate {
++  polygon: [number, number][];
++  score: number;
++  area: number;
++  bbox: [number, number, number, number];
++}
++
++/** Absolute area of a closed polygon ring (shoelace formula). */
++function polygonArea(ring: [number, number][]): number {
++  let sum = 0;
++  for (let i = 0; i < ring.length - 1; i += 1) {
++    sum += ring[i][0] * ring[i + 1][1] - ring[i + 1][0] * ring[i][1];
++  }
++  return Math.abs(sum) / 2;
++}
++
++/** IoU of two `[minX, minY, maxX, maxY]` boxes. */
++function boxIou(
++  a: [number, number, number, number],
++  b: [number, number, number, number],
++): number {
++  const ix1 = Math.max(a[0], b[0]);
++  const iy1 = Math.max(a[1], b[1]);
++  const ix2 = Math.min(a[2], b[2]);
++  const iy2 = Math.min(a[3], b[3]);
++  const iw = Math.max(0, ix2 - ix1);
++  const ih = Math.max(0, iy2 - iy1);
++  const inter = iw * ih;
++  if (inter <= 0) return 0;
++  const areaA = (a[2] - a[0]) * (a[3] - a[1]);
++  const areaB = (b[2] - b[0]) * (b[3] - b[1]);
++  return inter / (areaA + areaB - inter);
++}
++
++/** Greedy box NMS: keep highest-scoring masks, drop overlaps above threshold. */
++function boxNms(cands: Candidate[], threshold: number): Candidate[] {
++  const sorted = [...cands].sort((p, q) => q.score - p.score);
++  const kept: Candidate[] = [];
++  for (const c of sorted) {
++    if (kept.some((k) => boxIou(k.bbox, c.bbox) > threshold)) continue;
++    kept.push(c);
++  }
++  return kept;
++}
++
++/** Stability score: IoU of the mask thresholded at ±offset (SAM's measure). */
++function stabilityScore(logits: Float32Array): number {
++  let high = 0;
++  let low = 0;
++  for (let i = 0; i < logits.length; i += 1) {
++    if (logits[i] > STABILITY_OFFSET) high += 1;
++    if (logits[i] > -STABILITY_OFFSET) low += 1;
++  }
++  return low === 0 ? 0 : high / low;
++}
++
++/**
++ * Run SlimSAM automatically over a raster and return one polygon per detected
++ * object, in source-raster pixel coordinates.
++ *
++ * @param raster The decoded source raster (from `readRasterData`).
++ * @param encoderBytes The SlimSAM image-encoder `.onnx` bytes.
++ * @param decoderBytes The SlimSAM prompt-encoder/mask-decoder `.onnx` bytes.
++ * @param options Grid density and mask-quality thresholds.
++ * @returns Masks as source-pixel polygons, after de-duplication.
++ */
++export async function segmentEverything(
++  raster: RasterData,
++  encoderBytes: ArrayBuffer,
++  decoderBytes: ArrayBuffer,
++  options: SegmentEverythingOptions = {},
++): Promise<SegmentMask[]> {
++  const pointsPerSide = options.pointsPerSide ?? DEFAULT_POINTS_PER_SIDE;
++  const predIou = options.predIouThreshold ?? DEFAULT_PRED_IOU;
++  const stabilityThreshold = options.stabilityScoreThreshold ?? DEFAULT_STABILITY;
++  const minAreaFraction = options.minAreaFraction ?? DEFAULT_MIN_AREA_FRACTION;
++  const boxNmsThreshold = options.boxNmsThreshold ?? DEFAULT_BOX_NMS;
++  const pointBatch = options.pointBatchSize ?? DEFAULT_POINT_BATCH;
++
++  if (
++    !Number.isInteger(pointsPerSide) ||
++    pointsPerSide < 2 ||
++    pointsPerSide > MAX_POINTS_PER_SIDE
++  ) {
++    throw new Error(
++      `pointsPerSide must be an integer between 2 and ${MAX_POINTS_PER_SIDE}.`,
++    );
++  }
++
++  const ort = await loadOrt();
++  const encoder = await ort.InferenceSession.create(new Uint8Array(encoderBytes), {
++    executionProviders: ["wasm"],
++  });
++  let decoder: import("onnxruntime-web/wasm").InferenceSession;
++  try {
++    decoder = await ort.InferenceSession.create(new Uint8Array(decoderBytes), {
++      executionProviders: ["wasm"],
++    });
++  } catch (err) {
++    // Release the already-created encoder so its WASM heap doesn't leak when
++    // decoder creation fails (both sessions live outside the finally below).
++    await encoder.release().catch(() => {});
++    throw err;
++  }
++
++  try {
++    const { width, height } = raster;
++    const { pixelValues, scale, newW, newH } = preprocess(raster);
++    const tensor = new ort.Tensor("float32", pixelValues, [1, 3, SAM_INPUT, SAM_INPUT]);
++    const embeds = await encoder.run({ pixel_values: tensor });
++    const imageEmbeddings = embeds.image_embeddings;
++    const imagePositional = embeds.image_positional_embeddings;
++
++    // Sample a regular grid of foreground points, in the resized (pre-pad) input
++    // coordinate space the model expects. Skip the outermost half-cell margin so
++    // points sit inside objects (SAM's default grid convention).
++    const points: [number, number][] = [];
++    for (let gi = 0; gi < pointsPerSide; gi += 1) {
++      for (let gj = 0; gj < pointsPerSide; gj += 1) {
++        const srcX = ((gj + 0.5) * width) / pointsPerSide;
++        const srcY = ((gi + 0.5) * height) / pointsPerSide;
++        points.push([srcX * scale, srcY * scale]);
++      }
++    }
++
++    // Mask coordinates beyond the resized image are padding; clip there.
++    const maskMaxX = Math.min(MASK_SIZE, Math.ceil(newW / MASK_UPSCALE));
++    const maskMaxY = Math.min(MASK_SIZE, Math.ceil(newH / MASK_UPSCALE));
++    const imageArea = width * height;
++    const minArea = minAreaFraction * imageArea;
++    const simplifyEps = Math.max(1, (2 * MASK_UPSCALE) / scale);
++
++    const candidates: Candidate[] = [];
++    const totalBatches = Math.ceil(points.length / pointBatch);
++    for (let bi = 0; bi < totalBatches; bi += 1) {
++      if (options.signal?.aborted) throw new Error("aborted");
++      const batch = points.slice(bi * pointBatch, (bi + 1) * pointBatch);
++      const p = batch.length;
++      const ptData = new Float32Array(p * 2);
++      const lblData = new BigInt64Array(p);
++      for (let i = 0; i < p; i += 1) {
++        ptData[i * 2] = batch[i][0];
++        ptData[i * 2 + 1] = batch[i][1];
++        lblData[i] = 1n; // foreground
++      }
++      const out = await decoder.run({
++        input_points: new ort.Tensor("float32", ptData, [1, p, 1, 2]),
++        input_labels: new ort.Tensor("int64", lblData, [1, p, 1]),
++        image_embeddings: imageEmbeddings,
++        image_positional_embeddings: imagePositional,
++      });
++      const iou = out.iou_scores.data as Float32Array;
++      const masks = out.pred_masks.data as Float32Array;
++      const maskStride = MASK_SIZE * MASK_SIZE;
++
++      for (let i = 0; i < p; i += 1) {
++        // Pick the highest-quality of the 3 multimask predictions.
++        let bestK = 0;
++        let bestScore = -Infinity;
++        for (let k = 0; k < 3; k += 1) {
++          const s = iou[i * 3 + k];
++          if (s > bestScore) {
++            bestScore = s;
++            bestK = k;
++          }
++        }
++        if (bestScore < predIou) continue;
++
++        const base = (i * 3 + bestK) * maskStride;
++        const logits = masks.subarray(base, base + maskStride);
++        if (stabilityScore(logits) < stabilityThreshold) continue;
++
++        // Binarise into the valid (non-padding) region only.
++        const bin = new Uint8Array(maskStride);
++        let count = 0;
++        for (let my = 0; my < maskMaxY; my += 1) {
++          for (let mx = 0; mx < maskMaxX; mx += 1) {
++            if (logits[my * MASK_SIZE + mx] > 0) {
++              bin[my * MASK_SIZE + mx] = 1;
++              count += 1;
++            }
++          }
++        }
++        // Cheap pre-filter on the thresholded pixel count (all blobs) before the
++        // more expensive contour trace; the reported `area` below is taken from
++        // the traced polygon so it stays consistent with the emitted geometry.
++        const px2 = (MASK_UPSCALE / scale) * (MASK_UPSCALE / scale);
++        if (count * px2 < minArea) continue;
++
++        const ring = traceContour(bin, MASK_SIZE, MASK_SIZE);
++        if (!ring) continue;
++        const simplified = simplifyRing(ring, simplifyEps / (MASK_UPSCALE / scale));
++        if (simplified.length < 3) continue;
++
++        // Map ring vertices from mask (256) space to source pixels and close.
++        // traceContour walks only the first connected component, so `polygon`,
++        // its `bbox`, and its `area` all describe that one blob consistently.
++        const polygon: [number, number][] = simplified.map(([mx, my]) => [
++          Math.min(width, (mx * MASK_UPSCALE) / scale),
++          Math.min(height, (my * MASK_UPSCALE) / scale),
++        ]);
++        polygon.push(polygon[0]);
++        const area = polygonArea(polygon);
++        if (area < minArea) continue;
++
++        let minX = Infinity;
++        let minY = Infinity;
++        let maxX = -Infinity;
++        let maxY = -Infinity;
++        for (const [x, y] of polygon) {
++          if (x < minX) minX = x;
++          if (x > maxX) maxX = x;
++          if (y < minY) minY = y;
++          if (y > maxY) maxY = y;
++        }
++        candidates.push({
++          polygon,
++          score: bestScore,
++          area,
++          bbox: [minX, minY, maxX, maxY],
++        });
++      }
++      options.onProgress?.(bi + 1, totalBatches);
++    }
++
++    return boxNms(candidates, boxNmsThreshold).map((c) => ({
++      polygon: c.polygon,
++      score: c.score,
++      area: c.area,
++    }));
++  } finally {
++    // Swallow cleanup failures so a release() error can never mask the primary
++    // error from the try above.
++    await encoder.release().catch(() => {});
++    await decoder.release().catch(() => {});
++  }
++}

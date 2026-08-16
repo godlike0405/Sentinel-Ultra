@@ -1,0 +1,89 @@
+{
+  "tests": [
+    {
+      "name": "sentinel::existing_gnuabi_sse2",
+      "status": "PASSED",
+      "detail": ""
+    },
+    {
+      "name": "sentinel::existing_gnuabi_avx2",
+      "status": "PASSED",
+      "detail": ""
+    },
+    {
+      "name": "sentinel::target_tester3purec_scalar",
+      "status": "FAILED",
+      "detail": "building tester3purec_scalar failed with 2:\n\ngmake: *** No rule to make target 'tester3purec_scalar'.  Stop.\n"
+    },
+    {
+      "name": "sentinel::target_tester3purecfma_scalar",
+      "status": "FAILED",
+      "detail": "building tester3purecfma_scalar failed with 2:\n\ngmake: *** No rule to make target 'tester3purecfma_scalar'.  Stop.\n"
+    },
+    {
+      "name": "sentinel::target_tester3sse2",
+      "status": "FAILED",
+      "detail": "building tester3sse2 failed with 2:\n\ngmake: *** No rule to make target 'tester3sse2'.  Stop.\n"
+    },
+    {
+      "name": "sentinel::target_tester3sse4",
+      "status": "FAILED",
+      "detail": "building tester3sse4 failed with 2:\n\ngmake: *** No rule to make target 'tester3sse4'.  Stop.\n"
+    },
+    {
+      "name": "sentinel::target_tester3avx",
+      "status": "FAILED",
+      "detail": "building tester3avx failed with 2:\n\ngmake: *** No rule to make target 'tester3avx'.  Stop.\n"
+    },
+    {
+      "name": "sentinel::target_tester3avx2128",
+      "status": "FAILED",
+      "detail": "building tester3avx2128 failed with 2:\n\ngmake: *** No rule to make target 'tester3avx2128'.  Stop.\n"
+    },
+    {
+      "name": "sentinel::target_tester3avx2",
+      "status": "FAILED",
+      "detail": "building tester3avx2 failed with 2:\n\ngmake: *** No rule to make target 'tester3avx2'.  Stop.\n"
+    },
+    {
+      "name": "sentinel::target_tester3avx512f",
+      "status": "FAILED",
+      "detail": "building tester3avx512f failed with 2:\n\ngmake: *** No rule to make target 'tester3avx512f'.  Stop.\n"
+    },
+    {
+      "name": "sentinel::target_tester3avx512fnofma",
+      "status": "FAILED",
+      "detail": "building tester3avx512fnofma failed with 2:\n\ngmake: *** No rule to make target 'tester3avx512fnofma'.  Stop.\n"
+    },
+    {
+      "name": "sentinel::deterministic_acos_abi",
+      "status": "FAILED",
+      "detail": "inspecting tester3's dynamic imports failed with 1:\n\nnm: '/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/nop/build/bin/tester3purec_scalar': No such file\n"
+    },
+    {
+      "name": "sentinel::tester3_family_rejects_drift",
+      "status": "FAILED",
+      "detail": "inspecting tester3's dynamic imports failed with 1:\n\nnm: '/mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/nop/build/bin/tester3purec_scalar': No such file\n"
+    },
+    {
+      "name": "sentinel::tester3_is_mpfr_free",
+      "status": "FAILED",
+      "detail": "inspecting tester3 runtime dependencies failed with 1:\n\nldd: /mnt/d/work/Sentinel-Ultra/fix_data/sentinel-coverage-validation-ktJpKV/nop/build/bin/tester3purec_scalar: No such file or directory\n"
+    },
+    {
+      "name": "sentinel::arm32_target_matrix",
+      "status": "FAILED",
+      "detail": "toolchain-armhf.cmake did not expose tester targets ['tester3purec_scalar', 'tester3purecfma_scalar']:\nThe following are some of the valid targets for this Makefile:\n... all (the default if no target is provided)\n... clean\n... depend\n... edit_cache\n... install\n... install/local\n... install/strip\n... list_install_components\n... rebuild_cache\n... test\n... alias_avx512f.h_generated\n... alias_neon32.h_generated\n... dispatchdp.h_generated\n... dispatchparam.h_generated\n... dispatchsp.h_generated\n... headers\n... renameAVX.h_generated\n... renameAVX2.h_generated\n... renameAVX2128.h_generated\n... renameAVX512F.h_generated\n... renameAVX512F_NOFMA.h_generated\n... renameFMA4.h_generated\n... renameNEON32.h_generated\n... renameNEON32VFPV4.h_generated\n... renamePURECFMA_SCALAR.h_generated\n... renamePUREC_SCALAR.h_generated\n... renameSSE2.h_generated\n... renameSSE4.h_generated\n... unroll0.org.copied\n... unroll_target_dp\n... unroll_target_sp\n... arraymap\n... common\n... dftcommon_obj\n... dftdp_obj\n... dftsp_obj\n... iut\n... iutavx\n... iutavx2\n... iutavx2128\n... iutavx512f\n... iutavx512fnofma\n... iutfma4\n... iutneon32\n... iutneon32vfpv4\n... iutpurec_scalar\n... iutpurecfma_scalar\n... iutsse2\n... iutsse4\n... naivetestdp\n... naivetestsp\n... roundtriptest1ddp\n... roundtriptest1dsp\n... roundtriptest2ddp\n... roundtriptest2dsp\n... sleef\n... sleefavx\n... sleefavx2\n... sleefavx2128\n... sleefavx512f\n... sleefavx512f_nofma\n... sleefdft\n... sleeffma4\n... sleefneon32\n... sleefneon32vfpv4\n... sleefpurec_scalar\n... sleefpurecfma_scalar\n... sleefsse2\n... sleefsse4\n... unroll_0_avx2dp_obj\n... unroll_0_avx2sp_obj\n... unroll_0_avx512fdp_obj\n... unroll_0_avx512fsp_obj\n... unroll_0_avxdp_obj\n... unroll_0_avxsp_obj\n... unroll_0_neon32sp_obj\n... unroll_0_sse2dp_obj\n... unroll_0_sse2sp_obj\n... unroll_0_vecextdp_obj\n... unroll_0_vecextsp_obj\n... unroll_2_avx2dp_obj\n... unroll_2_avx2sp_obj\n... unroll_2_avx512fdp_obj\n... unroll_2_avx512fsp_obj\n... unroll_2_avxdp_obj\n... unroll_2_avxsp_obj\n... unroll_2_neon32sp_obj\n... unroll_2_sse2dp_obj\n... unroll_2_sse2sp_obj\n... unroll_2_vecextdp_obj\n... unroll_2_vecextsp_obj\n"
+    },
+    {
+      "name": "sentinel::aarch64_target_matrix",
+      "status": "FAILED",
+      "detail": "toolchain-aarch64.cmake did not expose tester targets ['tester3advsimd', 'tester3advsimdnofma', 'tester3sve', 'tester3svenofma']:\nThe following are some of the valid targets for this Makefile:\n... all (the default if no target is provided)\n... clean\n... depend\n... edit_cache\n... install\n... install/local\n... install/strip\n... list_install_components\n... rebuild_cache\n... test\n... alias_advsimd.h_generated\n... alias_avx512f.h_generated\n... dispatchdp.h_generated\n... dispatchparam.h_generated\n... dispatchsp.h_generated\n... headers\n... maskedAVX512F_generated\n... maskedSVE_generated\n... renameADVSIMD.h_generated\n... renameADVSIMD_NOFMA.h_generated\n... renameAVX.h_generated\n... renameAVX2.h_generated\n... renameAVX2128.h_generated\n... renameAVX512F.h_generated\n... renameAVX512F_NOFMA.h_generated\n... renameFMA4.h_generated\n... renamePURECFMA_SCALAR.h_generated\n... renamePUREC_SCALAR.h_generated\n... renameSSE2.h_generated\n... renameSSE4.h_generated\n... renameSVE.h_generated\n... renameSVE_NOFMA.h_generated\n... unroll0.org.copied\n... unroll_target_dp\n... unroll_target_sp\n... arraymap\n... common\n... dftcommon_obj\n... dftdp_obj\n... dftsp_obj\n... gnuabi_compatibility_ADVSIMD\n... gnuabi_compatibility_AVX\n... gnuabi_compatibility_AVX2\n... gnuabi_compatibility_AVX512F\n... gnuabi_compatibility_AVX512F_masked\n... gnuabi_compatibility_SSE2\n... gnuabi_compatibility_SVE\n... gnuabi_compatibility_SVE_masked\n... iut\n... iutadvsimd\n... iutadvsimdnofma\n... iutavx\n... iutavx2\n... iutavx2128\n... iutavx512f\n... iutavx512fnofma\n... iutfma4\n... iutpurec_scalar\n... iutpurecfma_scalar\n... iutsse2\n... iutsse4\n... iutsve\n... iutsvenofma\n... naivetestdp\n... naivetestsp\n... roundtriptest1ddp\n... roundtriptest1dsp\n... roundtriptest2ddp\n... roundtriptest2dsp\n... sleef\n... sleefadvsimd\n... sleefadvsimd_nofma\n... sleefavx\n... sleefavx2\n... sleefavx2128\n... sleefavx512f\n... sleefavx512f_nofma\n... sleefdft\n... sleeffma4\n... sleefgnuabi\n... sleefgnuabiadvsimddp\n... sleefgnuabiadvsimdsp\n... sleefgnuabiavx2dp\n... sleefgnuabiavx2sp\n... sleefgnuabiavx512fdp\n... sleefgnuabiavx512fsp\n... sleefgnuabiavxdp\n... sleefgnuabiavxsp\n... sleefgnuabisse2dp\n... sleefgnuabisse2sp\n... sleefgnuabisvedp\n... sleefgnuabisvesp\n... sleefpurec_scalar\n... sleefpurecfma_scalar\n... sleefsse2\n... sleefsse4\n... sleefsve\n... sleefsve_nofma\n... unroll_0_advsimddp_obj\n... unroll_0_advsimdsp_obj\n... unroll_0_avx2dp_obj\n... unroll_0_avx2sp_obj\n... unroll_0_avx512fdp_obj\n... unroll_0_avx512fsp_obj\n... unroll_0_avxdp_obj\n... unroll_0_avxsp_obj\n... unroll_0_sse2dp_obj\n... unroll_0_sse2sp_obj\n... unroll_0_sve1024dp_obj\n... unroll_0_sve1024sp_obj\n... unroll_0_sve2048dp_obj\n... unroll_0_sve2048sp_obj\n... unroll_0_sve256dp_obj\n... unroll_0_sve256sp_obj\n... unroll_0_sve512dp_obj\n... unroll_0_sve512sp_obj\n... unroll_0_vecextdp_obj\n... unroll_0_vecextsp_obj\n... unroll_2_advsimddp_obj\n... unroll_2_advsimdsp_obj\n... unroll_2_avx2dp_obj\n... unroll_2_avx2sp_obj\n... unroll_2_avx512fdp_obj\n... unroll_2_avx512fsp_obj\n... unroll_2_avxdp_obj\n... unroll_2_avxsp_obj\n... unroll_2_sse2dp_obj\n... unroll_2_sse2sp_obj\n... unroll_2_sve1024dp_obj\n... unroll_2_sve1024sp_obj\n... unroll_2_sve2048dp_obj\n... unroll_2_sve2048sp_obj\n... unroll_2_sve256dp_obj\n... unroll_2_sve256sp_obj\n... unroll_2_sve512dp_obj\n... unroll_2_sve512sp_obj\n... unroll_2_vecextdp_obj\n... unroll_2_vecextsp_obj\n"
+    },
+    {
+      "name": "sentinel::ppc64_target_matrix",
+      "status": "FAILED",
+      "detail": "toolchain-ppc64el.cmake did not expose tester targets ['tester3vsx', 'tester3vsxnofma']:\nThe following are some of the valid targets for this Makefile:\n... all (the default if no target is provided)\n... clean\n... depend\n... edit_cache\n... install\n... install/local\n... install/strip\n... list_install_components\n... rebuild_cache\n... test\n... alias_avx512f.h_generated\n... alias_vsx.h_generated\n... dispatchdp.h_generated\n... dispatchparam.h_generated\n... dispatchsp.h_generated\n... headers\n... renameAVX.h_generated\n... renameAVX2.h_generated\n... renameAVX2128.h_generated\n... renameAVX512F.h_generated\n... renameAVX512F_NOFMA.h_generated\n... renameFMA4.h_generated\n... renamePURECFMA_SCALAR.h_generated\n... renamePUREC_SCALAR.h_generated\n... renameSSE2.h_generated\n... renameSSE4.h_generated\n... renameVSX.h_generated\n... renameVSX_NOFMA.h_generated\n... unroll0.org.copied\n... unroll_target_dp\n... unroll_target_sp\n... arraymap\n... common\n... dftcommon_obj\n... dftdp_obj\n... dftsp_obj\n... iut\n... iutavx\n... iutavx2\n... iutavx2128\n... iutavx512f\n... iutavx512fnofma\n... iutfma4\n... iutpurec_scalar\n... iutpurecfma_scalar\n... iutsse2\n... iutsse4\n... iutvsx\n... iutvsxnofma\n... naivetestdp\n... naivetestsp\n... roundtriptest1ddp\n... roundtriptest1dsp\n... roundtriptest2ddp\n... roundtriptest2dsp\n... sleef\n... sleefavx\n... sleefavx2\n... sleefavx2128\n... sleefavx512f\n... sleefavx512f_nofma\n... sleefdft\n... sleeffma4\n... sleefpurec_scalar\n... sleefpurecfma_scalar\n... sleefsse2\n... sleefsse4\n... sleefvsx\n... sleefvsx_nofma\n... unroll_0_avx2dp_obj\n... unroll_0_avx2sp_obj\n... unroll_0_avx512fdp_obj\n... unroll_0_avx512fsp_obj\n... unroll_0_avxdp_obj\n... unroll_0_avxsp_obj\n... unroll_0_sse2dp_obj\n... unroll_0_sse2sp_obj\n... unroll_0_vecextdp_obj\n... unroll_0_vecextsp_obj\n... unroll_0_vsxdp_obj\n... unroll_0_vsxsp_obj\n... unroll_2_avx2dp_obj\n... unroll_2_avx2sp_obj\n... unroll_2_avx512fdp_obj\n... unroll_2_avx512fsp_obj\n... unroll_2_avxdp_obj\n... unroll_2_avxsp_obj\n... unroll_2_sse2dp_obj\n... unroll_2_sse2sp_obj\n... unroll_2_vecextdp_obj\n... unroll_2_vecextsp_obj\n... unroll_2_vsxdp_obj\n... unroll_2_vsxsp_obj\n"
+    }
+  ]
+}

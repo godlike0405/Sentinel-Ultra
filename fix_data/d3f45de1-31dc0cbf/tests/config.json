@@ -1,0 +1,58 @@
+{
+  "schema_version": "compact-swebench-harborized-v1",
+  "execution": {
+    "commands": [
+      "node --import tsx --test tests/client-ml-feature.test.ts tests/geo-editor-plugin.test.ts"
+    ],
+    "selected_test_files_to_run": [
+      "tests/client-ml-feature.test.ts",
+      "tests/geo-editor-plugin.test.ts"
+    ],
+    "env": {},
+    "timeout_sec": 240
+  },
+  "grading": {
+    "fail_to_pass": [
+      "returns every qualifying YOLOv8/v11 prediction",
+      "interprets YOLOv5 confidence and coordinates",
+      "suppresses redundant same-class boxes without merging classes",
+      "rejects malformed detection output",
+      "prepares normalized and conventional integer rasters for inference",
+      "handles reflectance, high-range, NoData, and empty-valid-sample rasters",
+      "validates all object-detection options before inference",
+      "runs object detection in restricted browser conditions and maps bounded coordinates",
+      "reports invalid object-detection models clearly",
+      "pins and reports a browser-compatible inference runtime",
+      "exposes typed detection and automatic-segmentation capabilities",
+      "validates automatic-segmentation grid settings before model loading",
+      "segments raster objects into bounded polygons and reports progress",
+      "supports automatic-segmentation cancellation and model errors",
+      "lists both imagery workflows as advanced Processing actions",
+      "keeps both imagery workflows out of simpler interface presets",
+      "provides localized UI copy for both workflows",
+      "bundles the complete desktop application for browsers",
+      "keeps the two browser workflow implementations independently loadable",
+      "ships distinct HTTPS ONNX choices for both workflows"
+    ],
+    "pass_to_pass": [
+      "initial package evaluation does not require the inference runtime",
+      "has the exported id"
+    ],
+    "required_pass": [],
+    "expected_test_count": 22,
+    "allow_extra_failures": false,
+    "parser": {
+      "framework": "custom",
+      "result_source": "stdout_stderr",
+      "pass_regex": "^\\s*ok \\d+ - (?!maplibreGeoEditorPlugin(?: # .*)?$)(?P<name>.+?)(?: # .*)?$",
+      "fail_regex": "^\\s*not ok \\d+ - (?!maplibreGeoEditorPlugin(?: # .*)?$)(?P<name>.+?)(?: # .*)?$"
+    }
+  },
+  "artifacts": {
+    "stdout_log": "/logs/verifier/test-stdout.txt",
+    "stderr_log": "/logs/verifier/test-stderr.txt",
+    "parsed_results": "/logs/verifier/output.json",
+    "report": "/logs/verifier/report.json",
+    "reward": "/logs/verifier/reward.txt"
+  }
+}
