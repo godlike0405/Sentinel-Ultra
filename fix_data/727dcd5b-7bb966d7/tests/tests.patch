@@ -1,9 +1,9 @@
 diff --git a/.sentinel-tests/test_tester3_contract.py b/.sentinel-tests/test_tester3_contract.py
 new file mode 100644
-index 0000000..82a4bca
+index 0000000..f954a59
 --- /dev/null
 +++ b/.sentinel-tests/test_tester3_contract.py
-@@ -0,0 +1,726 @@
+@@ -0,0 +1,767 @@
 +#!/usr/bin/env python3
 +from __future__ import annotations
 +
@@ -194,6 +194,28 @@ index 0000000..82a4bca
 +        "tester3avx512f",
 +        "tester3avx512fnofma",
 +    ]
++    tester3_target_features = {
++        "tester3purec_scalar": set(),
++        "tester3purecfma_scalar": {"fma"},
++        "tester3sse2": {"sse2"},
++        "tester3sse4": {"sse4_1"},
++        "tester3avx": {"avx"},
++        "tester3avx2128": {"avx2", "fma"},
++        "tester3avx2": {"avx2", "fma"},
++        "tester3avx512f": {"avx512f", "fma"},
++        "tester3avx512fnofma": {"avx512f"},
++    }
++
++    def host_cpu_features() -> set[str]:
++        cpuinfo = Path("/proc/cpuinfo").read_text(encoding="ascii", errors="ignore").lower()
++        return set(
++            " ".join(
++                line.split(":", 1)[1]
++                for line in cpuinfo.splitlines()
++                if ":" in line and line.split(":", 1)[0].strip() in {"flags", "features"}
++            ).split()
++        )
++
 +    for target in tester3_targets:
 +        record(
 +            f"sentinel::target_{target}",
@@ -237,24 +259,7 @@ index 0000000..82a4bca
 +    record("sentinel::deterministic_acos_abi", check_deterministic_acos_abi)
 +
 +    def check_tester3_family_rejects_drift() -> None:
-+        cpuinfo = Path("/proc/cpuinfo").read_text(encoding="ascii", errors="ignore").lower()
-+        feature_line = " ".join(
-+            line.split(":", 1)[1]
-+            for line in cpuinfo.splitlines()
-+            if ":" in line and line.split(":", 1)[0].strip() in {"flags", "features"}
-+        )
-+        cpu_features = set(feature_line.split())
-+        target_features = {
-+            "tester3purec_scalar": set(),
-+            "tester3purecfma_scalar": {"fma"},
-+            "tester3sse2": {"sse2"},
-+            "tester3sse4": {"sse4_1"},
-+            "tester3avx": {"avx"},
-+            "tester3avx2128": {"avx2", "fma"},
-+            "tester3avx2": {"avx2", "fma"},
-+            "tester3avx512f": {"avx512f", "fma"},
-+            "tester3avx512fnofma": {"avx512f"},
-+        }
++        cpu_features = host_cpu_features()
 +        shapes = ("asind", "acosd", "asinf", "acosf")
 +        for target in tester3_targets:
 +            binary = build_dir / "bin" / target
@@ -380,7 +385,7 @@ index 0000000..82a4bca
 +                    if executed.returncode == 0:
 +                        raise AssertionError(f"{target} accepted deliberately altered {shape} results")
 +                else:
-+                    missing_features = sorted(target_features[target] - cpu_features)
++                    missing_features = sorted(tester3_target_features[target] - cpu_features)
 +                    if not missing_features:
 +                        raise AssertionError(
 +                            f"{target} never executed {shape} on a supported CPU"
@@ -394,26 +399,62 @@ index 0000000..82a4bca
 +
 +    record("sentinel::tester3_family_rejects_drift", check_tester3_family_rejects_drift)
 +
++    def check_tester3_expectations_are_invocation_independent() -> None:
++        cpu_features = host_cpu_features()
++        with tempfile.TemporaryDirectory(prefix="sentinel-ambient-math-") as tmp:
++            temp_dir = Path(tmp)
++            source = temp_dir / "ambient_math.c"
++            library = temp_dir / "ambient_math.so"
++            probe_source = temp_dir / "probe.c"
++            probe = temp_dir / "probe"
++            source.write_text(
++                "double asin(double value) { (void)value; return 0.125; }\n"
++                "double acos(double value) { (void)value; return 1.25; }\n"
++                "float asinf(float value) { (void)value; return -0.25f; }\n"
++                "float acosf(float value) { (void)value; return 1.5f; }\n"
++                "long double asinl(long double value) { (void)value; return 0.375L; }\n"
++                "long double acosl(long double value) { (void)value; return 1.75L; }\n",
++                encoding="ascii",
++            )
++            compiled = run(
++                [args.cc, "-shared", "-fPIC", str(source), "-o", str(library)]
++            )
++            require_success(compiled, "building the ambient reference-math interposer")
++            probe_source.write_text(
++                "#include <math.h>\n"
++                "static volatile double input_d = 0.25;\n"
++                "static volatile float input_f = 0.25f;\n"
++                "int main(void) {\n"
++                "  double d = input_d; float f = input_f;\n"
++                "  return !(asin(d) == 0.125 && acos(d) == 1.25 &&\n"
++                "            asinf(f) == -0.25f && acosf(f) == 1.5f);\n"
++                "}\n",
++                encoding="ascii",
++            )
++            compiled = run(
++                [args.cc, "-O0", "-fno-builtin", str(probe_source), "-o", str(probe), "-lm"]
++            )
++            require_success(compiled, "building the ambient reference-math probe")
++            poisoned_env = {"LD_PRELOAD": str(library)}
++            activated = run([str(probe)], extra_env=poisoned_env)
++            require_success(activated, "activating the ambient reference-math interposer")
++            for target in tester3_targets:
++                if tester3_target_features[target] - cpu_features:
++                    continue
++                imported_inverse_trig_symbols(build_dir / "bin" / target)
++                executed = run_ctest(target, extra_env=poisoned_env)
++                require_success(
++                    executed,
++                    f"running {target} with altered ambient reference-math results",
++                )
++
++    record(
++        "sentinel::tester3_expectations_are_invocation_independent",
++        check_tester3_expectations_are_invocation_independent,
++    )
++
 +    def check_tester3_domain_coverage() -> None:
-+        cpuinfo = Path("/proc/cpuinfo").read_text(encoding="ascii", errors="ignore").lower()
-+        cpu_features = set(
-+            " ".join(
-+                line.split(":", 1)[1]
-+                for line in cpuinfo.splitlines()
-+                if ":" in line and line.split(":", 1)[0].strip() in {"flags", "features"}
-+            ).split()
-+        )
-+        target_features = {
-+            "tester3purec_scalar": set(),
-+            "tester3purecfma_scalar": {"fma"},
-+            "tester3sse2": {"sse2"},
-+            "tester3sse4": {"sse4_1"},
-+            "tester3avx": {"avx"},
-+            "tester3avx2128": {"avx2", "fma"},
-+            "tester3avx2": {"avx2", "fma"},
-+            "tester3avx512f": {"avx512f", "fma"},
-+            "tester3avx512fnofma": {"avx512f"},
-+        }
++        cpu_features = host_cpu_features()
 +        target_flags = {
 +            "tester3purec_scalar": [],
 +            "tester3purecfma_scalar": ["-mfma"],
@@ -427,7 +468,7 @@ index 0000000..82a4bca
 +        }
 +        shapes = ("asind", "acosd", "asinf", "acosf")
 +        for target in tester3_targets:
-+            required_features = target_features[target]
++            required_features = tester3_target_features[target]
 +            if required_features - cpu_features:
 +                continue
 +            binary = build_dir / "bin" / target

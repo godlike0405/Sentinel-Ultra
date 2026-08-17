@@ -1,0 +1,42 @@
+schema_version = "1.3"
+
+[metadata]
+hardening_cycles = "4"
+agent_hardened = "true"
+author_name = "anonymous"
+author_email = "anonymous@snorkel.ai"
+# --- swe_ultra_requirements §4 field names ---
+category = "implementation"
+subcategory = "feature"
+coding_language = "go"
+repo_name = "pouch"
+repo_license = "Apache-2.0"
+source_pr_url = "https://github.com/aliyuncontainerservice/pouch/pull/2411"
+base_commit_sha = "b19cbf62901fc176b6b6036e7e97131d5e339327"
+model_difficulty = "hard"
+tags = ["oci-runtime-spec", "containers", "capabilities", "cgroups", "dev-shm", "go"]
+difficulty_explanation = "Requires deriving a Pouch-owned OCI security profile from several vendored runtime conventions, preserving privileged and unprivileged behavior, and removing an otherwise effect-free containerd dependency. Solvers must also trace mutable ownership across constructor, process, hook, mount, and Linux finalization; keep capability views and container snapshots independent under concurrency; and make multi-stage publication failure-atomic across validation, retry, and prior-success state transitions."
+# --- legacy aliases (kept for backward-compatible internal consumers) ---
+difficulty = "hard"
+task_type = "implementation"
+task_subtype = "feature"
+source = "https://github.com/aliyuncontainerservice/pouch/pull/2411"
+language = "go"
+expert_time_estimate_min = 90.0
+junior_time_estimate_min = 300.0
+pr_created_at = "2018-11-02T06:30:44Z"
+pr_merged_at = "2018-12-20T12:51:46Z"
+
+[verifier]
+timeout_sec = 600.0
+
+[agent]
+timeout_sec = 1800.0
+
+[environment]
+os = "linux"
+build_timeout_sec = 900.0
+cpus = 4
+memory_mb = 8192
+storage_mb = 10240
+gpus = 0

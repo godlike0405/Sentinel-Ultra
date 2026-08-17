@@ -1,0 +1,87 @@
+{
+  "schema_version": "compact-swebench-harborized-v1",
+  "execution": {
+    "commands": [
+      "python -P /tmp/sentinel-verifier-runner.py"
+    ],
+    "selected_test_files_to_run": [
+      "src/cowrie/test/test_honeyfs_session_behavior.py",
+      "src/cowrie/test/test_fs.py",
+      "src/cowrie/test/test_filetransfer.py"
+    ],
+    "env": {},
+    "timeout_sec": 240
+  },
+  "grading": {
+    "fail_to_pass": [
+      "src/cowrie/test/test_honeyfs_session_behavior.py::SessionIsolationBehaviorTests::test_read_only_session_memory_growth_stays_below_one_tree",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::OperatorContentsBehaviorTests::test_configured_read_only_sessions_stay_within_memory_budget",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::OperatorContentsBehaviorTests::test_distinct_contents_directories_stay_within_memory_budget",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::OperatorContentsBehaviorTests::test_sparse_mutations_across_distinct_views_stay_within_memory_budget",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::OperatorContentsBehaviorTests::test_operator_only_paths_stay_isolated_within_memory_budget",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::OperatorContentsBehaviorTests::test_reapplying_contents_replaces_the_previous_overlay",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::OperatorContentsBehaviorTests::test_operator_snapshots_merge_without_overwriting_session_changes",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::OperatorContentsBehaviorTests::test_large_operator_snapshot_is_shared_within_memory_budget",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::PathWalkerBehaviorTests::test_empty_path_refers_to_root",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::PathWalkerBehaviorTests::test_only_separators_refer_to_root",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::PathWalkerBehaviorTests::test_repeated_internal_separators_are_ignored",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::PathWalkerBehaviorTests::test_descent_through_file_resolves_as_missing",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::FilesystemRenameBehaviorTests::test_rename_replaces_destination_in_same_directory",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::FilesystemRenameBehaviorTests::test_rename_replaces_destination_across_directories",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::PublicInterfaceBehaviorTests::test_shell_mv_overwrites_an_existing_destination",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::PublicInterfaceBehaviorTests::test_shell_mv_overwrites_across_directories",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::PublicInterfaceBehaviorTests::test_shell_mv_into_directory_replaces_same_named_entry",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::PublicInterfaceBehaviorTests::test_sftp_rename_overwrites_an_existing_destination",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::PublicInterfaceBehaviorTests::test_sftp_rename_overwrites_across_directories",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::PublicInterfaceBehaviorTests::test_rename_type_safety_and_failure_atomicity_contract"
+    ],
+    "pass_to_pass": [
+      "src/cowrie/test/test_honeyfs_session_behavior.py::SessionIsolationBehaviorTests::test_chmod_is_private",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::SessionIsolationBehaviorTests::test_chown_is_private",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::SessionIsolationBehaviorTests::test_directory_creation_is_private",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::SessionIsolationBehaviorTests::test_file_removal_is_private",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::SessionIsolationBehaviorTests::test_real_file_initialization_is_private",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::SessionIsolationBehaviorTests::test_rename_is_private",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::SessionIsolationBehaviorTests::test_repeated_file_creation_remains_isolated",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::SessionIsolationBehaviorTests::test_size_update_is_private",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::SessionIsolationBehaviorTests::test_timestamp_update_is_private",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::OperatorContentsBehaviorTests::test_changing_contents_directory_uses_current_operator_files",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::OperatorContentsBehaviorTests::test_operator_backing_moves_only_with_its_session",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::OperatorContentsBehaviorTests::test_configured_sessions_remain_isolated_after_mutation",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::PathWalkerBehaviorTests::test_broken_symlink_resolves_as_missing",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::PathWalkerBehaviorTests::test_contents_lookup_follows_directory_symlink",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::PathWalkerBehaviorTests::test_contents_lookup_rejects_descent_through_file",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::PathWalkerBehaviorTests::test_contents_lookup_rejects_missing_path",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::PathWalkerBehaviorTests::test_contents_lookup_returns_file_bytes",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::PathWalkerBehaviorTests::test_intermediate_directory_symlink_is_followed",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::PathWalkerBehaviorTests::test_terminal_symlink_can_be_returned_without_following",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::PathWalkerBehaviorTests::test_terminal_symlink_is_followed_by_default",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::PublicInterfaceBehaviorTests::test_missing_rename_and_remove_sources_raise_oserror",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::PublicInterfaceBehaviorTests::test_sftp_remove_detaches_only_the_active_session",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::PublicInterfaceBehaviorTests::test_shell_chmod_does_not_affect_other_session",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::PublicInterfaceBehaviorTests::test_shell_cp_detaches_only_the_active_session",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::PublicInterfaceBehaviorTests::test_shell_rm_detaches_only_the_active_session",
+      "src/cowrie/test/test_honeyfs_session_behavior.py::PublicInterfaceBehaviorTests::test_shell_rmdir_detaches_only_the_active_session",
+      "src/cowrie/test/test_fs.py::ResolvePathTests::test_absolute_path_is_returned_normalized",
+      "src/cowrie/test/test_fs.py::ResolvePathTests::test_relative_path_joins_cwd",
+      "src/cowrie/test/test_fs.py::ResolvePathTests::test_dot_resolves_to_cwd",
+      "src/cowrie/test/test_fs.py::ResolvePathTests::test_empty_path_resolves_to_cwd_without_crashing",
+      "src/cowrie/test/test_filetransfer.py::SFTPErrorTranslationTests::test_open_directory_missing_raises_enoent",
+      "src/cowrie/test/test_filetransfer.py::SFTPErrorTranslationTests::test_open_file_for_write_missing_parent_raises_enoent",
+      "src/cowrie/test/test_filetransfer.py::SFTPErrorTranslationTests::test_open_file_under_special_path_raises_eacces",
+      "src/cowrie/test/test_filetransfer.py::SFTPErrorTranslationTests::test_get_attrs_missing_raises_enoent"
+    ],
+    "allow_extra_failures": false,
+    "parser": {
+      "framework": "pytest",
+      "result_source": "verifier_exit_statuses"
+    }
+  },
+  "artifacts": {
+    "stdout_log": "/logs/verifier/test-stdout.txt",
+    "stderr_log": "/logs/verifier/test-stderr.txt",
+    "parsed_results": "/logs/verifier/output.json",
+    "report": "/logs/verifier/report.json",
+    "reward": "/logs/verifier/reward.txt"
+  }
+}

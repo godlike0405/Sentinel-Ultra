@@ -1,0 +1,605 @@
+diff --git a/daemon/mgr/spec_default_integration_test.go b/daemon/mgr/spec_default_integration_test.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..ae909a2273ce3347bdb9b5fb3b94b1a157bae884
+--- /dev/null
++++ b/daemon/mgr/spec_default_integration_test.go
+@@ -0,0 +1,598 @@
++package mgr
++
++import (
++	"context"
++	"encoding/json"
++	"fmt"
++	"reflect"
++	"sort"
++	"strings"
++	"sync"
++	"testing"
++	_ "unsafe"
++
++	"github.com/alibaba/pouch/apis/types"
++
++	specs "github.com/opencontainers/runtime-spec/specs-go"
++)
++
++// containerdDefaultEnvironment lets this test make containerd's profile
++// observably different without constraining Pouch's replacement API.
++//go:linkname containerdDefaultEnvironment github.com/alibaba/pouch/vendor/github.com/containerd/containerd/oci.defaultEnv
++var containerdDefaultEnvironment []string
++
++func containerForProfileTest(id string, hostConfig *types.HostConfig) *Container {
++	return &Container{
++		ID: id,
++		Config: &types.ContainerConfig{
++			DisableNetworkFiles: true,
++			NetworkDisabled:     true,
++		},
++		HostConfig:      hostConfig,
++		Snapshotter:     &types.SnapshotterData{Data: map[string]string{}},
++		NetworkSettings: &types.NetworkSettings{},
++	}
++}
++
++func createSpecForProfileTest(t *testing.T, c *Container) *specs.Spec {
++	t.Helper()
++	wrapper := &SpecWrapper{}
++	if err := createSpec(context.Background(), c, wrapper); err != nil {
++		t.Fatalf("createSpec returned error: %v", err)
++	}
++	if wrapper.s == nil {
++		t.Fatal("createSpec produced no runtime spec")
++	}
++	return wrapper.s
++}
++
++func tryCreateSpecForProfileTest(c *Container, wrapper *SpecWrapper) (err error, panicValue interface{}) {
++	defer func() {
++		panicValue = recover()
++	}()
++	err = createSpec(context.Background(), c, wrapper)
++	return err, nil
++}
++
++func mountForProfileTest(t *testing.T, mounts []specs.Mount, destination string) specs.Mount {
++	t.Helper()
++	for _, mount := range mounts {
++		if mount.Destination == destination {
++			return mount
++		}
++	}
++	t.Fatalf("%s mount is missing", destination)
++	return specs.Mount{}
++}
++
++func mountCountForProfileTest(mounts []specs.Mount, destination string) int {
++	count := 0
++	for _, mount := range mounts {
++		if mount.Destination == destination {
++			count++
++		}
++	}
++	return count
++}
++
++func sizeOptionsForProfileTest(options []string) []string {
++	var sizes []string
++	for _, option := range options {
++		if strings.HasPrefix(option, "size=") {
++			sizes = append(sizes, option)
++		}
++	}
++	return sizes
++}
++
++func hasOptionForProfileTest(options []string, wanted string) bool {
++	for _, option := range options {
++		if option == wanted {
++			return true
++		}
++	}
++	return false
++}
++
++func sortedStringsForProfileTest(in []string) []string {
++	out := append([]string(nil), in...)
++	sort.Strings(out)
++	return out
++}
++
++func assertStringSetForProfileTest(t *testing.T, label string, got, want []string) {
++	t.Helper()
++	if !reflect.DeepEqual(sortedStringsForProfileTest(got), sortedStringsForProfileTest(want)) {
++		t.Fatalf("%s = %v, want %v", label, got, want)
++	}
++}
++
++func TestCreateSpecDoesNotUseContainerdProfileDefaults(t *testing.T) {
++	original := containerdDefaultEnvironment
++	marker := "SENTINEL_CONTAINERD_PROFILE_WAS_USED=1"
++	containerdDefaultEnvironment = []string{marker}
++	defer func() { containerdDefaultEnvironment = original }()
++
++	s := createSpecForProfileTest(t, containerForProfileTest("profile-ownership", &types.HostConfig{}))
++	for _, entry := range s.Process.Env {
++		if entry == marker {
++			t.Fatal("normal container creation inherited containerd's starting profile")
++		}
++	}
++}
++
++func containsStringForProfileTest(values []string, wanted string) bool {
++	for _, value := range values {
++		if value == wanted {
++			return true
++		}
++	}
++	return false
++}
++
++func TestFinalCapabilitySetsRemainIndependent(t *testing.T) {
++	for changed := 0; changed < 4; changed++ {
++		c := containerForProfileTest(fmt.Sprintf("capability-snapshot-%d", changed), &types.HostConfig{
++			CapAdd: []string{"SYS_TIME"}, CapDrop: []string{"NET_RAW"},
++		})
++		s := createSpecForProfileTest(t, c)
++		capabilities := s.Process.Capabilities
++		sets := [][]string{capabilities.Bounding, capabilities.Permitted, capabilities.Inheritable, capabilities.Effective}
++		before := make([]string, len(sets))
++		for index, set := range sets {
++			if containsStringForProfileTest(set, "CAP_NET_RAW") || !containsStringForProfileTest(set, "CAP_SYS_TIME") {
++				t.Fatalf("capability adjustments were not applied to set %d: %v", index, set)
++			}
++			before[index] = set[0]
++		}
++		sets[changed][0] = "CHANGED"
++		for other := range sets {
++			if other != changed && sets[other][0] != before[other] {
++				t.Errorf("editing capability set %d changed set %d", changed, other)
++			}
++		}
++	}
++}
++
++func TestFinalSpecOwnsProcessArguments(t *testing.T) {
++	entrypoint := make([]string, 1, 4)
++	entrypoint[0] = "entry"
++	c := containerForProfileTest("argument-snapshot", &types.HostConfig{})
++	c.Config.Entrypoint = entrypoint
++	c.Config.Cmd = []string{"argument"}
++	s := createSpecForProfileTest(t, c)
++	if !reflect.DeepEqual(s.Process.Args, []string{"entry", "argument"}) {
++		t.Fatalf("final arguments = %v", s.Process.Args)
++	}
++	s.Process.Args[0] = "changed-in-spec"
++	if c.Config.Entrypoint[0] != "entry" {
++		t.Errorf("editing final arguments changed container entrypoint to %q", c.Config.Entrypoint[0])
++	}
++	c.Config.Cmd[0] = "changed-in-config"
++	if s.Process.Args[1] != "argument" {
++		t.Errorf("editing container command changed final arguments to %v", s.Process.Args)
++	}
++}
++
++func TestFinalSpecOwnsSysctlSettings(t *testing.T) {
++	settings := map[string]string{"kernel.shm_rmid_forced": "0", "net.ipv4.ip_forward": "1"}
++	c := containerForProfileTest("sysctl-snapshot", &types.HostConfig{Sysctls: settings})
++	s := createSpecForProfileTest(t, c)
++	s.Linux.Sysctl["net.ipv4.ip_forward"] = "0"
++	if settings["net.ipv4.ip_forward"] != "1" {
++		t.Errorf("editing final sysctls changed container settings: %v", settings)
++	}
++	settings["kernel.shm_rmid_forced"] = "1"
++	if s.Linux.Sysctl["kernel.shm_rmid_forced"] != "0" {
++		t.Errorf("editing container sysctls changed final settings: %v", s.Linux.Sysctl)
++	}
++}
++
++func TestConcurrentContainerProfilesRemainIsolated(t *testing.T) {
++	const count = 12
++	results := make([]*specs.Spec, count)
++	errors := make(chan error, count)
++	var wait sync.WaitGroup
++	for index := 0; index < count; index++ {
++		wait.Add(1)
++		go func(index int) {
++			defer wait.Done()
++			requested := int64(index+1) * 1048576
++			id := fmt.Sprintf("concurrent-%d", index)
++			c := containerForProfileTest(id, &types.HostConfig{
++				ShmSize:   &requested,
++				Resources: types.Resources{CgroupParent: fmt.Sprintf("team/%d", index)},
++				Sysctls:   map[string]string{"sentinel.profile": fmt.Sprintf("%d", index)},
++			})
++			c.Config.Entrypoint = []string{fmt.Sprintf("entry-%d", index)}
++			c.Config.Cmd = []string{fmt.Sprintf("argument-%d", index)}
++			wrapper := &SpecWrapper{}
++			if err := createSpec(context.Background(), c, wrapper); err != nil {
++				errors <- fmt.Errorf("container %d: %v", index, err)
++				return
++			}
++			results[index] = wrapper.s
++		}(index)
++	}
++	wait.Wait()
++	close(errors)
++	for err := range errors {
++		t.Error(err)
++	}
++	if t.Failed() {
++		return
++	}
++	for index, s := range results {
++		wantedSize := fmt.Sprintf("size=%d", int64(index+1)*1048576)
++		if got := sizeOptionsForProfileTest(mountForProfileTest(t, s.Mounts, "/dev/shm").Options); !reflect.DeepEqual(got, []string{wantedSize}) {
++			t.Errorf("container %d shared-memory options = %v", index, got)
++		}
++		if got := s.Linux.CgroupsPath; got != fmt.Sprintf("/team/%d/concurrent-%d", index, index) {
++			t.Errorf("container %d cgroup path = %q", index, got)
++		}
++		if got := s.Linux.Sysctl["sentinel.profile"]; got != fmt.Sprintf("%d", index) {
++			t.Errorf("container %d sysctl marker = %q", index, got)
++		}
++		if want := []string{fmt.Sprintf("entry-%d", index), fmt.Sprintf("argument-%d", index)}; !reflect.DeepEqual(s.Process.Args, want) {
++			t.Errorf("container %d arguments = %v, want %v", index, s.Process.Args, want)
++		}
++		if mountCountForProfileTest(s.Mounts, "/run") != 0 {
++			t.Errorf("container %d inherited the containerd mount profile", index)
++		}
++	}
++}
++
++func TestFailedSpecBuildIsAtomicAcrossStages(t *testing.T) {
++	tests := []struct {
++		name  string
++		setup func(*Container, *SpecWrapper)
++	}{
++		{
++			name: "process validation",
++			setup: func(c *Container, _ *SpecWrapper) {
++				c.HostConfig.CapAdd = []string{"NOT_A_CAPABILITY"}
++			},
++		},
++		{
++			name: "mount validation",
++			setup: func(c *Container, _ *SpecWrapper) {
++				c.Mounts = []*types.MountPoint{
++					{Source: "/one", Destination: "/duplicate", RW: true},
++					{Source: "/two", Destination: "/duplicate", RW: true},
++				}
++			},
++		},
++		{
++			name: "plugin hook validation",
++			setup: func(_ *Container, wrapper *SpecWrapper) {
++				wrapper.prioArr = []int{20, 10}
++				wrapper.argsArr = [][]string{{"/hook/only-one"}}
++			},
++		},
++	}
++
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			previous := &specs.Spec{
++				Hostname:    "previous-success",
++				Annotations: map[string]string{"generation": "previous"},
++			}
++			wrapper := &SpecWrapper{s: previous}
++			container := containerForProfileTest("failed-profile", &types.HostConfig{})
++			test.setup(container, wrapper)
++
++			before, err := json.Marshal(previous)
++			if err != nil {
++				t.Fatal(err)
++			}
++			buildErr, panicValue := tryCreateSpecForProfileTest(container, wrapper)
++			if panicValue != nil {
++				t.Fatalf("createSpec panicked for invalid input: %v", panicValue)
++			}
++			if buildErr == nil {
++				t.Fatal("createSpec accepted invalid input")
++			}
++			if wrapper.s != previous {
++				t.Fatal("failed build replaced the previously published specification")
++			}
++			after, err := json.Marshal(previous)
++			if err != nil {
++				t.Fatal(err)
++			}
++			if !reflect.DeepEqual(after, before) {
++				t.Errorf("failed build mutated the previous specification:\nbefore %s\nafter  %s", before, after)
++			}
++		})
++	}
++}
++
++func TestFailedSpecBuildLeavesEmptyWrapperUnpublished(t *testing.T) {
++	container := containerForProfileTest("failed-empty-wrapper", &types.HostConfig{
++		CapAdd: []string{"NOT_A_CAPABILITY"},
++	})
++	wrapper := &SpecWrapper{}
++	err, panicValue := tryCreateSpecForProfileTest(container, wrapper)
++	if panicValue != nil {
++		t.Fatalf("createSpec panicked for invalid input: %v", panicValue)
++	}
++	if err == nil {
++		t.Fatal("createSpec accepted an invalid capability")
++	}
++	if wrapper.s != nil {
++		t.Errorf("failed build published a partial specification: %+v", wrapper.s)
++	}
++}
++
++func TestSpecWrapperRecoversAfterFailedBuild(t *testing.T) {
++	container := containerForProfileTest("retry-after-failure", &types.HostConfig{
++		CapAdd: []string{"NOT_A_CAPABILITY"},
++	})
++	wrapper := &SpecWrapper{}
++	if err, panicValue := tryCreateSpecForProfileTest(container, wrapper); panicValue != nil || err == nil {
++		t.Fatalf("invalid first attempt returned err=%v panic=%v", err, panicValue)
++	}
++	if wrapper.s != nil {
++		t.Fatal("failed first attempt published a partial specification")
++	}
++
++	container.HostConfig.CapAdd = []string{"SYS_TIME"}
++	if err, panicValue := tryCreateSpecForProfileTest(container, wrapper); panicValue != nil || err != nil {
++		t.Fatalf("corrected attempt returned err=%v panic=%v", err, panicValue)
++	}
++	if wrapper.s == nil || wrapper.s.Process == nil || wrapper.s.Process.Capabilities == nil {
++		t.Fatal("corrected attempt did not publish a complete specification")
++	}
++	if !containsStringForProfileTest(wrapper.s.Process.Capabilities.Effective, "CAP_SYS_TIME") {
++		t.Errorf("corrected capability was not applied: %v", wrapper.s.Process.Capabilities.Effective)
++	}
++}
++
++func TestFinalHooksOwnPluginArguments(t *testing.T) {
++	high := []string{"/hook/high", "--mode", "strict"}
++	low := []string{"/hook/low", "--mode", "compat"}
++	wrapper := &SpecWrapper{
++		prioArr: []int{100, 10},
++		argsArr: [][]string{high, low},
++	}
++	container := containerForProfileTest("hook-snapshot", &types.HostConfig{})
++	if err := createSpec(context.Background(), container, wrapper); err != nil {
++		t.Fatalf("createSpec returned error: %v", err)
++	}
++	if wrapper.s == nil || wrapper.s.Hooks == nil || len(wrapper.s.Hooks.Prestart) != 2 {
++		t.Fatalf("final plugin hooks = %+v", wrapper.s)
++	}
++	if got := wrapper.s.Hooks.Prestart[0]; got.Path != "/hook/high" || !reflect.DeepEqual(got.Args, []string{"--mode", "strict"}) {
++		t.Fatalf("high-priority hook = %+v", got)
++	}
++	if got := wrapper.s.Hooks.Prestart[1]; got.Path != "/hook/low" || !reflect.DeepEqual(got.Args, []string{"--mode", "compat"}) {
++		t.Fatalf("low-priority hook = %+v", got)
++	}
++
++	high[2] = "changed-at-source"
++	if got := wrapper.s.Hooks.Prestart[0].Args[1]; got != "strict" {
++		t.Errorf("source mutation changed final hook argument to %q", got)
++	}
++	wrapper.s.Hooks.Prestart[1].Args[1] = "changed-in-spec"
++	if low[2] != "compat" {
++		t.Errorf("final hook mutation changed source argument to %q", low[2])
++	}
++}
++
++func TestRegressionOrdinaryCapabilities(t *testing.T) {
++	s := createSpecForProfileTest(t, containerForProfileTest("capability-regression", &types.HostConfig{}))
++	want := []string{
++		"CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FOWNER", "CAP_FSETID",
++		"CAP_KILL", "CAP_SETGID", "CAP_SETUID", "CAP_SETPCAP",
++		"CAP_AUDIT_WRITE", "CAP_NET_BIND_SERVICE", "CAP_NET_RAW",
++		"CAP_SYS_CHROOT", "CAP_MKNOD", "CAP_SETFCAP",
++	}
++	if s.Process == nil || s.Process.Capabilities == nil {
++		t.Fatal("ordinary container has no capability profile")
++	}
++	capabilities := s.Process.Capabilities
++	for name, got := range map[string][]string{
++		"bounding":    capabilities.Bounding,
++		"permitted":   capabilities.Permitted,
++		"inheritable": capabilities.Inheritable,
++		"effective":   capabilities.Effective,
++	} {
++		assertStringSetForProfileTest(t, name+" capabilities", got, want)
++	}
++}
++
++func TestRegressionLinuxNamespaces(t *testing.T) {
++	s := createSpecForProfileTest(t, containerForProfileTest("namespace-regression", &types.HostConfig{}))
++	var got []string
++	for _, namespace := range s.Linux.Namespaces {
++		if namespace.Path != "" {
++			t.Errorf("namespace %q unexpectedly has path %q", namespace.Type, namespace.Path)
++		}
++		got = append(got, string(namespace.Type))
++	}
++	assertStringSetForProfileTest(t, "namespaces", got, []string{"pid", "ipc", "uts", "mount", "network"})
++}
++
++func TestRegressionPrivilegedProfile(t *testing.T) {
++	s := createSpecForProfileTest(t, containerForProfileTest("privileged-regression", &types.HostConfig{Privileged: true}))
++	if s.Linux.MaskedPaths != nil || s.Linux.ReadonlyPaths != nil {
++		t.Errorf("privileged container retained protected paths: masked=%v readonly=%v", s.Linux.MaskedPaths, s.Linux.ReadonlyPaths)
++	}
++	for _, destination := range []string{"/sys", "/sys/fs/cgroup"} {
++		mount := mountForProfileTest(t, s.Mounts, destination)
++		if hasOptionForProfileTest(mount.Options, "ro") {
++			t.Errorf("privileged %s mount remained read-only: %v", destination, mount.Options)
++		}
++	}
++}
++
++func TestRegressionCgroupPathNormalization(t *testing.T) {
++	c := containerForProfileTest("container-id", &types.HostConfig{Resources: types.Resources{CgroupParent: "team/../production"}})
++	s := createSpecForProfileTest(t, c)
++	if s.Linux.CgroupsPath != "/production/container-id" {
++		t.Errorf("CgroupsPath = %q, want /production/container-id", s.Linux.CgroupsPath)
++	}
++}
++
++func TestCreateSpecUsesPouchMountSet(t *testing.T) {
++	s := createSpecForProfileTest(t, containerForProfileTest("mount-profile", &types.HostConfig{}))
++	var destinations []string
++	for _, mount := range s.Mounts {
++		destinations = append(destinations, mount.Destination)
++	}
++	assertStringSetForProfileTest(t, "mount destinations", destinations, []string{
++		"/proc", "/dev", "/dev/pts", "/sys", "/dev/mqueue", "/dev/shm", "/sys/fs/cgroup",
++	})
++	for _, destination := range []string{"/dev/shm", "/sys/fs/cgroup"} {
++		if count := mountCountForProfileTest(s.Mounts, destination); count != 1 {
++			t.Errorf("%s mount count = %d, want 1", destination, count)
++		}
++	}
++	if !hasOptionForProfileTest(mountForProfileTest(t, s.Mounts, "/sys/fs/cgroup").Options, "ro") {
++		t.Error("ordinary cgroup mount is writable")
++	}
++}
++
++func TestCreateSpecHardensProcMount(t *testing.T) {
++	s := createSpecForProfileTest(t, containerForProfileTest("proc-profile", &types.HostConfig{}))
++	proc := mountForProfileTest(t, s.Mounts, "/proc")
++	assertStringSetForProfileTest(t, "/proc options", proc.Options, []string{"nosuid", "noexec", "nodev"})
++}
++
++func TestCreateSpecDoesNotLimitDevTmpfs(t *testing.T) {
++	s := createSpecForProfileTest(t, containerForProfileTest("dev-profile", &types.HostConfig{}))
++	dev := mountForProfileTest(t, s.Mounts, "/dev")
++	if got := sizeOptionsForProfileTest(dev.Options); len(got) != 0 {
++		t.Errorf("/dev retained a size limit: %v", got)
++	}
++}
++
++func TestCreateSpecUsesExpectedProtectedPaths(t *testing.T) {
++	s := createSpecForProfileTest(t, containerForProfileTest("protection-profile", &types.HostConfig{}))
++	assertStringSetForProfileTest(t, "masked paths", s.Linux.MaskedPaths, []string{
++		"/proc/kcore", "/proc/latency_stats", "/proc/timer_list", "/proc/timer_stats", "/proc/sched_debug",
++	})
++	assertStringSetForProfileTest(t, "read-only paths", s.Linux.ReadonlyPaths, []string{
++		"/proc/asound", "/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger",
++	})
++}
++
++func TestCreateSpecBeginsWithDenyAllDevicePolicy(t *testing.T) {
++	s := createSpecForProfileTest(t, containerForProfileTest("device-policy", &types.HostConfig{}))
++	rules := s.Linux.Resources.Devices
++	if len(rules) != 8 {
++		t.Fatalf("device rule count = %d, want 8: %+v", len(rules), rules)
++	}
++	first := rules[0]
++	if first.Allow || first.Type != "" || first.Major != nil || first.Minor != nil || first.Access != "rwm" {
++		t.Errorf("first device rule is not deny-all rwm: %+v", first)
++	}
++}
++
++type profileTestDevice struct {
++	major int64
++	minor int64
++}
++
++func TestCreateSpecAllowsStandardDevices(t *testing.T) {
++	s := createSpecForProfileTest(t, containerForProfileTest("allowed-devices", &types.HostConfig{}))
++	want := map[profileTestDevice]bool{
++		{1, 3}: true, {1, 5}: true, {1, 8}: true, {1, 9}: true, {5, 0}: true, {5, 1}: true,
++	}
++	got := make(map[profileTestDevice]bool)
++	for _, rule := range s.Linux.Resources.Devices {
++		if rule.Allow && rule.Type == "c" && rule.Major != nil && rule.Minor != nil && rule.Access == "rwm" {
++			got[profileTestDevice{*rule.Major, *rule.Minor}] = true
++		}
++	}
++	if !reflect.DeepEqual(got, want) {
++		t.Errorf("allowed character devices = %v, want %v", got, want)
++	}
++}
++
++func TestCreateSpecPreservesFuseDenial(t *testing.T) {
++	s := createSpecForProfileTest(t, containerForProfileTest("fuse-policy", &types.HostConfig{}))
++	for _, rule := range s.Linux.Resources.Devices {
++		if !rule.Allow && rule.Type == "c" && rule.Major != nil && rule.Minor != nil &&
++			*rule.Major == 10 && *rule.Minor == 229 && rule.Access == "rwm" {
++			return
++		}
++	}
++	t.Error("FUSE denial is missing from the final device policy")
++}
++
++func TestPositiveSharedMemorySizeWins(t *testing.T) {
++	requested := int64(134217728)
++	s := createSpecForProfileTest(t, containerForProfileTest("custom-shm-size", &types.HostConfig{ShmSize: &requested}))
++	got := sizeOptionsForProfileTest(mountForProfileTest(t, s.Mounts, "/dev/shm").Options)
++	if !reflect.DeepEqual(got, []string{"size=134217728"}) {
++		t.Errorf("effective /dev/shm size options = %v, want the configured size only", got)
++	}
++}
++
++func TestZeroSharedMemorySizeKeepsDefault(t *testing.T) {
++	zero := int64(0)
++	s := createSpecForProfileTest(t, containerForProfileTest("zero-shm-size", &types.HostConfig{ShmSize: &zero}))
++	got := sizeOptionsForProfileTest(mountForProfileTest(t, s.Mounts, "/dev/shm").Options)
++	if !reflect.DeepEqual(got, []string{"size=65536k"}) {
++		t.Errorf("effective /dev/shm size options = %v, want the 64 MiB default", got)
++	}
++}
++
++func TestUserSharedMemoryMountPreservesBindSemantics(t *testing.T) {
++	requested := int64(134217728)
++	c := containerForProfileTest("bound-shm", &types.HostConfig{ShmSize: &requested})
++	c.Mounts = []*types.MountPoint{{
++		Source: "/custom/shm", Destination: "/dev/shm", RW: false, Propagation: RPrivatePropagationMode,
++	}}
++	s := createSpecForProfileTest(t, c)
++	if count := mountCountForProfileTest(s.Mounts, "/dev/shm"); count != 1 {
++		t.Fatalf("/dev/shm mount count = %d, want 1", count)
++	}
++	shm := mountForProfileTest(t, s.Mounts, "/dev/shm")
++	if shm.Type != "bind" || shm.Source != "/custom/shm" {
++		t.Errorf("custom /dev/shm mount = %+v", shm)
++	}
++	if !reflect.DeepEqual(shm.Options, []string{"rbind", "ro", RPrivatePropagationMode}) {
++		t.Errorf("custom /dev/shm options = %v", shm.Options)
++	}
++	if sizes := sizeOptionsForProfileTest(shm.Options); len(sizes) != 0 {
++		t.Errorf("tmpfs sizing leaked into the bind mount: %v", sizes)
++	}
++}
++
++func TestCreateSpecResultsRemainIndependent(t *testing.T) {
++	requested := int64(1048576)
++	first := createSpecForProfileTest(t, containerForProfileTest("first-created", &types.HostConfig{ShmSize: &requested}))
++	second := createSpecForProfileTest(t, containerForProfileTest("second-created", &types.HostConfig{}))
++	if got := sizeOptionsForProfileTest(mountForProfileTest(t, first.Mounts, "/dev/shm").Options); !reflect.DeepEqual(got, []string{"size=1048576"}) {
++		t.Fatalf("first container's effective shared-memory size = %v", got)
++	}
++	before, err := json.Marshal(second)
++	if err != nil {
++		t.Fatal(err)
++	}
++	first.Mounts[0].Destination = "/changed"
++	first.Mounts[0].Options[0] = "changed"
++	first.Process.Capabilities.Bounding[0] = "CHANGED_BOUNDING"
++	first.Process.Capabilities.Permitted[0] = "CHANGED_PERMITTED"
++	first.Process.Capabilities.Inheritable[0] = "CHANGED_INHERITABLE"
++	first.Process.Capabilities.Effective[0] = "CHANGED_EFFECTIVE"
++	first.Linux.MaskedPaths[0] = "/changed/masked"
++	first.Linux.ReadonlyPaths[0] = "/changed/readonly"
++	first.Linux.Namespaces[0].Type = specs.UserNamespace
++	first.Linux.Namespaces[0].Path = "/changed/namespace"
++	first.Linux.Resources.Devices[1].Allow = false
++	first.Linux.Resources.Devices[1].Access = "m"
++	*first.Linux.Resources.Devices[1].Major = 999
++	*first.Linux.Resources.Devices[1].Minor = 999
++	after, err := json.Marshal(second)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !reflect.DeepEqual(after, before) {
++		t.Errorf("modifying one final container spec changed another:\nbefore %s\nafter  %s", before, after)
++	}
++	if got := sizeOptionsForProfileTest(mountForProfileTest(t, second.Mounts, "/dev/shm").Options); !reflect.DeepEqual(got, []string{"size=65536k"}) {
++		t.Errorf("second container inherited the first container's size: %v", got)
++	}
++}
+

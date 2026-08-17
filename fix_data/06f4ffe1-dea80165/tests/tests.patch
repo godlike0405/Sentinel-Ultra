@@ -1,0 +1,777 @@
+diff --git a/src/cowrie/test/test_honeyfs_session_behavior.py b/src/cowrie/test/test_honeyfs_session_behavior.py
+new file mode 100644
+index 00000000..55b9f1bd
+--- /dev/null
++++ b/src/cowrie/test/test_honeyfs_session_behavior.py
+@@ -0,0 +1,771 @@
++# SPDX-FileCopyrightText: 2026 Michel Oosterhof <michel@oosterhof.net>
++#
++# SPDX-License-Identifier: BSD-3-Clause
++
++"""Behavioral regression coverage for session filesystem efficiency and safety."""
++
++from __future__ import annotations
++
++import gc
++import os
++import stat
++import tempfile
++import tracemalloc
++import unittest
++from pathlib import Path
++from types import SimpleNamespace
++
++from cowrie.shell import fs
++from cowrie.shell.filetransfer import SFTPServerForCowrieUser
++from cowrie.shell.protocol import HoneyPotInteractiveProtocol
++from cowrie.test.fake_server import FakeAvatar, FakeServer
++from cowrie.test.fake_transport import FakeTransport
++
++os.environ["COWRIE_HONEYPOT_DATA_PATH"] = "data"
++os.environ["COWRIE_HONEYPOT_DOWNLOAD_PATH"] = "/tmp"
++os.environ["COWRIE_SHELL_FILESYSTEM"] = "src/cowrie/data/fs.pickle"
++
++ENV_CONTENTS_PATH = "COWRIE_HONEYPOT_CONTENTS_PATH"
++
++
++class SessionIsolationBehaviorTests(unittest.TestCase):
++    def _sessions(
++        self,
++    ) -> tuple[fs.HoneyPotFilesystem, fs.HoneyPotFilesystem]:
++        first = fs.HoneyPotFilesystem("arch", "/root")
++        second = fs.HoneyPotFilesystem("arch", "/root")
++        return first, second
++
++    def test_read_only_session_memory_growth_stays_below_one_tree(self) -> None:
++        fs.HoneyPotFilesystem("arch", "/root")
++        gc.collect()
++        tracemalloc.start()
++        before = tracemalloc.take_snapshot()
++        sessions = [fs.HoneyPotFilesystem("arch", "/root") for _ in range(12)]
++        after = tracemalloc.take_snapshot()
++        tracemalloc.stop()
++        growth = sum(
++            max(0, stat.size_diff) for stat in after.compare_to(before, "filename")
++        )
++        budget = Path("src/cowrie/data/fs.pickle").stat().st_size
++        self.assertEqual(len(sessions), 12)
++        self.assertLess(growth, budget)
++
++    def test_repeated_file_creation_remains_isolated(self) -> None:
++        first, second = self._sessions()
++        first.mkfile("/tmp/cow-one", 0, 0, 0, 0o644)
++        self.assertTrue(first.exists("/tmp/cow-one"))
++        self.assertFalse(second.exists("/tmp/cow-one"))
++        first.mkfile("/tmp/cow-two", 0, 0, 0, 0o644)
++        self.assertTrue(first.exists("/tmp/cow-two"))
++        self.assertFalse(second.exists("/tmp/cow-two"))
++
++    def test_directory_creation_is_private(self) -> None:
++        first, second = self._sessions()
++        first.mkdir("/tmp/cow-dir", 0, 0, 4096, 0o755)
++        self.assertTrue(first.isdir("/tmp/cow-dir"))
++        self.assertFalse(second.exists("/tmp/cow-dir"))
++
++    def test_file_removal_is_private(self) -> None:
++        first, second = self._sessions()
++        first.remove("/etc/passwd")
++        self.assertFalse(first.exists("/etc/passwd"))
++        self.assertTrue(second.exists("/etc/passwd"))
++
++    def test_rename_is_private(self) -> None:
++        first, second = self._sessions()
++        first.rename("/bin/ls", "/tmp/cow-ls")
++        self.assertFalse(first.exists("/bin/ls"))
++        self.assertTrue(first.exists("/tmp/cow-ls"))
++        self.assertTrue(second.exists("/bin/ls"))
++        self.assertFalse(second.exists("/tmp/cow-ls"))
++
++    def test_chmod_is_private(self) -> None:
++        first, second = self._sessions()
++        original = second.stat("/etc/passwd").st_mode
++        first.chmod("/etc/passwd", 0o600)
++        self.assertEqual(first.stat("/etc/passwd").st_mode & 0o777, 0o600)
++        self.assertEqual(second.stat("/etc/passwd").st_mode, original)
++
++    def test_chown_is_private(self) -> None:
++        first, second = self._sessions()
++        original = second.stat("/etc/passwd")
++        first.chown("/etc/passwd", 123, 456)
++        changed = first.stat("/etc/passwd")
++        unchanged = second.stat("/etc/passwd")
++        self.assertEqual((changed.st_uid, changed.st_gid), (123, 456))
++        self.assertEqual(
++            (unchanged.st_uid, unchanged.st_gid),
++            (original.st_uid, original.st_gid),
++        )
++
++    def test_timestamp_update_is_private(self) -> None:
++        first, second = self._sessions()
++        original = second.stat("/etc/passwd").st_mtime
++        first.utime("/etc/passwd", 100.0, 123456.0)
++        self.assertEqual(first.stat("/etc/passwd").st_mtime, 123456.0)
++        self.assertEqual(second.stat("/etc/passwd").st_mtime, original)
++
++    def test_size_update_is_private(self) -> None:
++        first, second = self._sessions()
++        original = second.stat("/etc/passwd").st_size
++        first.update_size("/etc/passwd", original + 37)
++        self.assertEqual(first.stat("/etc/passwd").st_size, original + 37)
++        self.assertEqual(second.stat("/etc/passwd").st_size, original)
++
++    def test_real_file_initialization_is_private(self) -> None:
++        first, second = self._sessions()
++        with tempfile.TemporaryDirectory() as tempdir:
++            etc = Path(tempdir) / "etc"
++            etc.mkdir()
++            real_passwd = etc / "passwd"
++            real_passwd.write_bytes(b"operator override")
++            first.init_honeyfs(tempdir)
++            self.assertEqual(first.file_contents("/etc/passwd"), b"operator override")
++            self.assertNotEqual(
++                second.file_contents("/etc/passwd"), b"operator override"
++            )
++
++
++class OperatorContentsBehaviorTests(unittest.TestCase):
++    def setUp(self) -> None:
++        self._prior_contents_path = os.environ.get(ENV_CONTENTS_PATH)
++        self.addCleanup(self._restore_contents_path)
++
++    def _restore_contents_path(self) -> None:
++        if self._prior_contents_path is None:
++            os.environ.pop(ENV_CONTENTS_PATH, None)
++        else:
++            os.environ[ENV_CONTENTS_PATH] = self._prior_contents_path
++
++    def _contents_directory(self, root: str, contents: bytes) -> str:
++        etc = Path(root) / "etc"
++        etc.mkdir()
++        (etc / "passwd").write_bytes(contents)
++        return root
++
++    def _contents_with_new_paths(
++        self, root: str, label: str, file_count: int = 6
++    ) -> tuple[str, list[tuple[str, bytes]]]:
++        self._contents_directory(root, f"operator-passwd-{label}".encode())
++        virtual_files: list[tuple[str, bytes]] = []
++        nested = Path(root) / "operator-only" / label / "nested"
++        nested.mkdir(parents=True)
++        for index in range(file_count):
++            contents = f"{label}-file-{index}".encode()
++            (nested / f"file-{index}.txt").write_bytes(contents)
++            virtual_files.append(
++                (f"/operator-only/{label}/nested/file-{index}.txt", contents)
++            )
++        return root, virtual_files
++
++    def test_configured_read_only_sessions_stay_within_memory_budget(self) -> None:
++        with tempfile.TemporaryDirectory() as tempdir:
++            os.environ[ENV_CONTENTS_PATH] = self._contents_directory(
++                tempdir, b"operator-passwd"
++            )
++            warm = fs.HoneyPotFilesystem("arch", "/root")
++            self.assertEqual(warm.file_contents("/etc/passwd"), b"operator-passwd")
++            gc.collect()
++            tracemalloc.start()
++            before = tracemalloc.take_snapshot()
++            sessions = [fs.HoneyPotFilesystem("arch", "/root") for _ in range(12)]
++            after = tracemalloc.take_snapshot()
++            tracemalloc.stop()
++            growth = sum(
++                max(0, stat.size_diff) for stat in after.compare_to(before, "filename")
++            )
++            budget = Path("src/cowrie/data/fs.pickle").stat().st_size
++            self.assertEqual(len(sessions), 12)
++            self.assertLess(growth, budget)
++
++    def test_distinct_contents_directories_stay_within_memory_budget(self) -> None:
++        with tempfile.TemporaryDirectory() as tempdir:
++            configurations: list[tuple[str, bytes]] = []
++            for index in range(13):
++                contents = f"operator-passwd-{index}".encode()
++                root = Path(tempdir) / f"configuration-{index}"
++                root.mkdir()
++                configurations.append(
++                    (self._contents_directory(str(root), contents), contents)
++                )
++
++            os.environ[ENV_CONTENTS_PATH] = configurations[0][0]
++            warm = fs.HoneyPotFilesystem("arch", "/root")
++            self.assertEqual(warm.file_contents("/etc/passwd"), configurations[0][1])
++
++            gc.collect()
++            tracemalloc.start()
++            before = tracemalloc.take_snapshot()
++            sessions: list[fs.HoneyPotFilesystem] = []
++            for contents_path, _contents in configurations[1:]:
++                os.environ[ENV_CONTENTS_PATH] = contents_path
++                sessions.append(fs.HoneyPotFilesystem("arch", "/root"))
++            after = tracemalloc.take_snapshot()
++            tracemalloc.stop()
++
++            growth = sum(
++                max(0, stat.size_diff) for stat in after.compare_to(before, "filename")
++            )
++            budget = Path("src/cowrie/data/fs.pickle").stat().st_size
++            self.assertEqual(
++                [session.file_contents("/etc/passwd") for session in sessions],
++                [contents for _path, contents in configurations[1:]],
++            )
++            self.assertLess(growth, budget)
++
++    def test_sparse_mutations_across_distinct_views_stay_within_memory_budget(
++        self,
++    ) -> None:
++        with tempfile.TemporaryDirectory() as tempdir:
++            configurations: list[tuple[str, bytes]] = []
++            for index in range(13):
++                contents = f"operator-passwd-{index}".encode()
++                root = Path(tempdir) / f"configuration-{index}"
++                root.mkdir()
++                configurations.append(
++                    (self._contents_directory(str(root), contents), contents)
++                )
++
++            os.environ[ENV_CONTENTS_PATH] = configurations[0][0]
++            warm = fs.HoneyPotFilesystem("arch", "/root")
++            self.assertEqual(warm.file_contents("/etc/passwd"), configurations[0][1])
++
++            gc.collect()
++            tracemalloc.start()
++            before = tracemalloc.take_snapshot()
++            sessions: list[tuple[fs.HoneyPotFilesystem, int, bytes, int]] = []
++            for index, (contents_path, contents) in enumerate(
++                configurations[1:], start=1
++            ):
++                os.environ[ENV_CONTENTS_PATH] = contents_path
++                session = fs.HoneyPotFilesystem("arch", "/root")
++                mode = 0o600 | (index % 8)
++                session.mkfile(f"/tmp/session-{index}", 0, 0, 0, 0o640)
++                session.chmod("/etc/passwd", mode)
++                session.rename("/bin/ls", f"/tmp/ls-{index}")
++                sessions.append((session, index, contents, mode))
++            after = tracemalloc.take_snapshot()
++            tracemalloc.stop()
++
++            growth = sum(
++                max(0, stat.size_diff) for stat in after.compare_to(before, "filename")
++            )
++            budget = Path("src/cowrie/data/fs.pickle").stat().st_size
++            for session, index, contents, mode in sessions:
++                other_index = 1 + (index % len(sessions))
++                self.assertEqual(session.file_contents("/etc/passwd"), contents)
++                self.assertEqual(session.stat("/etc/passwd").st_mode & 0o777, mode)
++                self.assertTrue(session.exists(f"/tmp/session-{index}"))
++                self.assertTrue(session.exists(f"/tmp/ls-{index}"))
++                self.assertFalse(session.exists("/bin/ls"))
++                self.assertFalse(session.exists(f"/tmp/session-{other_index}"))
++                self.assertFalse(session.exists(f"/tmp/ls-{other_index}"))
++            self.assertEqual(len(sessions), 12)
++            self.assertLess(growth, budget)
++
++    def test_operator_only_paths_stay_isolated_within_memory_budget(self) -> None:
++        with tempfile.TemporaryDirectory() as tempdir:
++            configurations: list[tuple[str, list[tuple[str, bytes]]]] = []
++            for index in range(13):
++                root = Path(tempdir) / f"configuration-{index}"
++                root.mkdir()
++                configurations.append(
++                    self._contents_with_new_paths(str(root), f"view-{index}")
++                )
++
++            os.environ[ENV_CONTENTS_PATH] = configurations[0][0]
++            warm = fs.HoneyPotFilesystem("arch", "/root")
++            for virtual_path, contents in configurations[0][1]:
++                self.assertEqual(warm.file_contents(virtual_path), contents)
++
++            gc.collect()
++            tracemalloc.start()
++            before = tracemalloc.take_snapshot()
++            sessions: list[fs.HoneyPotFilesystem] = []
++            for contents_path, _virtual_files in configurations[1:]:
++                os.environ[ENV_CONTENTS_PATH] = contents_path
++                sessions.append(fs.HoneyPotFilesystem("arch", "/root"))
++            after = tracemalloc.take_snapshot()
++            tracemalloc.stop()
++
++            growth = sum(
++                max(0, stat.size_diff) for stat in after.compare_to(before, "filename")
++            )
++            budget = Path("src/cowrie/data/fs.pickle").stat().st_size
++            for index, (session, (_path, virtual_files)) in enumerate(
++                zip(sessions, configurations[1:], strict=False), start=1
++            ):
++                for virtual_path, contents in virtual_files:
++                    self.assertEqual(session.file_contents(virtual_path), contents)
++                other_path = configurations[1 + (index % len(sessions))][1][0][0]
++                self.assertFalse(session.exists(other_path))
++            self.assertEqual(len(sessions), 12)
++            self.assertLess(growth, budget)
++
++    def test_reapplying_contents_replaces_the_previous_overlay(self) -> None:
++        with tempfile.TemporaryDirectory() as tempdir:
++            os.environ.pop(ENV_CONTENTS_PATH, None)
++            bundled_passwd = fs.HoneyPotFilesystem("arch", "/root").file_contents(
++                "/etc/passwd"
++            )
++
++            first_root = Path(tempdir) / "first"
++            first_root.mkdir()
++            first_path, first_files = self._contents_with_new_paths(
++                str(first_root), "first", file_count=1
++            )
++            second_root = Path(tempdir) / "second"
++            second_root.mkdir()
++            second_nested = second_root / "operator-only" / "second" / "nested"
++            second_nested.mkdir(parents=True)
++            second_contents = b"second-only-file"
++            (second_nested / "only.txt").write_bytes(second_contents)
++            second_virtual_path = "/operator-only/second/nested/only.txt"
++
++            os.environ[ENV_CONTENTS_PATH] = first_path
++            changing = fs.HoneyPotFilesystem("arch", "/root")
++            unchanged = fs.HoneyPotFilesystem("arch", "/root")
++            changing.mkfile("/tmp/session-file", 0, 0, 0, 0o640)
++
++            changing.init_honeyfs(str(second_root))
++
++            self.assertEqual(changing.file_contents("/etc/passwd"), bundled_passwd)
++            self.assertFalse(changing.exists(first_files[0][0]))
++            self.assertEqual(
++                changing.file_contents(second_virtual_path), second_contents
++            )
++            self.assertTrue(changing.exists("/tmp/session-file"))
++            self.assertEqual(
++                unchanged.file_contents("/etc/passwd"), b"operator-passwd-first"
++            )
++            self.assertEqual(
++                unchanged.file_contents(first_files[0][0]), first_files[0][1]
++            )
++            self.assertFalse(unchanged.exists(second_virtual_path))
++
++    def test_operator_snapshots_merge_without_overwriting_session_changes(self) -> None:
++        with tempfile.TemporaryDirectory() as tempdir:
++            root = Path(tempdir)
++            outside = root / "outside.txt"
++            outside.write_bytes(b"outside")
++            first = root / "first"
++            second = root / "second"
++
++            (first / "etc").mkdir(parents=True)
++            (first / "etc" / "passwd").write_bytes(b"first-passwd")
++            (first / "etc" / "passwd").chmod(0o640)
++            (first / "etc" / "issue").write_bytes(b"first-issue")
++            (first / "operator-only").mkdir()
++            (first / "operator-only" / "moved.txt").write_bytes(b"move-me")
++            (first / "operator-only" / "deleted.txt").write_bytes(b"delete-me")
++            (first / "operator-only" / "replaced.txt").write_bytes(b"replace-me")
++            (first / "operator-only" / "external.txt").symlink_to(outside)
++
++            (second / "etc").mkdir(parents=True)
++            (second / "etc" / "passwd").write_bytes(b"second-passwd")
++            (second / "etc" / "passwd").chmod(0o604)
++            (second / "operator-only").mkdir()
++            (second / "operator-only" / "new.txt").write_bytes(b"operator-new")
++            (second / "operator-only" / "deleted.txt").write_bytes(b"operator-restored")
++            (second / "operator-only" / "replaced.txt").write_bytes(
++                b"operator-replacement"
++            )
++
++            os.environ.pop(ENV_CONTENTS_PATH, None)
++            bundled_issue = fs.HoneyPotFilesystem("arch", "/root").file_contents(
++                "/etc/issue"
++            )
++            os.environ[ENV_CONTENTS_PATH] = str(first)
++            changing = fs.HoneyPotFilesystem("arch", "/root")
++            unchanged = fs.HoneyPotFilesystem("arch", "/root")
++
++            self.assertFalse(changing.exists("/operator-only/external.txt"))
++            (first / "etc" / "passwd").write_bytes(b"changed-on-host")
++            (first / "etc" / "passwd").chmod(0o777)
++            (first / "operator-only" / "moved.txt").unlink()
++            self.assertEqual(changing.file_contents("/etc/passwd"), b"first-passwd")
++            self.assertEqual(unchanged.file_contents("/etc/passwd"), b"first-passwd")
++            self.assertEqual(changing.stat("/etc/passwd").st_mode & 0o777, 0o640)
++            self.assertEqual(unchanged.stat("/etc/passwd").st_mode & 0o777, 0o640)
++
++            changing.chmod("/etc/passwd", 0o600)
++            changing.rename("/operator-only/moved.txt", "/tmp/moved.txt")
++            changing.remove("/operator-only/deleted.txt")
++            changing.mkfile("/operator-only/new.txt", 0, 0, 37, 0o640)
++            changing.mkfile("/operator-only/replaced.txt", 0, 0, 41, 0o620)
++            changing.init_honeyfs(str(second))
++
++            self.assertEqual(changing.file_contents("/etc/passwd"), b"first-passwd")
++            self.assertEqual(changing.stat("/etc/passwd").st_mode & 0o777, 0o600)
++            self.assertEqual(changing.file_contents("/tmp/moved.txt"), b"move-me")
++            self.assertFalse(changing.exists("/operator-only/moved.txt"))
++            self.assertFalse(changing.exists("/operator-only/deleted.txt"))
++            self.assertEqual(changing.stat("/operator-only/new.txt").st_size, 37)
++            self.assertEqual(changing.stat("/operator-only/replaced.txt").st_size, 41)
++            self.assertEqual(changing.file_contents("/etc/issue"), bundled_issue)
++
++            changing.init_honeyfs(str(second))
++            self.assertFalse(changing.exists("/operator-only/deleted.txt"))
++            self.assertEqual(changing.file_contents("/tmp/moved.txt"), b"move-me")
++            self.assertEqual(changing.stat("/operator-only/new.txt").st_size, 37)
++            self.assertEqual(changing.stat("/operator-only/replaced.txt").st_size, 41)
++
++            self.assertEqual(unchanged.file_contents("/etc/passwd"), b"first-passwd")
++            self.assertEqual(
++                unchanged.file_contents("/operator-only/moved.txt"), b"move-me"
++            )
++            self.assertEqual(
++                unchanged.file_contents("/operator-only/deleted.txt"), b"delete-me"
++            )
++
++            os.environ[ENV_CONTENTS_PATH] = str(second)
++            later = fs.HoneyPotFilesystem("arch", "/root")
++            self.assertEqual(later.file_contents("/etc/passwd"), b"second-passwd")
++            self.assertEqual(later.stat("/etc/passwd").st_mode & 0o777, 0o604)
++            self.assertEqual(
++                later.file_contents("/operator-only/new.txt"), b"operator-new"
++            )
++            self.assertEqual(
++                later.file_contents("/operator-only/deleted.txt"),
++                b"operator-restored",
++            )
++
++    def test_large_operator_snapshot_is_shared_within_memory_budget(self) -> None:
++        with tempfile.TemporaryDirectory() as tempdir:
++            payload = b"snapshot-data-" * 40000
++            configured = Path(tempdir) / "etc" / "passwd"
++            configured.parent.mkdir()
++            configured.write_bytes(payload)
++            os.environ[ENV_CONTENTS_PATH] = tempdir
++
++            warm = fs.HoneyPotFilesystem("arch", "/root")
++            self.assertEqual(warm.file_contents("/etc/passwd"), payload)
++            gc.collect()
++            tracemalloc.start()
++            before = tracemalloc.take_snapshot()
++            sessions = [fs.HoneyPotFilesystem("arch", "/root") for _ in range(12)]
++            after = tracemalloc.take_snapshot()
++            tracemalloc.stop()
++
++            growth = sum(
++                max(0, stat.size_diff) for stat in after.compare_to(before, "filename")
++            )
++            budget = Path("src/cowrie/data/fs.pickle").stat().st_size
++            configured.unlink()
++            self.assertEqual(len(sessions), 12)
++            self.assertLess(growth, budget)
++            self.assertEqual(warm.file_contents("/etc/passwd"), payload)
++            self.assertTrue(
++                all(
++                    session.file_contents("/etc/passwd") == payload
++                    for session in sessions
++                )
++            )
++
++    def test_changing_contents_directory_uses_current_operator_files(self) -> None:
++        with (
++            tempfile.TemporaryDirectory() as first_dir,
++            tempfile.TemporaryDirectory() as second_dir,
++        ):
++            os.environ[ENV_CONTENTS_PATH] = self._contents_directory(
++                first_dir, b"first-operator-file"
++            )
++            first = fs.HoneyPotFilesystem("arch", "/root")
++            os.environ[ENV_CONTENTS_PATH] = self._contents_directory(
++                second_dir, b"second-operator-file"
++            )
++            second = fs.HoneyPotFilesystem("arch", "/root")
++            self.assertEqual(first.file_contents("/etc/passwd"), b"first-operator-file")
++            self.assertEqual(
++                second.file_contents("/etc/passwd"), b"second-operator-file"
++            )
++
++    def test_operator_backing_moves_only_with_its_session(self) -> None:
++        with (
++            tempfile.TemporaryDirectory() as first_dir,
++            tempfile.TemporaryDirectory() as second_dir,
++        ):
++            os.environ[ENV_CONTENTS_PATH] = self._contents_directory(
++                first_dir, b"first-operator-file"
++            )
++            first = fs.HoneyPotFilesystem("arch", "/root")
++            os.environ[ENV_CONTENTS_PATH] = self._contents_directory(
++                second_dir, b"second-operator-file"
++            )
++            second = fs.HoneyPotFilesystem("arch", "/root")
++
++            first.rename("/etc/passwd", "/tmp/operator-passwd")
++
++            self.assertFalse(first.exists("/etc/passwd"))
++            self.assertEqual(
++                first.file_contents("/tmp/operator-passwd"), b"first-operator-file"
++            )
++            self.assertEqual(
++                second.file_contents("/etc/passwd"), b"second-operator-file"
++            )
++            self.assertFalse(second.exists("/tmp/operator-passwd"))
++
++    def test_configured_sessions_remain_isolated_after_mutation(self) -> None:
++        with tempfile.TemporaryDirectory() as tempdir:
++            os.environ[ENV_CONTENTS_PATH] = self._contents_directory(
++                tempdir, b"operator-passwd"
++            )
++            first = fs.HoneyPotFilesystem("arch", "/root")
++            second = fs.HoneyPotFilesystem("arch", "/root")
++            original_mode = second.stat("/etc/passwd").st_mode
++            first.chmod("/etc/passwd", 0o600)
++            first.remove("/etc/passwd")
++            self.assertFalse(first.exists("/etc/passwd"))
++            self.assertTrue(second.exists("/etc/passwd"))
++            self.assertEqual(second.stat("/etc/passwd").st_mode, original_mode)
++            self.assertEqual(second.file_contents("/etc/passwd"), b"operator-passwd")
++
++
++class PathWalkerBehaviorTests(unittest.TestCase):
++    def setUp(self) -> None:
++        self.filesystem = fs.HoneyPotFilesystem("arch", "/root")
++
++    def test_empty_path_refers_to_root(self) -> None:
++        self.assertTrue(stat.S_ISDIR(self.filesystem.stat("").st_mode))
++        self.assertEqual(self.filesystem.listdir(""), self.filesystem.listdir("/"))
++
++    def test_only_separators_refer_to_root(self) -> None:
++        self.assertTrue(stat.S_ISDIR(self.filesystem.stat("////").st_mode))
++        self.assertEqual(self.filesystem.listdir("////"), self.filesystem.listdir("/"))
++
++    def test_repeated_internal_separators_are_ignored(self) -> None:
++        repeated = self.filesystem.stat("/etc//passwd")
++        regular = self.filesystem.stat("/etc/passwd")
++        self.assertEqual(
++            (repeated.st_mode, repeated.st_size),
++            (regular.st_mode, regular.st_size),
++        )
++        self.assertEqual(
++            self.filesystem.file_contents("/etc//passwd"),
++            self.filesystem.file_contents("/etc/passwd"),
++        )
++
++    def test_terminal_symlink_is_followed_by_default(self) -> None:
++        self.assertEqual(
++            self.filesystem.listdir("/bin"), self.filesystem.listdir("/usr/bin")
++        )
++        self.assertTrue(stat.S_ISDIR(self.filesystem.stat("/bin").st_mode))
++
++    def test_terminal_symlink_can_be_returned_without_following(self) -> None:
++        self.assertTrue(stat.S_ISLNK(self.filesystem.lstat("/bin").st_mode))
++        self.assertFalse(stat.S_ISLNK(self.filesystem.stat("/bin").st_mode))
++
++    def test_intermediate_directory_symlink_is_followed(self) -> None:
++        through_link = self.filesystem.stat("/bin/ls")
++        direct = self.filesystem.stat("/usr/bin/ls")
++        self.assertTrue(stat.S_ISREG(through_link.st_mode))
++        self.assertEqual(
++            (through_link.st_mode, through_link.st_size),
++            (direct.st_mode, direct.st_size),
++        )
++
++    def test_broken_symlink_resolves_as_missing(self) -> None:
++        self.assertTrue(self.filesystem.lexists("/dev/stderr"))
++        self.assertFalse(self.filesystem.exists("/dev/stderr"))
++
++    def test_descent_through_file_resolves_as_missing(self) -> None:
++        self.assertFalse(self.filesystem.exists("/etc/passwd/child"))
++
++    def test_contents_lookup_returns_file_bytes(self) -> None:
++        contents = self.filesystem.get_path("/etc/passwd")
++        self.assertIsInstance(contents, bytes)
++        self.assertEqual(contents, self.filesystem.file_contents("/etc/passwd"))
++
++    def test_contents_lookup_follows_directory_symlink(self) -> None:
++        self.assertEqual(
++            self.filesystem.listdir("/var/run"), self.filesystem.listdir("/run")
++        )
++
++    def test_contents_lookup_rejects_descent_through_file(self) -> None:
++        with self.assertRaises(fs.FileNotFound):
++            self.filesystem.get_path("/etc/passwd/child")
++
++    def test_contents_lookup_rejects_missing_path(self) -> None:
++        with self.assertRaises(fs.FileNotFound):
++            self.filesystem.get_path("/missing")
++
++
++class FilesystemRenameBehaviorTests(unittest.TestCase):
++    def test_rename_replaces_destination_in_same_directory(self) -> None:
++        filesystem = fs.HoneyPotFilesystem("arch", "/root")
++        filesystem.mkfile("/tmp/source", 0, 0, 10, 0o644)
++        filesystem.mkfile("/tmp/destination", 0, 0, 20, 0o600)
++        filesystem.rename("/tmp/source", "/tmp/destination")
++        self.assertFalse(filesystem.exists("/tmp/source"))
++        self.assertEqual(filesystem.listdir("/tmp").count("destination"), 1)
++        self.assertEqual(filesystem.stat("/tmp/destination").st_size, 10)
++
++    def test_rename_replaces_destination_across_directories(self) -> None:
++        filesystem = fs.HoneyPotFilesystem("arch", "/root")
++        filesystem.mkfile("/tmp/source", 0, 0, 10, 0o644)
++        filesystem.mkfile("/root/destination", 0, 0, 20, 0o600)
++        filesystem.rename("/tmp/source", "/root/destination")
++        self.assertFalse(filesystem.exists("/tmp/source"))
++        self.assertEqual(filesystem.listdir("/root").count("destination"), 1)
++        self.assertEqual(filesystem.stat("/root/destination").st_size, 10)
++
++
++class PublicInterfaceBehaviorTests(unittest.TestCase):
++    def _shell(
++        self, server: FakeServer | None = None
++    ) -> tuple[HoneyPotInteractiveProtocol, FakeTransport]:
++        proto = HoneyPotInteractiveProtocol(FakeAvatar(server or FakeServer()))
++        transport = FakeTransport("", "31337")
++        proto.makeConnection(transport)
++        transport.clear()
++        self.addCleanup(proto.connectionLost)
++        return proto, transport
++
++    def _sftp(self, filesystem: fs.HoneyPotFilesystem) -> SFTPServerForCowrieUser:
++        server = SFTPServerForCowrieUser.__new__(SFTPServerForCowrieUser)
++        server.fs = filesystem
++        server.avatar = SimpleNamespace(home="/root")
++        return server
++
++    def test_shell_mv_overwrites_an_existing_destination(self) -> None:
++        proto, _transport = self._shell()
++        proto.fs.mkfile("/tmp/mv-source", 0, 0, 10, 0o644)
++        proto.fs.mkfile("/tmp/mv-destination", 0, 0, 20, 0o600)
++        proto.lineReceived(b"mv /tmp/mv-source /tmp/mv-destination\n")
++        self.assertFalse(proto.fs.exists("/tmp/mv-source"))
++        self.assertEqual(proto.fs.listdir("/tmp").count("mv-destination"), 1)
++        self.assertEqual(proto.fs.stat("/tmp/mv-destination").st_size, 10)
++
++    def test_shell_mv_overwrites_across_directories(self) -> None:
++        proto, _transport = self._shell()
++        proto.fs.mkfile("/tmp/mv-source", 0, 0, 10, 0o644)
++        proto.fs.mkfile("/root/mv-destination", 0, 0, 20, 0o600)
++        proto.lineReceived(b"mv /tmp/mv-source /root/mv-destination\n")
++        self.assertFalse(proto.fs.exists("/tmp/mv-source"))
++        self.assertEqual(proto.fs.listdir("/root").count("mv-destination"), 1)
++        self.assertEqual(proto.fs.stat("/root/mv-destination").st_size, 10)
++
++    def test_shell_mv_into_directory_replaces_same_named_entry(self) -> None:
++        proto, _transport = self._shell()
++        proto.fs.mkfile("/tmp/mv-source", 0, 0, 10, 0o644)
++        proto.fs.mkdir("/tmp/mv-target", 0, 0, 4096, 0o755)
++        proto.fs.mkfile("/tmp/mv-target/mv-source", 0, 0, 20, 0o600)
++        proto.lineReceived(b"mv /tmp/mv-source /tmp/mv-target\n")
++        self.assertFalse(proto.fs.exists("/tmp/mv-source"))
++        self.assertEqual(proto.fs.listdir("/tmp/mv-target").count("mv-source"), 1)
++        self.assertEqual(proto.fs.stat("/tmp/mv-target/mv-source").st_size, 10)
++
++    def test_shell_rm_detaches_only_the_active_session(self) -> None:
++        first_server = FakeServer()
++        second_server = FakeServer()
++        proto, _transport = self._shell(first_server)
++        proto.lineReceived(b"rm /etc/passwd\n")
++        self.assertFalse(first_server.fs.exists("/etc/passwd"))
++        self.assertTrue(second_server.fs.exists("/etc/passwd"))
++
++    def test_shell_cp_detaches_only_the_active_session(self) -> None:
++        first_server = FakeServer()
++        second_server = FakeServer()
++        proto, _transport = self._shell(first_server)
++        proto.lineReceived(b"cp /etc/passwd /tmp/passwd-copy\n")
++        self.assertTrue(first_server.fs.exists("/tmp/passwd-copy"))
++        self.assertFalse(second_server.fs.exists("/tmp/passwd-copy"))
++
++    def test_shell_chmod_does_not_affect_other_session(self) -> None:
++        first_server = FakeServer()
++        second_server = FakeServer()
++        original = second_server.fs.stat("/etc/passwd").st_mode
++        proto, _transport = self._shell(first_server)
++        proto.lineReceived(b"chmod 0600 /etc/passwd\n")
++        self.assertEqual(first_server.fs.stat("/etc/passwd").st_mode & 0o777, 0o600)
++        self.assertEqual(second_server.fs.stat("/etc/passwd").st_mode, original)
++
++    def test_shell_rmdir_detaches_only_the_active_session(self) -> None:
++        first_server = FakeServer()
++        second_server = FakeServer()
++        proto, _transport = self._shell(first_server)
++        proto.lineReceived(b"rmdir /tmp\n")
++        self.assertFalse(first_server.fs.exists("/tmp"))
++        self.assertTrue(second_server.fs.isdir("/tmp"))
++
++    def test_sftp_rename_overwrites_an_existing_destination(self) -> None:
++        filesystem = fs.HoneyPotFilesystem("arch", "/root")
++        filesystem.mkfile("/tmp/sftp-source", 0, 0, 11, 0o644)
++        filesystem.mkfile("/tmp/sftp-destination", 0, 0, 22, 0o600)
++        self._sftp(filesystem).renameFile("/tmp/sftp-source", "/tmp/sftp-destination")
++        self.assertFalse(filesystem.exists("/tmp/sftp-source"))
++        self.assertEqual(filesystem.listdir("/tmp").count("sftp-destination"), 1)
++        self.assertEqual(filesystem.stat("/tmp/sftp-destination").st_size, 11)
++
++    def test_sftp_rename_overwrites_across_directories(self) -> None:
++        filesystem = fs.HoneyPotFilesystem("arch", "/root")
++        filesystem.mkfile("/tmp/sftp-source", 0, 0, 11, 0o644)
++        filesystem.mkfile("/root/sftp-destination", 0, 0, 22, 0o600)
++        self._sftp(filesystem).renameFile("/tmp/sftp-source", "/root/sftp-destination")
++        self.assertFalse(filesystem.exists("/tmp/sftp-source"))
++        self.assertEqual(filesystem.listdir("/root").count("sftp-destination"), 1)
++        self.assertEqual(filesystem.stat("/root/sftp-destination").st_size, 11)
++
++    def test_rename_type_safety_and_failure_atomicity_contract(self) -> None:
++        filesystem = fs.HoneyPotFilesystem("arch", "/root")
++
++        filesystem.mkfile("/tmp/file-source", 0, 0, 10, 0o644)
++        filesystem.mkdir("/tmp/directory-destination", 0, 0, 4096, 0o755)
++        with self.assertRaises(OSError):
++            filesystem.rename("/tmp/file-source", "/tmp/directory-destination")
++        self.assertTrue(filesystem.isfile("/tmp/file-source"))
++        self.assertTrue(filesystem.isdir("/tmp/directory-destination"))
++
++        filesystem.mkdir("/tmp/directory-source", 0, 0, 4096, 0o755)
++        filesystem.mkfile("/tmp/file-destination", 0, 0, 20, 0o600)
++        with self.assertRaises(OSError):
++            filesystem.rename("/tmp/directory-source", "/tmp/file-destination")
++        self.assertTrue(filesystem.isdir("/tmp/directory-source"))
++        self.assertTrue(filesystem.isfile("/tmp/file-destination"))
++
++        filesystem.mkdir("/tmp/tree-source", 0, 0, 4096, 0o755)
++        filesystem.mkfile("/tmp/tree-source/child", 0, 0, 7, 0o640)
++        filesystem.mkdir("/tmp/nonempty-target", 0, 0, 4096, 0o755)
++        filesystem.mkfile("/tmp/nonempty-target/keep", 0, 0, 9, 0o640)
++        with self.assertRaises(OSError):
++            self._sftp(filesystem).renameFile(
++                "/tmp/tree-source", "/tmp/nonempty-target"
++            )
++        self.assertTrue(filesystem.exists("/tmp/tree-source/child"))
++        self.assertTrue(filesystem.exists("/tmp/nonempty-target/keep"))
++
++        filesystem.mkdir("/tmp/tree-source/descendant", 0, 0, 4096, 0o755)
++        with self.assertRaises(OSError):
++            filesystem.rename("/tmp/tree-source", "/tmp/tree-source/descendant/moved")
++        self.assertTrue(filesystem.exists("/tmp/tree-source/child"))
++        self.assertTrue(filesystem.isdir("/tmp/tree-source/descendant"))
++
++        filesystem.mkdir("/tmp/empty-target", 0, 0, 4096, 0o755)
++        filesystem.rename("/tmp/tree-source", "/tmp/empty-target")
++        self.assertFalse(filesystem.exists("/tmp/tree-source"))
++        self.assertTrue(filesystem.exists("/tmp/empty-target/child"))
++        self.assertTrue(filesystem.isdir("/tmp/empty-target/descendant"))
++
++        proto, _transport = self._shell()
++        proto.fs.mkdir("/tmp/shell-tree", 0, 0, 4096, 0o755)
++        proto.fs.mkfile("/tmp/shell-tree/child", 0, 0, 3, 0o640)
++        proto.fs.mkdir("/tmp/shell-tree/descendant", 0, 0, 4096, 0o755)
++        with self.assertRaises(OSError):
++            proto.lineReceived(b"mv /tmp/shell-tree /tmp/shell-tree/descendant/moved\n")
++        self.assertTrue(proto.fs.exists("/tmp/shell-tree/child"))
++        self.assertTrue(proto.fs.isdir("/tmp/shell-tree/descendant"))
++
++    def test_sftp_remove_detaches_only_the_active_session(self) -> None:
++        first = fs.HoneyPotFilesystem("arch", "/root")
++        second = fs.HoneyPotFilesystem("arch", "/root")
++        self._sftp(first).removeFile("/etc/passwd")
++        self.assertFalse(first.exists("/etc/passwd"))
++        self.assertTrue(second.exists("/etc/passwd"))
++
++    def test_missing_rename_and_remove_sources_raise_oserror(self) -> None:
++        first = fs.HoneyPotFilesystem("arch", "/root")
++        with self.assertRaises(OSError):
++            first.rename("/tmp/does-not-exist", "/tmp/new-name")
++        with self.assertRaises(OSError):
++            self._sftp(first).removeFile("/tmp/does-not-exist")

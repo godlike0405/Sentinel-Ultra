@@ -1,0 +1,45 @@
+schema_version = "1.3"
+
+[metadata]
+pass_at_k_gpt_5_5 = "4/4"
+author_name = "anonymous"
+author_email = "anonymous@snorkel.ai"
+# --- swe_ultra_requirements §4 field names ---
+category = "implementation"
+subcategory = "refactor"
+coding_language = "python"
+repo_name = "cowrie"
+repo_license = "BSD-3-Clause"
+source_pr_url = "https://github.com/cowrie/cowrie/pull/40387"
+base_commit_sha = "0a2bfdfbb15d2f82e26e79b569db0b5dbbefcc8e"
+model_difficulty = "medium"
+difficulty_explanation = "The latest completed screen was 4/4 GPT-5.5 solves. This revision adds substantial in-scope work beyond that measured bundle: operator contents must become immutable, memory-shared snapshots; repeated overlay replacement must perform conflict-aware reconciliation that preserves session tombstones, moves, replacements, and metadata changes; host symlinks must not leak data; and rename must validate type, non-empty-directory, self-descendant, and atomic-failure invariants across filesystem and SFTP paths. The hardened bundle has not yet received a fresh platform rollout, so the latest measured Medium label is retained pending reevaluation rather than claiming an unmeasured Hard result."
+tags = ["filesystem", "memory-efficiency", "performance"]
+# --- legacy aliases (kept for backward-compatible internal consumers) ---
+difficulty = "medium"
+task_type = "implementation"
+task_subtype = "refactor"
+source = "https://github.com/cowrie/cowrie/pull/40387"
+language = "python"
+expert_time_estimate_min = 180.0
+junior_time_estimate_min = 360.0
+pr_created_at = "2026-07-28T21:11:14Z"
+pr_merged_at = "2026-07-28T21:14:55Z"
+
+[verifier]
+timeout_sec = 300.0
+network_mode = "no-network"
+
+[agent]
+timeout_sec = 1800.0
+network_mode = "allowlist"
+allowed_hosts = ["api.portkey.ai"]
+
+[environment]
+os = "linux"
+network_mode = "public"
+build_timeout_sec = 900.0
+cpus = 4
+memory_mb = 8192
+storage_mb = 10240
+gpus = 0

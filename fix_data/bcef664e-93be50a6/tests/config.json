@@ -1,0 +1,72 @@
+{
+  "schema_version": "compact-swebench-harborized-v1",
+  "execution": {
+    "commands": [
+      "go test -count=1 -run '^TestVerifierSelectedContract$' ${PACKAGE}"
+    ],
+    "env": {
+      "GO111MODULE": "off",
+      "GOENV": "off",
+      "GOFLAGS": ""
+    },
+    "timeout_sec": 600,
+    "per_test_timeout_sec": 15,
+    "base_commit_sha": "b19cbf62901fc176b6b6036e7e97131d5e339327",
+    "protected_test_files": [
+      "ctrd/utils_test.go",
+      "daemon/mgr/spec_mount_test.go",
+      "daemon/mgr/container_rich_mode_test.go"
+    ],
+    "protected_test_ids": [
+      "github.com/alibaba/pouch/ctrd::Test_convertCtrdErr",
+      "github.com/alibaba/pouch/daemon/mgr::Test_sortMounts",
+      "github.com/alibaba/pouch/daemon/mgr::TestRichModeSet"
+    ]
+  },
+  "grading": {
+    "fail_to_pass": [
+      "github.com/alibaba/pouch/daemon/mgr::TestCreateSpecDoesNotUseContainerdProfileDefaults",
+      "github.com/alibaba/pouch/daemon/mgr::TestFinalCapabilitySetsRemainIndependent",
+      "github.com/alibaba/pouch/daemon/mgr::TestFinalSpecOwnsProcessArguments",
+      "github.com/alibaba/pouch/daemon/mgr::TestFinalSpecOwnsSysctlSettings",
+      "github.com/alibaba/pouch/daemon/mgr::TestConcurrentContainerProfilesRemainIsolated",
+      "github.com/alibaba/pouch/daemon/mgr::TestFailedSpecBuildIsAtomicAcrossStages",
+      "github.com/alibaba/pouch/daemon/mgr::TestFailedSpecBuildLeavesEmptyWrapperUnpublished",
+      "github.com/alibaba/pouch/daemon/mgr::TestSpecWrapperRecoversAfterFailedBuild",
+      "github.com/alibaba/pouch/daemon/mgr::TestFinalHooksOwnPluginArguments",
+      "github.com/alibaba/pouch/daemon/mgr::TestCreateSpecUsesPouchMountSet",
+      "github.com/alibaba/pouch/daemon/mgr::TestCreateSpecHardensProcMount",
+      "github.com/alibaba/pouch/daemon/mgr::TestCreateSpecDoesNotLimitDevTmpfs",
+      "github.com/alibaba/pouch/daemon/mgr::TestCreateSpecUsesExpectedProtectedPaths",
+      "github.com/alibaba/pouch/daemon/mgr::TestCreateSpecBeginsWithDenyAllDevicePolicy",
+      "github.com/alibaba/pouch/daemon/mgr::TestCreateSpecAllowsStandardDevices",
+      "github.com/alibaba/pouch/daemon/mgr::TestCreateSpecPreservesFuseDenial",
+      "github.com/alibaba/pouch/daemon/mgr::TestPositiveSharedMemorySizeWins",
+      "github.com/alibaba/pouch/daemon/mgr::TestZeroSharedMemorySizeKeepsDefault",
+      "github.com/alibaba/pouch/daemon/mgr::TestUserSharedMemoryMountPreservesBindSemantics",
+      "github.com/alibaba/pouch/daemon/mgr::TestCreateSpecResultsRemainIndependent"
+    ],
+    "pass_to_pass": [
+      "github.com/alibaba/pouch/daemon/mgr::TestRegressionOrdinaryCapabilities",
+      "github.com/alibaba/pouch/daemon/mgr::TestRegressionLinuxNamespaces",
+      "github.com/alibaba/pouch/daemon/mgr::TestRegressionPrivilegedProfile",
+      "github.com/alibaba/pouch/daemon/mgr::TestRegressionCgroupPathNormalization",
+      "github.com/alibaba/pouch/ctrd::Test_convertCtrdErr",
+      "github.com/alibaba/pouch/daemon/mgr::Test_sortMounts",
+      "github.com/alibaba/pouch/daemon/mgr::TestRichModeSet"
+    ],
+    "required_pass": [],
+    "allow_extra_failures": false,
+    "parser": {
+      "framework": "go-test",
+      "result_source": "verifier_exit_status"
+    }
+  },
+  "artifacts": {
+    "stdout_log": "/logs/verifier/test-stdout.txt",
+    "stderr_log": "/logs/verifier/test-stderr.txt",
+    "parsed_results": "/logs/verifier/output.json",
+    "report": "/logs/verifier/report.json",
+    "reward": "/logs/verifier/reward.txt"
+  }
+}

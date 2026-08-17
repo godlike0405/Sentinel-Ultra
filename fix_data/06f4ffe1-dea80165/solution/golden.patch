@@ -1,0 +1,968 @@
+diff --git a/src/cowrie/commands/chmod.py b/src/cowrie/commands/chmod.py
+index b771d75f..34395019 100644
+--- a/src/cowrie/commands/chmod.py
++++ b/src/cowrie/commands/chmod.py
+@@ -9,7 +9,6 @@ from __future__ import annotations
+ import getopt
+ import re
+ 
+-from cowrie.shell import fs
+ from cowrie.shell.command import HoneyPotCommand
+ 
+ commands = {}
+@@ -49,9 +48,6 @@ Written by David MacKenzie and Jim Meyering.
+ MODE_REGEX = "^[ugoa]*([-+=]([rwxXst]*|[ugo]))+|[-+=]?[0-7]+$"
+ TRY_CHMOD_HELP_MSG = "Try 'chmod --help' for more information.\n"
+ 
+-NO_PERM_BITS_MASK = 0o000
+-
+-
+ class Command_chmod(HoneyPotCommand):
+     def call(self) -> None:
+         # parse the command line arguments
+@@ -95,11 +91,9 @@ class Command_chmod(HoneyPotCommand):
+                         f"chmod: cannot access '{file}': No such file or directory\n"
+                     )
+                 else:
+-                    f = self.fs.getfile(path)
+-                    file_mode_no_perm = f[fs.A_MODE] & NO_PERM_BITS_MASK
+                     try:
+                         # this works for `chmod 0600 ./file`, but not for `chmod u+rwx .,/file`
+-                        f[fs.A_MODE] = file_mode_no_perm | int(mode, 8)
++                        self.fs.chmod(path, int(mode, 8))
+                     except ValueError:
+                         pass
+ 
+diff --git a/src/cowrie/commands/fs.py b/src/cowrie/commands/fs.py
+index 122d9e56..7e04829b 100644
+--- a/src/cowrie/commands/fs.py
++++ b/src/cowrie/commands/fs.py
+@@ -402,31 +402,24 @@ or available locally via: info '(coreutils) rm invocation'\n"""
+ 
+         for f in args:
+             pname = self.fs.resolve_path(f, self.protocol.cwd)
+-            try:
+-                # verify path to file exists
+-                directory = self.fs.get_path("/".join(pname.split("/")[:-1]))
+-                # verify that the file itself exists
+-                self.fs.get_path(pname)
+-            except (IndexError, fs.FileNotFound):
++            node = self.fs.getfile(pname, follow_symlinks=False)
++            if node is None:
+                 if not force:
+                     self.errorWrite(
+                         f"rm: cannot remove `{f}': No such file or directory\n"
+                     )
+                 continue
+-            basename = pname.split("/")[-1]
+-            for i in directory[:]:
+-                if i[fs.A_NAME] == basename:
+-                    if i[fs.A_TYPE] == fs.T_DIR and not recursive:
+-                        self.errorWrite(
+-                            f"rm: cannot remove `{i[fs.A_NAME]}': Is a directory\n"
+-                        )
+-                    else:
+-                        directory.remove(i)
+-                        if verbose:
+-                            if i[fs.A_TYPE] == fs.T_DIR:
+-                                self.write(f"removed directory '{i[fs.A_NAME]}'\n")
+-                            else:
+-                                self.write(f"removed '{i[fs.A_NAME]}'\n")
++            if node[fs.A_TYPE] == fs.T_DIR and not recursive:
++                self.errorWrite(
++                    f"rm: cannot remove `{node[fs.A_NAME]}': Is a directory\n"
++                )
++                continue
++            self.fs.remove(pname)
++            if verbose:
++                if node[fs.A_TYPE] == fs.T_DIR:
++                    self.write(f"removed directory '{node[fs.A_NAME]}'\n")
++                else:
++                    self.write(f"removed '{node[fs.A_NAME]}'\n")
+ 
+ 
+ commands["/bin/rm"] = Command_rm
+@@ -495,15 +488,13 @@ class Command_cp(HoneyPotCommand):
+                 continue
+             s = copy.deepcopy(self.fs.getfile(resolv(src)))
+             if isdir:
+-                directory = self.fs.get_path(resolv(dest))
++                destdir = resolv(dest)
+                 outfile = os.path.basename(src)
+             else:
+-                directory = self.fs.get_path(os.path.dirname(resolv(dest)))
++                destdir = os.path.dirname(resolv(dest))
+                 outfile = os.path.basename(dest.rstrip("/"))
+-            if outfile in [x[fs.A_NAME] for x in directory]:
+-                directory.remove(next(x for x in directory if x[fs.A_NAME] == outfile))
+             s[fs.A_NAME] = outfile
+-            directory.append(s)
++            self.fs.link_entry(s, destdir)
+ 
+ 
+ commands["/bin/cp"] = Command_cp
+@@ -561,23 +552,15 @@ class Command_mv(HoneyPotCommand):
+                 return
+ 
+         for src in sources:
+-            if not self.fs.exists(resolv(src)):
++            srcpath = resolv(src)
++            if not self.fs.exists(srcpath):
+                 self.errorWrite(f"mv: cannot stat `{src}': No such file or directory\n")
+                 continue
+-            s = self.fs.getfile(resolv(src))
+             if isdir:
+-                directory = self.fs.get_path(resolv(dest))
+-                outfile = os.path.basename(src)
+-            else:
+-                directory = self.fs.get_path(os.path.dirname(resolv(dest)))
+-                outfile = os.path.basename(dest)
+-            if directory != os.path.dirname(resolv(src)):
+-                s[fs.A_NAME] = outfile
+-                directory.append(s)
+-                sdir = self.fs.get_path(os.path.dirname(resolv(src)))
+-                sdir.remove(s)
++                destpath = os.path.join(resolv(dest), os.path.basename(src))
+             else:
+-                s[fs.A_NAME] = outfile
++                destpath = resolv(dest)
++            self.fs.rename(srcpath, destpath)
+ 
+ 
+ commands["/bin/mv"] = Command_mv
+@@ -640,7 +623,7 @@ class Command_rmdir(HoneyPotCommand):
+                             f"rmdir: failed to remove '{f}': Not a directory\n"
+                         )
+                         return
+-                    directory.remove(i)
++                    self.fs.rmdir(pname)
+                     break
+ 
+ 
+diff --git a/src/cowrie/shell/fs.py b/src/cowrie/shell/fs.py
+index 8144658c..b3cd6e2b 100644
+--- a/src/cowrie/shell/fs.py
++++ b/src/cowrie/shell/fs.py
+@@ -8,7 +8,6 @@
+ from __future__ import annotations
+ 
+ import errno
+-import fnmatch
+ import hashlib
+ import os
+ import re
+@@ -16,13 +15,12 @@ import stat
+ import sys
+ import time
+ from pathlib import Path
+-from typing import TYPE_CHECKING, Any
+-
+-from twisted.logger import Logger
++from typing import TYPE_CHECKING, Any, TypeAlias
+ 
+ from cowrie.core.config import CowrieConfig
+ from cowrie.core.resources import read_data_bytes
+ from cowrie.shell import honeyfs
++from twisted.logger import Logger
+ 
+ if TYPE_CHECKING:
+     from cowrie.core.events import EventLog
+@@ -41,6 +39,22 @@ if TYPE_CHECKING:
+ ) = list(range(0, 10))
+ T_LINK, T_DIR, T_FILE, T_BLK, T_CHR, T_SOCK, T_FIFO = list(range(0, 7))
+ 
++# A filesystem entry: the positional 10-field list indexed by the A_* constants
++# above — [name, type, uid, gid, size, mode, ctime, contents, target, realfile].
++# contents is a list of child Nodes for a directory, or bytes for a file.
++Node: TypeAlias = list[Any]
++OperatorFileSnapshot: TypeAlias = tuple[str, bytes, int, int, float]
++
++
++# Operator-provided bytes are immutable after a view captures them.  Reusing a
++# snapshot for an unchanged directory keeps many sessions from retaining the
++# same potentially-large files independently.
++_operator_snapshot_cache: dict[
++    tuple[str, tuple[tuple[str, int, int, int, int, int], ...]],
++    tuple[OperatorFileSnapshot, ...],
++] = {}
++_OPERATOR_SNAPSHOT_CACHE_LIMIT = 32
++
+ 
+ SPECIAL_PATHS: list[str] = ["/sys", "/proc", "/dev/pts"]
+ 
+@@ -117,7 +131,8 @@ class HoneyPotFilesystem:
+ 
+     def __init__(self, arch: str, home: str) -> None:
+         try:
+-            self.fs: list[Any] = honeyfs.get_tree()
++            # Session views share unchanged filesystem entries.
++            self.fs: Node = honeyfs.get_tree()
+         except Exception:
+             self._log.failure("ERROR: Failed to load filesystem")
+             sys.exit(2)
+@@ -133,10 +148,18 @@ class HoneyPotFilesystem:
+         # Keep count of new files, so we can have an artificial limit
+         self.newcount: int = 0
+ 
+-        # If the operator has set contents_path, walk it and mark
+-        # A_REALFILE on matching pickle entries so file_contents reads
+-        # from disk. When unset (the default), every file is served from
+-        # the pickle's A_CONTENTS bytes.
++        # Records needed to reconcile a replacement operator snapshot without
++        # rebuilding the complete filesystem view.  Entries changed by the
++        # session are claims and always win over later operator snapshots.
++        self._operator_entries: dict[str, Node] = {}
++        self._operator_original_entries: dict[str, Node] = {}
++        self._operator_created_files: set[str] = set()
++        self._operator_created_directories: set[str] = set()
++        self._session_claims: set[str] = set()
++
++        # Capture the operator-provided contents for this session.  The
++        # filesystem entry lists are structurally shared with the cached base
++        # tree except along paths whose backing file changes.
+         contents_path = CowrieConfig.get("honeypot", "contents_path", fallback="")
+         if contents_path:
+             try:
+@@ -144,20 +167,242 @@ class HoneyPotFilesystem:
+             except Exception as e:
+                 self._log.info("Failed to load honeyfs {error!r}", error=e)
+ 
++    @staticmethod
++    def _clone_entry(entry: Node) -> Node:
++        clone = entry.copy()
++        if entry[A_TYPE] == T_DIR and isinstance(entry[A_CONTENTS], list):
++            clone[A_CONTENTS] = entry[A_CONTENTS].copy()
++        return clone
++
++    def _copy_entry_for_update(self, entry: Node) -> Node:
++        """Give this session private entries along the route to ``entry``."""
++
++        def copy_route(node: Node) -> tuple[Node, Node | None]:
++            if node is entry:
++                clone = self._clone_entry(node)
++                return clone, clone
++
++            children = node[A_CONTENTS]
++            if node[A_TYPE] != T_DIR or not isinstance(children, list):
++                return node, None
++
++            for index, child in enumerate(children):
++                replacement, target = copy_route(child)
++                if target is None:
++                    continue
++                clone = node.copy()
++                cloned_children = children.copy()
++                cloned_children[index] = replacement
++                clone[A_CONTENTS] = cloned_children
++                return clone, target
++            return node, None
++
++        root, target = copy_route(self.fs)
++        if target is None:
++            raise OSError(errno.ENOENT, os.strerror(errno.ENOENT))
++        self.fs = root
++        return target
++
++    def _copy_path_for_update(self, path: str, follow_symlinks: bool = True) -> Node:
++        entry = self.getfile(path, follow_symlinks=follow_symlinks)
++        if entry is None:
++            raise OSError(errno.ENOENT, os.strerror(errno.ENOENT), path)
++        return self._copy_entry_for_update(entry)
++
++    def _canonical_path(self, path: str) -> str:
++        return self.resolve_path(path or "/", "/")
++
++    def _claim(self, path: str) -> None:
++        self._session_claims.add(self._canonical_path(path))
++
++    @staticmethod
++    def _operator_snapshot(honeyfs_path: str) -> tuple[OperatorFileSnapshot, ...]:
++        root = os.path.abspath(honeyfs_path)
++        manifest: list[tuple[str, int, int, int, int, int]] = []
++        paths: list[tuple[str, str, os.stat_result]] = []
++        for current, directories, filenames in os.walk(root, followlinks=False):
++            directories[:] = sorted(
++                name
++                for name in directories
++                if not os.path.islink(os.path.join(current, name))
++            )
++            for filename in sorted(filenames):
++                realfile_path = os.path.join(current, filename)
++                try:
++                    real_stat = os.lstat(realfile_path)
++                except OSError:
++                    continue
++                if not stat.S_ISREG(real_stat.st_mode):
++                    continue
++                relative = os.path.relpath(realfile_path, root)
++                virtual_path = "/" + relative.replace(os.sep, "/")
++                manifest.append(
++                    (
++                        relative,
++                        real_stat.st_dev,
++                        real_stat.st_ino,
++                        real_stat.st_size,
++                        real_stat.st_mtime_ns,
++                        real_stat.st_mode,
++                    )
++                )
++                paths.append((virtual_path, realfile_path, real_stat))
++
++        key = (root, tuple(manifest))
++        cached = _operator_snapshot_cache.get(key)
++        if cached is not None:
++            _operator_snapshot_cache.pop(key)
++            _operator_snapshot_cache[key] = cached
++            return cached
++
++        snapshot: list[OperatorFileSnapshot] = []
++        for virtual_path, realfile_path, real_stat in paths:
++            try:
++                contents = Path(realfile_path).read_bytes()
++            except OSError:
++                continue
++            snapshot.append(
++                (
++                    virtual_path,
++                    contents,
++                    real_stat.st_size,
++                    stat.S_IFREG | stat.S_IMODE(real_stat.st_mode),
++                    real_stat.st_mtime,
++                )
++            )
++        result = tuple(snapshot)
++        _operator_snapshot_cache[key] = result
++        while len(_operator_snapshot_cache) > _OPERATOR_SNAPSHOT_CACHE_LIMIT:
++            _operator_snapshot_cache.pop(next(iter(_operator_snapshot_cache)))
++        return result
++
+     def init_honeyfs(self, honeyfs_path: str) -> None:
+         """
+-        Explore the honeyfs at 'honeyfs_path' and set all A_REALFILE attributes on
+-        the virtual filesystem.
++        Apply the regular files beneath 'honeyfs_path' to this session's
++        virtual filesystem, replacing any previously applied operator overlay.
+         """
++        snapshot = self._operator_snapshot(honeyfs_path)
++        self._clear_operator_overlay()
++        for virtual_path, contents, size, mode, mtime in snapshot:
++            if virtual_path in self._session_claims:
++                continue
++            entry = self.getfile(virtual_path, follow_symlinks=False)
++            if entry is not None:
++                if entry[A_TYPE] != T_FILE:
++                    continue
++                self._operator_original_entries[virtual_path] = entry
++                private_entry = self._copy_entry_for_update(entry)
++                private_entry[A_SIZE] = size
++                private_entry[A_MODE] = mode
++                private_entry[A_CTIME] = mtime
++                private_entry[A_CONTENTS] = contents
++                private_entry[A_REALFILE] = None
++                self._operator_entries[virtual_path] = private_entry
++                continue
+ 
+-        for path, _directories, filenames in os.walk(honeyfs_path):
+-            for filename in filenames:
+-                realfile_path: str = os.path.join(path, filename)
+-                virtual_path: str = "/" + os.path.relpath(realfile_path, honeyfs_path)
++            parent_path = os.path.dirname(virtual_path)
++            if not self._ensure_operator_directories(parent_path):
++                continue
++            parent = self._copy_path_for_update(parent_path)
++            children = parent[A_CONTENTS]
++            if not isinstance(children, list):
++                continue
++            operator_entry: Node = [
++                os.path.basename(virtual_path),
++                T_FILE,
++                0,
++                0,
++                size,
++                mode,
++                mtime,
++                contents,
++                None,
++                None,
++            ]
++            children.append(operator_entry)
++            self._operator_entries[virtual_path] = operator_entry
++            self._operator_created_files.add(virtual_path)
++
++    def _ensure_operator_directories(self, path: str) -> bool:
++        current_path = ""
++        for name in [part for part in path.split("/") if part]:
++            current_path = f"{current_path}/{name}"
++            entry = self.getfile(current_path, follow_symlinks=False)
++            if entry is not None:
++                if entry[A_TYPE] != T_DIR:
++                    return False
++                continue
++
++            parent_path = os.path.dirname(current_path)
++            parent = self._copy_path_for_update(parent_path)
++            children = parent[A_CONTENTS]
++            if not isinstance(children, list):
++                return False
++            children.append(
++                [
++                    name,
++                    T_DIR,
++                    0,
++                    0,
++                    4096,
++                    stat.S_IFDIR | 0o755,
++                    time.time(),
++                    [],
++                    None,
++                    None,
++                ]
++            )
++            self._operator_created_directories.add(current_path)
++        return True
++
++    def _clear_operator_overlay(self) -> None:
++        for virtual_path in sorted(
++            self._operator_entries, key=lambda path: path.count("/"), reverse=True
++        ):
++            entry = self.getfile(virtual_path, follow_symlinks=False)
++            applied_entry = self._operator_entries[virtual_path]
++            if entry is not applied_entry or virtual_path in self._session_claims:
++                self._session_claims.add(virtual_path)
++                continue
++            parent_path = os.path.dirname(virtual_path)
++            parent = self._copy_path_for_update(parent_path)
++            children = parent[A_CONTENTS]
++            if not isinstance(children, list):
++                continue
++            original = self._operator_original_entries.get(virtual_path)
++            for index, child in enumerate(children):
++                if child[A_NAME] != os.path.basename(virtual_path):
++                    continue
++                if original is None:
++                    children.pop(index)
++                else:
++                    children[index] = original
++                break
+ 
+-                f: list[Any] | None = self.getfile(virtual_path, follow_symlinks=False)
+-                if f and f[A_TYPE] == T_FILE:
+-                    self.update_realfile(f, realfile_path)
++        for virtual_path in sorted(
++            self._operator_created_directories,
++            key=lambda path: path.count("/"),
++            reverse=True,
++        ):
++            if virtual_path in self._session_claims:
++                continue
++            entry = self.getfile(virtual_path, follow_symlinks=False)
++            if entry is None or entry[A_TYPE] != T_DIR or self.get_path(virtual_path):
++                continue
++            parent_path = os.path.dirname(virtual_path)
++            parent = self._copy_path_for_update(parent_path)
++            children = parent[A_CONTENTS]
++            if isinstance(children, list):
++                children[:] = [
++                    child
++                    for child in children
++                    if child[A_NAME] != os.path.basename(virtual_path)
++                ]
++
++        self._operator_entries.clear()
++        self._operator_original_entries.clear()
++        self._operator_created_files.clear()
++        self._operator_created_directories.clear()
+ 
+     def resolve_path(self, pathspec: str, cwd: str) -> str:
+         """
+@@ -192,70 +437,22 @@ class HoneyPotFilesystem:
+ 
+         return "/{}".format("/".join(cwdpieces))
+ 
+-    def resolve_path_wc(self, path: str, cwd: str) -> list[str]:
+-        """
+-        Resolve_path with wildcard support (globbing)
+-        """
+-        pieces: list[str] = path.rstrip("/").split("/")
+-        cwdpieces: list[str]
+-        if len(pieces[0]):
+-            cwdpieces = [x for x in cwd.split("/") if len(x)]
+-            path = path[1:]
+-        else:
+-            cwdpieces, pieces = [], pieces[1:]
+-        found: list[str] = []
+-
+-        def foo(p, cwd):
+-            if not p:
+-                found.append("/{}".format("/".join(cwd)))
+-            elif p[0] == ".":
+-                foo(p[1:], cwd)
+-            elif p[0] == "..":
+-                foo(p[1:], cwd[:-1])
+-            else:
+-                names = [x[A_NAME] for x in self.get_path("/".join(cwd))]
+-                matches = [x for x in names if fnmatch.fnmatchcase(x, p[0])]
+-                for match in matches:
+-                    foo(p[1:], [*cwd, match])
+-
+-        foo(pieces, cwdpieces)
+-        return found
+-
+-    def get_path(self, path: str, follow_symlinks: bool = True) -> Any:
++    def get_path(self, path: str, follow_symlinks: bool = True) -> Node:
+         """
+-        This returns the Cowrie file system objects for a directory
++        This returns the children of the directory node at path. Raises
++        FileNotFound if the path does not resolve.
+         """
+-        cwd: list[Any] = self.fs
+-        for part in path.split("/"):
+-            if not part:
+-                continue
+-            if not isinstance(cwd[A_CONTENTS], list):
+-                # walked into a non-directory entry (e.g. a file's bytes)
+-                raise FileNotFound
+-            ok = False
+-            for c in cwd[A_CONTENTS]:
+-                if c[A_NAME] == part:
+-                    if c[A_TYPE] == T_LINK:
+-                        f = self.getfile(c[A_TARGET], follow_symlinks=follow_symlinks)
+-                        if f is None:
+-                            ok = False
+-                            break
+-                        else:
+-                            cwd = f
+-                    else:
+-                        cwd = c
+-                    ok = True
+-                    break
+-            if not ok:
+-                raise FileNotFound
+-        return cwd[A_CONTENTS]
++        node = self.getfile(path, follow_symlinks=follow_symlinks)
++        if node is None:
++            raise FileNotFound
++        return node[A_CONTENTS]  # type: ignore[no-any-return]
+ 
+     def exists(self, path: str) -> bool:
+         """
+         Return True if path refers to an existing path.
+         Returns False for broken symbolic links.
+         """
+-        f: list[Any] | None = self.getfile(path, follow_symlinks=True)
++        f: Node | None = self.getfile(path, follow_symlinks=True)
+         if f is not None:
+             return True
+         return False
+@@ -265,12 +462,14 @@ class HoneyPotFilesystem:
+         Return True if path refers to an existing path.
+         Returns True for broken symbolic links.
+         """
+-        f: list[Any] | None = self.getfile(path, follow_symlinks=False)
++        f: Node | None = self.getfile(path, follow_symlinks=False)
+         if f is not None:
+             return True
+         return False
+ 
+-    def update_realfile(self, f: Any, realfile: str) -> None:
++    def update_realfile(self, f: Node | None, realfile: str) -> None:
++        if f is None:
++            return
+         if (
+             not f[A_REALFILE]
+             and os.path.exists(realfile)
+@@ -278,19 +477,21 @@ class HoneyPotFilesystem:
+             and os.path.isfile(realfile)
+             and f[A_SIZE] < 25000000
+         ):
++            f = self._copy_entry_for_update(f)
+             f[A_REALFILE] = realfile
+ 
+-    def getfile(self, path: str, follow_symlinks: bool = True) -> list[Any] | None:
++    def getfile(self, path: str, follow_symlinks: bool = True) -> Node | None:
+         """
+         This returns the Cowrie file system object for a path
+         """
+         if path == "/":
+             return self.fs
+-        pieces: list[str] = path.strip("/").split("/")
++        pieces: list[str] = [piece for piece in path.strip("/").split("/") if piece]
+         cwd: str = ""
+-        p: list[Any] | None = self.fs
++        p: Node | None = self.fs
+         for piece in pieces:
+-            if not isinstance(p, list):
++            if not isinstance(p, list) or not isinstance(p[A_CONTENTS], list):
++                # missing, or an attempt to descend into a non-directory
+                 return None
+             if piece not in [x[A_NAME] for x in p[A_CONTENTS]]:
+                 return None
+@@ -331,7 +532,9 @@ class HoneyPotFilesystem:
+         path: str = self.resolve_path(target, os.path.dirname(target))
+         if not path or not self.exists(path):
+             raise FileNotFound
+-        f: Any = self.getfile(path)
++        f: Node | None = self.getfile(path)
++        if f is None:
++            raise FileNotFound
+         if f[A_TYPE] == T_DIR:
+             raise IsADirectoryError
+         if f[A_TYPE] == T_FILE and f[A_REALFILE]:
+@@ -347,6 +550,37 @@ class HoneyPotFilesystem:
+             return read_data_bytes("arch", self.arch)
+         return b""
+ 
++    def link_entry(self, entry: Node, dirpath: str) -> None:
++        """Insert entry into the directory at dirpath, replacing any existing
++        entry with the same name so a directory never holds two entries under
++        one name.
++
++        The caller owns entry: it must not still be linked elsewhere in the
++        tree (move callers unlink_entry it from its old parent first).
++        """
++        directory = self._copy_path_for_update(dirpath)
++        children = directory[A_CONTENTS]
++        if not isinstance(children, list):
++            raise OSError(errno.ENOTDIR, os.strerror(errno.ENOTDIR), dirpath)
++        name = entry[A_NAME]
++        children[:] = [existing for existing in children if existing[A_NAME] != name]
++        children.append(entry)
++        self._claim(os.path.join(dirpath, name))
++
++    def unlink_entry(self, entry: Node, dirpath: str) -> None:
++        """Remove entry from the directory at dirpath."""
++        directory = self._copy_path_for_update(dirpath)
++        children = directory[A_CONTENTS]
++        if not isinstance(children, list):
++            raise OSError(errno.ENOTDIR, os.strerror(errno.ENOTDIR), dirpath)
++        name = entry[A_NAME]
++        for existing in children:
++            if existing is entry or existing[A_NAME] == name:
++                children.remove(existing)
++                self._claim(os.path.join(dirpath, name))
++                return
++        raise ValueError
++
+     def mkfile(
+         self,
+         path: str,
+@@ -365,12 +599,19 @@ class HoneyPotFilesystem:
+         if any([_path.startswith(_p) for _p in SPECIAL_PATHS]):
+             raise PermissionDenied
+ 
+-        _dir = self.get_path(_path)
++        try:
++            directory = self._copy_path_for_update(_path)
++        except OSError:
++            raise FileNotFound from None
++        _dir = directory[A_CONTENTS]
++        if not isinstance(_dir, list):
++            raise OSError(errno.ENOTDIR, os.strerror(errno.ENOTDIR), _path)
+         outfile: str = os.path.basename(path)
+         if outfile in [x[A_NAME] for x in _dir]:
+             _dir.remove(next(x for x in _dir if x[A_NAME] == outfile))
+         _dir.append([outfile, T_FILE, uid, gid, size, mode, ctime, [], None, None])
+         self.newcount += 1
++        self._claim(path)
+         return True
+ 
+     def mkdir(
+@@ -389,13 +630,17 @@ class HoneyPotFilesystem:
+         if not path.strip("/"):
+             raise OSError(errno.ENOENT, os.strerror(errno.ENOENT), path)
+         try:
+-            directory = self.get_path(os.path.dirname(path.strip("/")))
++            parent = self._copy_path_for_update(os.path.dirname(path.strip("/")))
+         except (IndexError, FileNotFound):
+             raise OSError(errno.ENOENT, os.strerror(errno.ENOENT), path) from None
++        directory = parent[A_CONTENTS]
++        if not isinstance(directory, list):
++            raise OSError(errno.ENOENT, os.strerror(errno.ENOENT), path)
+         directory.append(
+             [os.path.basename(path), T_DIR, uid, gid, size, mode, ctime, [], None, None]
+         )
+         self.newcount += 1
++        self._claim(path)
+ 
+     def isfile(self, path: str) -> bool:
+         """
+@@ -403,7 +648,7 @@ class HoneyPotFilesystem:
+         links, so both islink() and isfile() can be true for the same path.
+         """
+         try:
+-            f: list[Any] | None = self.getfile(path)
++            f: Node | None = self.getfile(path)
+         except Exception:
+             return False
+         if f is None:
+@@ -418,7 +663,7 @@ class HoneyPotFilesystem:
+         link.
+         """
+         try:
+-            f: list[Any] | None = self.getfile(path)
++            f: Node | None = self.getfile(path)
+         except Exception:
+             return False
+         if f is None:
+@@ -527,7 +772,7 @@ class HoneyPotFilesystem:
+         """
+         FIXME mkdir() name conflicts with existing mkdir
+         """
+-        directory: list[Any] | None = self.getfile(path)
++        directory: Node | None = self.getfile(path)
+         if directory:
+             raise OSError(errno.EEXIST, os.strerror(errno.EEXIST), path)
+         self.mkdir(path, 0, 0, 4096, 16877)
+@@ -536,49 +781,51 @@ class HoneyPotFilesystem:
+         p: str = path.rstrip("/")
+         name: str = os.path.basename(p)
+         parent: str = os.path.dirname(p)
+-        directory: Any = self.getfile(p, follow_symlinks=False)
++        directory: Node | None = self.getfile(p, follow_symlinks=False)
+         if not directory:
+             raise OSError(errno.EEXIST, os.strerror(errno.EEXIST), p)
+         if directory[A_TYPE] != T_DIR:
+             raise OSError(errno.ENOTDIR, os.strerror(errno.ENOTDIR), p)
+         if len(self.get_path(p)) > 0:
+             raise OSError(errno.ENOTEMPTY, os.strerror(errno.ENOTEMPTY), p)
+-        pdir = self.get_path(parent, follow_symlinks=True)
++        parent_entry = self._copy_path_for_update(parent, follow_symlinks=True)
++        pdir = parent_entry[A_CONTENTS]
++        if not isinstance(pdir, list):
++            raise OSError(errno.ENOTDIR, os.strerror(errno.ENOTDIR), parent)
+         for i in pdir[:]:
+             if i[A_NAME] == name:
+                 pdir.remove(i)
++                self._claim(path)
+                 return True
+         return False
+ 
+     def utime(self, path: str, _atime: float, mtime: float) -> None:
+-        p: list[Any] | None = self.getfile(path)
+-        if not p:
+-            raise OSError(errno.ENOENT, os.strerror(errno.ENOENT))
++        p = self._copy_path_for_update(path)
+         p[A_CTIME] = mtime
++        self._claim(path)
+ 
+     def chmod(self, path: str, perm: int) -> None:
+-        p: list[Any] | None = self.getfile(path)
+-        if not p:
+-            raise OSError(errno.ENOENT, os.strerror(errno.ENOENT))
++        p = self._copy_path_for_update(path)
+         p[A_MODE] = stat.S_IFMT(p[A_MODE]) | perm
++        self._claim(path)
+ 
+     def chown(self, path: str, uid: int, gid: int) -> None:
+-        p: list[Any] | None = self.getfile(path)
+-        if not p:
+-            raise OSError(errno.ENOENT, os.strerror(errno.ENOENT))
++        p = self._copy_path_for_update(path)
+         if uid != -1:
+             p[A_UID] = uid
+         if gid != -1:
+             p[A_GID] = gid
++        self._claim(path)
+ 
+     def remove(self, path: str) -> None:
+-        p: list[Any] | None = self.getfile(path, follow_symlinks=False)
++        p: Node | None = self.getfile(path, follow_symlinks=False)
+         if not p:
+             raise OSError(errno.ENOENT, os.strerror(errno.ENOENT))
+-        self.get_path(os.path.dirname(path)).remove(p)
++        self.unlink_entry(p, os.path.dirname(path))
++        self._claim(path)
+ 
+     def readlink(self, path: str) -> str:
+-        p: list[Any] | None = self.getfile(path, follow_symlinks=False)
++        p: Node | None = self.getfile(path, follow_symlinks=False)
+         if not p:
+             raise OSError(errno.ENOENT, os.strerror(errno.ENOENT))
+         if not p[A_MODE] & stat.S_IFLNK:
+@@ -589,16 +836,72 @@ class HoneyPotFilesystem:
+         raise NotImplementedError
+ 
+     def rename(self, oldpath: str, newpath: str) -> None:
+-        old: list[Any] | None = self.getfile(oldpath)
++        """Move oldpath to newpath, replacing newpath if it already exists —
++        the rename(2) semantics real mv(1) and the SFTP client rely on.
++        """
++        oldpath = self._canonical_path(oldpath)
++        newpath = self._canonical_path(newpath)
++        old: Node | None = self.getfile(oldpath, follow_symlinks=False)
+         if not old:
+             raise OSError(errno.ENOENT, os.strerror(errno.ENOENT))
+-        new = self.getfile(newpath)
+-        if new:
+-            raise OSError(errno.EEXIST, os.strerror(errno.EEXIST))
++        if oldpath == newpath:
++            return
++        if oldpath == "/":
++            raise OSError(errno.EBUSY, os.strerror(errno.EBUSY), oldpath)
++
++        old_parent_path = os.path.dirname(oldpath)
++        new_parent_path = os.path.dirname(newpath)
++        old_parent = self.getfile(old_parent_path)
++        new_parent = self.getfile(new_parent_path)
++        if old_parent is None or new_parent is None:
++            raise OSError(errno.ENOENT, os.strerror(errno.ENOENT))
++
++        source_is_directory = old[A_TYPE] == T_DIR
++        destination = self.getfile(newpath, follow_symlinks=False)
++        if source_is_directory and newpath.startswith(oldpath.rstrip("/") + "/"):
++            raise OSError(errno.EINVAL, os.strerror(errno.EINVAL), newpath)
++        if destination is not None:
++            destination_is_directory = destination[A_TYPE] == T_DIR
++            if source_is_directory and not destination_is_directory:
++                raise OSError(errno.ENOTDIR, os.strerror(errno.ENOTDIR), newpath)
++            if not source_is_directory and destination_is_directory:
++                raise OSError(errno.EISDIR, os.strerror(errno.EISDIR), newpath)
++            if destination_is_directory and self.get_path(newpath):
++                raise OSError(errno.ENOTEMPTY, os.strerror(errno.ENOTEMPTY), newpath)
++
++        same_parent = old_parent is new_parent
++        private_old_parent = self._copy_entry_for_update(old_parent)
++        old_children = private_old_parent[A_CONTENTS]
++        if not isinstance(old_children, list):
++            raise OSError(errno.ENOTDIR, os.strerror(errno.ENOTDIR), old_parent_path)
++
++        source_name = os.path.basename(oldpath)
++        source = next(
++            (entry for entry in old_children if entry[A_NAME] == source_name), None
++        )
++        if source is None:
++            raise OSError(errno.ENOENT, os.strerror(errno.ENOENT))
++        old_children.remove(source)
+ 
+-        self.get_path(os.path.dirname(oldpath)).remove(old)
+-        old[A_NAME] = os.path.basename(newpath)
+-        self.get_path(os.path.dirname(newpath)).append(old)
++        moved = self._clone_entry(source)
++        destination_name = os.path.basename(newpath)
++        moved[A_NAME] = destination_name
++
++        if same_parent:
++            destination_children = old_children
++        else:
++            private_new_parent = self._copy_path_for_update(new_parent_path)
++            destination_children = private_new_parent[A_CONTENTS]
++            if not isinstance(destination_children, list):
++                raise OSError(
++                    errno.ENOTDIR, os.strerror(errno.ENOTDIR), new_parent_path
++                )
++        destination_children[:] = [
++            entry for entry in destination_children if entry[A_NAME] != destination_name
++        ]
++        destination_children.append(moved)
++        self._claim(oldpath)
++        self._claim(newpath)
+ 
+     def listdir(self, path: str) -> list[str]:
+         names: list[str] = [x[A_NAME] for x in self.get_path(path)]
+@@ -608,7 +911,7 @@ class HoneyPotFilesystem:
+         return self.stat(path, follow_symlinks=False)
+ 
+     def stat(self, path: str, follow_symlinks: bool = True) -> _statobj:
+-        p: list[Any] | None
++        p: Node | None
+         if path == "/":
+             p = ["/", T_DIR, 0, 0, 4096, 16877, time.time(), [], None, None]
+         else:
+@@ -634,9 +937,11 @@ class HoneyPotFilesystem:
+         return path
+ 
+     def update_size(self, filename: str, size: int) -> None:
+-        f: list[Any] | None = self.getfile(filename)
++        f: Node | None = self.getfile(filename)
+         if not f:
+             return
+         if f[A_TYPE] != T_FILE:
+             return
++        f = self._copy_entry_for_update(f)
+         f[A_SIZE] = size
++        self._claim(filename)
+diff --git a/src/cowrie/shell/honeyfs.py b/src/cowrie/shell/honeyfs.py
+index 333f3b1d..2352550b 100644
+--- a/src/cowrie/shell/honeyfs.py
++++ b/src/cowrie/shell/honeyfs.py
+@@ -8,7 +8,6 @@
+ from __future__ import annotations
+ 
+ import configparser
+-import copy
+ import functools
+ import pickle
+ from pathlib import Path
+@@ -24,6 +23,7 @@ A_NAME = 0
+ A_TYPE = 1
+ A_CONTENTS = 7
+ A_TARGET = 8
++A_REALFILE = 9
+ T_LINK = 0
+ T_DIR = 1
+ T_FILE = 2
+@@ -33,7 +33,11 @@ _MAX_SYMLINK_DEPTH = 16
+ 
+ 
+ def _find(
+-    tree: list[Any], virtual_path: str, _depth: int = 0
++    tree: list[Any],
++    virtual_path: str,
++    _depth: int = 0,
++    *,
++    follow_terminal_symlink: bool = True,
+ ) -> list[Any] | None:
+     """Walk the cached tree to find the entry at virtual_path.
+ 
+@@ -60,7 +64,7 @@ def _find(
+             return None
+         node = match
+ 
+-    if node[A_TYPE] == T_LINK:
++    if node[A_TYPE] == T_LINK and follow_terminal_symlink:
+         return _find(tree, node[A_TARGET], _depth + 1)
+     return node
+ 
+@@ -96,13 +100,12 @@ def _tree() -> list[Any]:
+ 
+ 
+ def get_tree() -> list[Any]:
+-    """Return a fresh deep copy of the cached filesystem tree.
++    """Return the shared cached filesystem tree.
+ 
+-    Each HoneyPotFilesystem instance gets its own copy so per-session
+-    mutations (mkfile, init_honeyfs A_REALFILE markers, etc.) don't leak
+-    across sessions.
++    Callers must leave shared entries unchanged. Session filesystem views
++    replace the entries they change while retaining the untouched branches.
+     """
+-    return copy.deepcopy(_tree())
++    return _tree()
+ 
+ 
+ def read_file(virtual_path: str) -> bytes:
+diff --git a/src/cowrie/test/test_honeyfs.py b/src/cowrie/test/test_honeyfs.py
+index ca247891..3ead862d 100644
+--- a/src/cowrie/test/test_honeyfs.py
++++ b/src/cowrie/test/test_honeyfs.py
+@@ -41,19 +41,12 @@ def _root(children: list) -> list:
+ 
+ 
+ class GetTreeTests(unittest.TestCase):
+-    """get_tree() returns a deep copy of the cached tree."""
++    """get_tree() provides the filesystem tree."""
+ 
+     def test_returns_a_list(self) -> None:
+         tree = honeyfs.get_tree()
+         self.assertIsInstance(tree, list)
+ 
+-    def test_returns_fresh_copy_each_call(self) -> None:
+-        first = honeyfs.get_tree()
+-        second = honeyfs.get_tree()
+-        self.assertIsNot(first, second)
+-        first.append("mutation")
+-        self.assertNotIn("mutation", second)
+-
+ 
+ class ReadFileTests(unittest.TestCase):
+     """read_file extracts bytes from A_CONTENTS, otherwise raises."""
