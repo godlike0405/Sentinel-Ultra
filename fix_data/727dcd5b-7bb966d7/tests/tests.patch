@@ -1,9 +1,9 @@
 diff --git a/.sentinel-tests/test_tester3_contract.py b/.sentinel-tests/test_tester3_contract.py
 new file mode 100644
-index 0000000..f954a59
+index 0000000..58e9a34
 --- /dev/null
 +++ b/.sentinel-tests/test_tester3_contract.py
-@@ -0,0 +1,767 @@
+@@ -0,0 +1,861 @@
 +#!/usr/bin/env python3
 +from __future__ import annotations
 +
@@ -224,7 +224,7 @@ index 0000000..f954a59
 +
 +    purec_binary = build_dir / "bin" / "tester3purec_scalar"
 +
-+    def imported_inverse_trig_symbols(binary: Path) -> set[str]:
++    def imported_inverse_trig_contracts(binary: Path) -> dict[tuple[str, str, str], str]:
 +        symbols = run(["nm", "-D", str(binary)])
 +        require_success(symbols, "inspecting tester3's dynamic imports")
 +        imported: set[str] = set()
@@ -232,17 +232,30 @@ index 0000000..f954a59
 +            match = re.search(r"\bU\s+(Sleef_[A-Za-z0-9_]+)\s*$", line)
 +            if match and ("asin" in match.group(1) or "acos" in match.group(1)):
 +                imported.add(match.group(1))
-+        required_shapes = ("asind", "acosd", "asinf", "acosf")
-+        missing_shapes = [shape for shape in required_shapes if not any(shape in name for name in imported)]
-+        if missing_shapes:
++        contracts: dict[tuple[str, str, str], list[str]] = {}
++        for name in imported:
++            match = re.search(r"(asin|acos)([df])\d+_u(10|35)", name)
++            if match is None:
++                continue
++            contracts.setdefault(match.groups(), []).append(name)
++        expected = {
++            (operation, precision, accuracy)
++            for operation in ("asin", "acos")
++            for precision in ("d", "f")
++            for accuracy in ("10", "35")
++        }
++        missing = sorted(expected - set(contracts))
++        duplicates = {key: names for key, names in contracts.items() if len(names) != 1}
++        if missing or duplicates:
 +            raise AssertionError(
-+                f"tester3 does not exercise all inverse-trig precision variants {missing_shapes}: "
-+                f"{sorted(imported)}"
++                "tester3 does not exercise exactly one implementation for every inverse-trig "
++                f"operation/precision/accuracy contract: missing={missing}, "
++                f"duplicates={duplicates}, imported={sorted(imported)}"
 +            )
-+        return imported
++        return {key: names[0] for key, names in contracts.items()}
 +
 +    def check_deterministic_acos_abi() -> None:
-+        imported = imported_inverse_trig_symbols(purec_binary)
++        imported = set(imported_inverse_trig_contracts(purec_binary).values())
 +        asin_symbols = {name for name in imported if "asin" in name}
 +        expected_acos = {name.replace("asin", "acos", 1) for name in asin_symbols}
 +        missing_imports = sorted(expected_acos - imported)
@@ -260,12 +273,21 @@ index 0000000..f954a59
 +
 +    def check_tester3_family_rejects_drift() -> None:
 +        cpu_features = host_cpu_features()
-+        shapes = ("asind", "acosd", "asinf", "acosf")
++        shapes = (
++            ("asin_d_u35", r"asind\d+_u35", "d"),
++            ("asin_d_u10", r"asind\d+_u10", "d"),
++            ("acos_d_u35", r"acosd\d+_u35", "d"),
++            ("acos_d_u10", r"acosd\d+_u10", "d"),
++            ("asin_f_u35", r"asinf\d+_u35", "f"),
++            ("asin_f_u10", r"asinf\d+_u10", "f"),
++            ("acos_f_u35", r"acosf\d+_u35", "f"),
++            ("acos_f_u10", r"acosf\d+_u10", "f"),
++        )
 +        for target in tester3_targets:
 +            binary = build_dir / "bin" / target
-+            imported = imported_inverse_trig_symbols(binary)
-+            for shape_index, shape in enumerate(shapes):
-+                selected = sorted(name for name in imported if shape in name)
++            imported = set(imported_inverse_trig_contracts(binary).values())
++            for shape_index, (shape, pattern, precision) in enumerate(shapes):
++                selected = sorted(name for name in imported if re.search(pattern, name))
 +                if not selected:
 +                    raise AssertionError(f"{target} has no imported {shape} implementation")
 +                with tempfile.TemporaryDirectory(
@@ -289,7 +311,7 @@ index 0000000..f954a59
 +                                "  addq $1, (%rax)",
 +                            ]
 +                        )
-+                        if shape.endswith("d"):
++                        if precision == "d":
 +                            assembly.extend(
 +                                [
 +                                    "  movq %xmm0, %rdx",
@@ -321,7 +343,7 @@ index 0000000..f954a59
 +                                "  mov sentinel_domain_signs@GOTPCREL(%rip), %rax",
 +                            ]
 +                        )
-+                        if shape.endswith("d"):
++                        if precision == "d":
 +                            assembly.append("  btq $63, %rdx")
 +                        else:
 +                            assembly.append("  btl $31, %edx")
@@ -441,7 +463,7 @@ index 0000000..f954a59
 +            for target in tester3_targets:
 +                if tester3_target_features[target] - cpu_features:
 +                    continue
-+                imported_inverse_trig_symbols(build_dir / "bin" / target)
++                imported_inverse_trig_contracts(build_dir / "bin" / target)
 +                executed = run_ctest(target, extra_env=poisoned_env)
 +                require_success(
 +                    executed,
@@ -452,6 +474,67 @@ index 0000000..f954a59
 +        "sentinel::tester3_expectations_are_invocation_independent",
 +        check_tester3_expectations_are_invocation_independent,
 +    )
++
++    def check_tester3_snapshot_contract() -> None:
++        cpu_features = host_cpu_features()
++        with tempfile.TemporaryDirectory(prefix="sentinel-snapshots-") as tmp:
++            temp_dir = Path(tmp)
++            for target in tester3_targets:
++                if tester3_target_features[target] - cpu_features:
++                    continue
++                binary = build_dir / "bin" / target
++                imported_inverse_trig_contracts(binary)
++                first = run([str(binary)], timeout=900)
++                require_success(first, f"generating a snapshot with {target}")
++                second = run([str(binary)], timeout=900)
++                require_success(second, f"regenerating a snapshot with {target}")
++                if not first.stdout or first.stdout != second.stdout:
++                    raise AssertionError(
++                        f"{target} did not emit a stable non-empty expectation snapshot"
++                    )
++                snapshot = first.stdout
++                snapshot_path = temp_dir / f"{target}.snapshot"
++                snapshot_path.write_text(snapshot, encoding="utf-8")
++                snapshot_path.chmod(0o444)
++                original_bytes = snapshot_path.read_bytes()
++
++                characters = list(snapshot)
++                changed_index = next(
++                    (index for index, value in enumerate(characters) if not value.isspace()),
++                    None,
++                )
++                if changed_index is None:
++                    raise AssertionError(f"{target} snapshot contains no expectation data")
++                characters[changed_index] = "X" if characters[changed_index] != "X" else "Y"
++                invalid_snapshots = {
++                    "truncated": snapshot[: max(1, len(snapshot) // 2)],
++                    "corrupted": "".join(characters),
++                    "trailing": snapshot + "SENTINEL_UNEXPECTED_RECORD\n",
++                }
++                invalid_paths: dict[str, Path] = {}
++                for description, contents in invalid_snapshots.items():
++                    path = temp_dir / f"{target}-{description}.snapshot"
++                    path.write_text(contents, encoding="utf-8")
++                    invalid_paths[description] = path
++
++                validated = run([str(binary), str(snapshot_path)], timeout=900)
++                require_success(validated, f"validating the snapshot with {target}")
++                if snapshot_path.read_bytes() != original_bytes:
++                    raise AssertionError(f"{target} modified its read-only expectation snapshot")
++                extra_argument = run(
++                    [str(binary), str(snapshot_path), "unexpected-extra-argument"],
++                    timeout=900,
++                )
++                if extra_argument.returncode == 0:
++                    raise AssertionError(f"{target} accepted more than one snapshot argument")
++                for description, path in invalid_paths.items():
++                    rejected = run([str(binary), str(path)], timeout=900)
++                    if rejected.returncode == 0:
++                        raise AssertionError(
++                            f"{target} accepted a {description} expectation snapshot"
++                        )
++
++    record("sentinel::tester3_snapshot_contract", check_tester3_snapshot_contract)
 +
 +    def check_tester3_domain_coverage() -> None:
 +        cpu_features = host_cpu_features()
@@ -466,15 +549,24 @@ index 0000000..f954a59
 +            "tester3avx512f": ["-mavx512f", "-mfma"],
 +            "tester3avx512fnofma": ["-mavx512f"],
 +        }
-+        shapes = ("asind", "acosd", "asinf", "acosf")
++        shapes = (
++            ("asin_d_u35", r"asind\d+_u35", "d"),
++            ("asin_d_u10", r"asind\d+_u10", "d"),
++            ("acos_d_u35", r"acosd\d+_u35", "d"),
++            ("acos_d_u10", r"acosd\d+_u10", "d"),
++            ("asin_f_u35", r"asinf\d+_u35", "f"),
++            ("asin_f_u10", r"asinf\d+_u10", "f"),
++            ("acos_f_u35", r"acosf\d+_u35", "f"),
++            ("acos_f_u10", r"acosf\d+_u10", "f"),
++        )
 +        for target in tester3_targets:
 +            required_features = tester3_target_features[target]
 +            if required_features - cpu_features:
 +                continue
 +            binary = build_dir / "bin" / target
-+            imported = imported_inverse_trig_symbols(binary)
-+            for shape in shapes:
-+                selected = sorted(name for name in imported if shape in name)
++            imported = set(imported_inverse_trig_contracts(binary).values())
++            for shape, pattern, precision in shapes:
++                selected = sorted(name for name in imported if re.search(pattern, name))
 +                if not selected:
 +                    raise AssertionError(f"{target} has no imported {shape} implementation")
 +                with tempfile.TemporaryDirectory(
@@ -489,7 +581,9 @@ index 0000000..f954a59
 +                        signature = re.search(r"(?:asin|acos)([df])(\d+)_", name)
 +                        if signature is None:
 +                            raise AssertionError(f"could not identify the public ABI shape of {name}")
-+                        precision, lane_text = signature.groups()
++                        symbol_precision, lane_text = signature.groups()
++                        if symbol_precision != precision:
++                            raise AssertionError(f"unexpected precision for {name}")
 +                        lane_count = int(lane_text)
 +                        scalar_type = "double" if precision == "d" else "float"
 +                        zero = "0.0" if precision == "d" else "0.0f"

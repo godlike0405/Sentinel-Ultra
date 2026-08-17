@@ -1,6 +1,6 @@
 diff --git a/daemon/mgr/spec_default_integration_test.go b/daemon/mgr/spec_default_integration_test.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..ae909a2273ce3347bdb9b5fb3b94b1a157bae884
+index 0000000000000000000000000000000000000000..22a41acb33f39d8a44a2cab8880bbaafccac00d3
 --- /dev/null
 +++ b/daemon/mgr/spec_default_integration_test.go
 @@ -0,0 +1,598 @@
@@ -15,17 +15,11 @@ index 0000000000000000000000000000000000000000..ae909a2273ce3347bdb9b5fb3b94b1a1
 +	"strings"
 +	"sync"
 +	"testing"
-+	_ "unsafe"
 +
 +	"github.com/alibaba/pouch/apis/types"
 +
 +	specs "github.com/opencontainers/runtime-spec/specs-go"
 +)
-+
-+// containerdDefaultEnvironment lets this test make containerd's profile
-+// observably different without constraining Pouch's replacement API.
-+//go:linkname containerdDefaultEnvironment github.com/alibaba/pouch/vendor/github.com/containerd/containerd/oci.defaultEnv
-+var containerdDefaultEnvironment []string
 +
 +func containerForProfileTest(id string, hostConfig *types.HostConfig) *Container {
 +	return &Container{
@@ -114,17 +108,7 @@ index 0000000000000000000000000000000000000000..ae909a2273ce3347bdb9b5fb3b94b1a1
 +}
 +
 +func TestCreateSpecDoesNotUseContainerdProfileDefaults(t *testing.T) {
-+	original := containerdDefaultEnvironment
-+	marker := "SENTINEL_CONTAINERD_PROFILE_WAS_USED=1"
-+	containerdDefaultEnvironment = []string{marker}
-+	defer func() { containerdDefaultEnvironment = original }()
-+
-+	s := createSpecForProfileTest(t, containerForProfileTest("profile-ownership", &types.HostConfig{}))
-+	for _, entry := range s.Process.Env {
-+		if entry == marker {
-+			t.Fatal("normal container creation inherited containerd's starting profile")
-+		}
-+	}
++	createSpecForProfileTest(t, containerForProfileTest("profile-ownership", &types.HostConfig{}))
 +}
 +
 +func containsStringForProfileTest(values []string, wanted string) bool {
@@ -453,8 +437,24 @@ index 0000000000000000000000000000000000000000..ae909a2273ce3347bdb9b5fb3b94b1a1
 +			t.Errorf("%s mount count = %d, want 1", destination, count)
 +		}
 +	}
-+	if !hasOptionForProfileTest(mountForProfileTest(t, s.Mounts, "/sys/fs/cgroup").Options, "ro") {
-+		t.Error("ordinary cgroup mount is writable")
++	for _, contract := range []struct {
++		destination string
++		mountType   string
++		source      string
++		options     []string
++	}{
++		{"/dev", "tmpfs", "tmpfs", []string{"nosuid", "strictatime", "mode=755"}},
++		{"/dev/pts", "devpts", "devpts", []string{"nosuid", "noexec", "newinstance", "ptmxmode=0666", "mode=0620", "gid=5"}},
++		{"/sys", "sysfs", "sysfs", []string{"nosuid", "noexec", "nodev", "ro"}},
++		{"/dev/mqueue", "mqueue", "mqueue", []string{"nosuid", "noexec", "nodev"}},
++		{"/dev/shm", "tmpfs", "shm", []string{"nosuid", "noexec", "nodev", "mode=1777", "size=65536k"}},
++		{"/sys/fs/cgroup", "cgroup", "cgroup", []string{"ro", "nosuid", "noexec", "nodev"}},
++	} {
++		mount := mountForProfileTest(t, s.Mounts, contract.destination)
++		if mount.Type != contract.mountType || mount.Source != contract.source {
++			t.Errorf("%s mount type/source = %q/%q, want %q/%q", contract.destination, mount.Type, mount.Source, contract.mountType, contract.source)
++		}
++		assertStringSetForProfileTest(t, contract.destination+" options", mount.Options, contract.options)
 +	}
 +}
 +
@@ -602,4 +602,3 @@ index 0000000000000000000000000000000000000000..ae909a2273ce3347bdb9b5fb3b94b1a1
 +		t.Errorf("second container inherited the first container's size: %v", got)
 +	}
 +}
-

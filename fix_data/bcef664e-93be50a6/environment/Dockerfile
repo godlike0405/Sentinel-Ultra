@@ -1,3 +1,8 @@
+# Keep the legacy toolchain in a digest-pinned image stage. Copying it from a
+# base image avoids a separate build-time download from dl.google.com, which
+# is not guaranteed to be reachable from the image builder.
+FROM golang:1.13.15-buster@sha256:66a3f6817c129f48c9cc9b96816a1c0b6dcb399393196e3581d9367b55ab29f2 AS go-toolchain
+
 FROM ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -13,7 +18,7 @@ RUN sed -ri 's#http://(archive|security)\.ubuntu\.com/ubuntu/#http://snapshot.ub
 # The minimal Ubuntu rootfs has no trust store. Bootstrap only the pinned CA
 # bundle with repository-signature verification, then require normal TLS for
 # every remaining package and download.
-RUN apt-get update \
+RUN apt-get -o Acquire::Retries=5 update \
     && apt-get install -y --no-install-recommends ca-certificates=20260601~24.04.1 \
     && rm /etc/apt/apt.conf.d/98snapshot-bootstrap \
     && rm -rf /var/lib/apt/lists/*
@@ -21,7 +26,7 @@ RUN apt-get update \
 # --- Harbor/Terminus runtime tools + build/system dependencies ---
 # tmux & asciinema are required by the agent harness for session recording.
 # Placed early so the layer is cached across rebuilds.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get -o Acquire::Retries=5 update && apt-get install -y --no-install-recommends \
         tmux=3.4-1ubuntu0.1 \
         asciinema=2.4.0-1 \
         curl=8.5.0-2ubuntu10.11 \
@@ -45,12 +50,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # (`%w`, added in Go 1.13), which `go test`'s built-in vet rejects under 1.12.
 # Go 1.13.15 is the minimal toolchain that compiles the sources unchanged; it
 # still honors GOPATH/vendor mode when GO111MODULE=off (set below).
-ENV GO_VERSION=1.13.15
-ENV GO_SHA256=01cc3ddf6273900eba3e2bf311238828b7168b822bb57a9ccab4d7aa2acd6028
-RUN wget --quiet "https://dl.google.com/go/go${GO_VERSION}.linux-amd64.tar.gz" \
-    && echo "${GO_SHA256}  go${GO_VERSION}.linux-amd64.tar.gz" | sha256sum -c - \
-    && tar -C /usr/local -xzf "go${GO_VERSION}.linux-amd64.tar.gz" \
-    && rm "go${GO_VERSION}.linux-amd64.tar.gz"
+COPY --from=go-toolchain /usr/local/go /usr/local/go
 
 # GOPATH layout. GO111MODULE=off keeps the build in classic GOPATH/vendor mode.
 ENV GOPATH=/go

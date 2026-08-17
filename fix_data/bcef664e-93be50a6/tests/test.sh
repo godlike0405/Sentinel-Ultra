@@ -12,7 +12,7 @@ OUTPUT="$LOG_DIR/output.json"
 REWARD="$LOG_DIR/reward.txt"
 
 EXPECTED_CONFIG_SHA256="7cf7e5468902d39d7df201718ec9986623eff465b26febfb9f92bc7ab5d97309"
-EXPECTED_PATCH_SHA256="e727b63cae4bd2ccb0a4950f901fed8df8246b63f96b1cf2d213869daafaded5"
+EXPECTED_PATCH_SHA256="58e5ac15c52cf1255b25960b4753236052bb9e2259d58e40f0c56554d432f09b"
 EXPECTED_GRADER_SHA256="11a80825bd3d54bc3d5041d6f354ae6797922c4a9da1d92ef145599f41c02e18"
 
 mkdir -p "$LOG_DIR"
@@ -21,7 +21,9 @@ VERIFIER_TMP="$(mktemp -d /tmp/sentinel-verifier.XXXXXX)"
 SELECTIONS="$VERIFIER_TMP/selections.tsv"
 STATUSES="$VERIFIER_TMP/statuses.tsv"
 RESULTS="$VERIFIER_TMP/results.json"
+SOURCE_WORKSPACE=""
 WORKSPACE=""
+EXPECTED_BASE_COMMIT="b19cbf62901fc176b6b6036e7e97131d5e339327"
 
 write_zero_reward_if_missing() {
   if [ ! -f "$REWARD" ]; then
@@ -69,23 +71,55 @@ verify_sha256 "$CONFIG" "$EXPECTED_CONFIG_SHA256" || infrastructure_failure "con
 verify_sha256 "$PATCH" "$EXPECTED_PATCH_SHA256" || infrastructure_failure "test patch integrity failure"
 verify_sha256 "$GRADER" "$EXPECTED_GRADER_SHA256" || infrastructure_failure "grader integrity failure"
 
-for candidate in /app /testbed /workspace; do
-  if [ -d "$candidate/.git" ]; then
-    WORKSPACE="$candidate"
+# Prefer platform-mounted workspaces over the image's baked /app compatibility
+# symlink. Otherwise an oracle applied at /testbed or /workspace can be ignored
+# in favor of the untouched source tree embedded in the image.
+for candidate in /testbed /workspace /app /go/src/github.com/alibaba/pouch; do
+  if [ -f "$candidate/Makefile" ] \
+    && [ -f "$candidate/ctrd/utils.go" ] \
+    && [ -f "$candidate/daemon/mgr/spec.go" ] \
+    && [ -f "$candidate/vendor/vendor.json" ]; then
+    SOURCE_WORKSPACE="$candidate"
     break
   fi
 done
-[ -n "$WORKSPACE" ] || infrastructure_failure "could not resolve a Git workspace"
-cd "$WORKSPACE" || infrastructure_failure "could not enter the workspace"
+[ -n "$SOURCE_WORKSPACE" ] || infrastructure_failure "could not resolve the Pouch source workspace"
 
 BASE_COMMIT="$(python3 -c "import json; print(json.load(open('$CONFIG'))['execution']['base_commit_sha'])")" ||
   infrastructure_failure "could not read the declared base commit"
-ACTUAL_HEAD="$(git -c safe.directory="$WORKSPACE" rev-parse HEAD 2>>"$STDERR_LOG")" ||
-  infrastructure_failure "workspace HEAD does not resolve"
-[ "$ACTUAL_HEAD" = "$BASE_COMMIT" ] ||
-  infrastructure_failure "workspace HEAD does not match the declared base commit"
-git -c safe.directory="$WORKSPACE" cat-file -e "$BASE_COMMIT^{commit}" 2>>"$STDERR_LOG" ||
-  infrastructure_failure "declared base commit is unavailable"
+[ "$BASE_COMMIT" = "$EXPECTED_BASE_COMMIT" ] ||
+  infrastructure_failure "config base commit differs from the verifier contract"
+
+# Prefer the full Git identity check when metadata is available. Harbor may
+# legitimately materialize only the working tree, so stable files outside the
+# solution scope provide a fail-closed base-tree identity fallback.
+if ACTUAL_HEAD="$(git -C "$SOURCE_WORKSPACE" -c safe.directory="$SOURCE_WORKSPACE" rev-parse HEAD 2>/dev/null)"; then
+  [ "$ACTUAL_HEAD" = "$BASE_COMMIT" ] ||
+    infrastructure_failure "workspace HEAD does not match the declared base commit"
+  git -C "$SOURCE_WORKSPACE" -c safe.directory="$SOURCE_WORKSPACE" \
+    cat-file -e "$BASE_COMMIT^{commit}" 2>>"$STDERR_LOG" ||
+    infrastructure_failure "declared base commit is unavailable"
+else
+  verify_sha256 "$SOURCE_WORKSPACE/LICENSE" \
+    "c5accbbd8546e94c34aed24afe689a617627d18eed5a6c48277e48db57c23851" ||
+    infrastructure_failure "workspace license anchor differs from the declared base"
+  verify_sha256 "$SOURCE_WORKSPACE/CHANGELOG.md" \
+    "d9179975f1193b282ced485110dfcd6854db9124b4e911b4f21c006a812aaae5" ||
+    infrastructure_failure "workspace changelog anchor differs from the declared base"
+  verify_sha256 "$SOURCE_WORKSPACE/vendor/vendor.json" \
+    "d0892fdf46bfb923a5a67f477fdb8ffeaa87ab811cf18a3ff9a58a530d5f82fc" ||
+    infrastructure_failure "workspace vendor anchor differs from the declared base"
+fi
+
+# Always test a verifier-owned copy at the canonical GOPATH import location.
+# This keeps Go 1.13 vendor resolution correct even when the platform mounts
+# the agent workspace over /app or supplies it outside GOPATH.
+STAGED_GOPATH="$VERIFIER_TMP/gopath"
+WORKSPACE="$STAGED_GOPATH/src/github.com/alibaba/pouch"
+mkdir -p "$WORKSPACE" || infrastructure_failure "could not create verifier-owned workspace"
+rsync -a --delete --exclude='.git/' "$SOURCE_WORKSPACE/" "$WORKSPACE/" \
+  2>>"$STDERR_LOG" || infrastructure_failure "could not stage the source workspace"
+cd "$WORKSPACE" || infrastructure_failure "could not enter the verifier-owned workspace"
 
 python3 - "$CONFIG" "$PATCH" "$SELECTIONS" <<'PY'
 import json
@@ -149,32 +183,61 @@ fi
 export GOENV=off
 export GOFLAGS=""
 export GO111MODULE=off
+export GOPATH="$STAGED_GOPATH"
 export GOCACHE="$VERIFIER_TMP/go-cache"
 
 # Remove every solver-controlled Go test in graded packages. Restore the
-# selected upstream regression files byte-for-byte from the declared base.
+# selected upstream regression files byte-for-byte from integrity-checked
+# snapshots embedded in this verifier entrypoint, so runtime Git metadata and
+# nonstandard files under /tests are not required.
 find "$WORKSPACE/ctrd" "$WORKSPACE/daemon/mgr" -maxdepth 1 -type f -name '*_test.go' -delete ||
   infrastructure_failure "could not clear solver-controlled tests"
-python3 - "$CONFIG" <<'PY' > "$VERIFIER_TMP/protected-files.txt"
+python3 - "$CONFIG" "$WORKSPACE" <<'PY'
+import base64
+import hashlib
 import json
+import os
 import sys
-for path in json.load(open(sys.argv[1]))["execution"]["protected_test_files"]:
-    print(path)
+from pathlib import Path
+
+config_path, workspace_path = sys.argv[1:]
+workspace = Path(workspace_path)
+snapshots = {
+    "ctrd/utils_test.go": (
+        "894935fe35605e832120181ac58ec54a006bc92fa173957d5f9a28b9a7b3a004",
+        "cGFja2FnZSBjdHJkCgppbXBvcnQgKAoJImZtdCIKCSJ0ZXN0aW5nIgoKCSJnaXRodWIuY29tL2FsaWJhYmEvcG91Y2gvcGtnL2VycnR5cGVzIgoKCSJnaXRodWIuY29tL2NvbnRhaW5lcmQvY29udGFpbmVyZC9lcnJkZWZzIgoJImdpdGh1Yi5jb20vcGtnL2Vycm9ycyIKKQoKZnVuYyBUZXN0X2NvbnZlcnRDdHJkRXJyKHQgKnRlc3RpbmcuVCkgewoJdHlwZSBhcmdzIHN0cnVjdCB7CgkJZXJyIGVycm9yCgl9Cgl0ZXN0cyA6PSBbXXN0cnVjdCB7CgkJbmFtZSAgICAgICAgc3RyaW5nCgkJYXJncyAgICAgICAgYXJncwoJCXdhbnRFcnIgICAgIGJvb2wKCQlyZXR1cm5lZEVyciBlcnJvcgoJfXsKCQl7CgkJCW5hbWU6ICJuaWwiLAoJCQlhcmdzOiBhcmdzewoJCQkJZXJyOiBuaWwsCgkJCX0sCgkJCXdhbnRFcnI6ICAgICBmYWxzZSwKCQkJcmV0dXJuZWRFcnI6IG5pbCwKCQl9LAoJCXsKCQkJbmFtZTogIm5vdCBmb3VuZCIsCgkJCWFyZ3M6IGFyZ3N7CgkJCQllcnI6IGVycm9ycy5XcmFwKGVycmRlZnMuRXJyTm90Rm91bmQsICJjb250YWluZXIgYXNkZmdoamsiKSwKCQkJfSwKCQkJd2FudEVycjogICAgIHRydWUsCgkJCXJldHVybmVkRXJyOiBlcnJvcnMuV3JhcChlcnJ0eXBlcy5FcnJOb3Rmb3VuZCwgZXJyb3JzLldyYXAoZXJyZGVmcy5FcnJOb3RGb3VuZCwgImNvbnRhaW5lciBhc2RmZ2hqayIpLkVycm9yKCkpLAoJCX0sCgkJewoJCQluYW1lOiAiaW52YWxpZCBwYXJhbXMiLAoJCQlhcmdzOiBhcmdzewoJCQkJZXJyOiBlcnJvcnMuV3JhcChlcnJkZWZzLkVyckludmFsaWRBcmd1bWVudCwgImNvbnRhaW5lciBhc2RmZ2hqayIpLAoJCQl9LAoJCQl3YW50RXJyOiAgICAgdHJ1ZSwKCQkJcmV0dXJuZWRFcnI6IGVycm9ycy5XcmFwKGVycnR5cGVzLkVyckludmFsaWRQYXJhbSwgZXJyb3JzLldyYXAoZXJyZGVmcy5FcnJJbnZhbGlkQXJndW1lbnQsICJjb250YWluZXIgYXNkZmdoamsiKS5FcnJvcigpKSwKCQl9LAoJCXsKCQkJbmFtZTogImFscmVhZHkgZXhpc3RzIiwKCQkJYXJnczogYXJnc3sKCQkJCWVycjogZXJyb3JzLldyYXAoZXJyZGVmcy5FcnJBbHJlYWR5RXhpc3RzLCAiY29udGFpbmVyIGFzZGZnaGprIiksCgkJCX0sCgkJCXdhbnRFcnI6ICAgICB0cnVlLAoJCQlyZXR1cm5lZEVycjogZXJyb3JzLldyYXAoZXJydHlwZXMuRXJyQWxyZWFkeUV4aXN0ZWQsIGVycm9ycy5XcmFwKGVycmRlZnMuRXJyQWxyZWFkeUV4aXN0cywgImNvbnRhaW5lciBhc2RmZ2hqayIpLkVycm9yKCkpLAoJCX0sCgkJewoJCQluYW1lOiAibm90IGltcGxlbWVudGVkIiwKCQkJYXJnczogYXJnc3sKCQkJCWVycjogZXJyb3JzLldyYXAoZXJyZGVmcy5FcnJOb3RJbXBsZW1lbnRlZCwgImNvbnRhaW5lciBhc2RmZ2hqayIpLAoJCQl9LAoJCQl3YW50RXJyOiAgICAgdHJ1ZSwKCQkJcmV0dXJuZWRFcnI6IGVycm9ycy5XcmFwKGVycnR5cGVzLkVyck5vdEltcGxlbWVudGVkLCBlcnJvcnMuV3JhcChlcnJkZWZzLkVyck5vdEltcGxlbWVudGVkLCAiY29udGFpbmVyIGFzZGZnaGprIikuRXJyb3IoKSksCgkJfSwKCQl7CgkJCW5hbWU6ICJub3JtYWwgZXJyb3IiLAoJCQlhcmdzOiBhcmdzewoJCQkJZXJyOiBmbXQuRXJyb3JmKCJ0aGlzIGlzIGEgbm9ybWFsIGVycm9yIiksCgkJCX0sCgkJCXdhbnRFcnI6ICAgICB0cnVlLAoJCQlyZXR1cm5lZEVycjogZm10LkVycm9yZigidGhpcyBpcyBhIG5vcm1hbCBlcnJvciIpLAoJCX0sCgl9Cglmb3IgXywgdHQgOj0gcmFuZ2UgdGVzdHMgewoJCXQuUnVuKHR0Lm5hbWUsIGZ1bmModCAqdGVzdGluZy5UKSB7CgkJCWVyciA6PSBjb252ZXJ0Q3RyZEVycih0dC5hcmdzLmVycikKCQkJaWYgKGVyciAhPSBuaWwpICE9IHR0LndhbnRFcnIgewoJCQkJdC5FcnJvcmYoImNvbnZlcnRDdHJkRXJyKCkgZXJyb3IgPSAldiwgd2FudEVyciAldiIsIGVyciwgdHQud2FudEVycikKCQkJfQoJCQlpZiB0dC53YW50RXJyICYmIChlcnIuRXJyb3IoKSAhPSB0dC5yZXR1cm5lZEVyci5FcnJvcigpKSB7CgkJCQl0LkVycm9yZigiY29udmVydEN0cmRFcnIoKSBlcnJvciA9ICV2LCB3YW50RXJyICV2LCByZXR1cm5lZEVycjogJXYiLCBlcnIsIHR0LndhbnRFcnIsIHR0LnJldHVybmVkRXJyKQoJCQl9CgkJfSkKCX0KfQo=",
+    ),
+    "daemon/mgr/spec_mount_test.go": (
+        "d1fd799a5a0117873e66bfb308499560babc08e6df289ad9cf3a6eb170ef4da0",
+        "cGFja2FnZSBtZ3IKCmltcG9ydCAoCgkicmVmbGVjdCIKCSJ0ZXN0aW5nIgoKCXNwZWNzICJnaXRodWIuY29tL29wZW5jb250YWluZXJzL3J1bnRpbWUtc3BlYy9zcGVjcy1nbyIKKQoKZnVuYyBUZXN0X3NvcnRNb3VudHModCAqdGVzdGluZy5UKSB7Cgl0ZXN0cyA6PSBbXXN0cnVjdCB7CgkJbmFtZSBzdHJpbmcKCQlhcmdzIFtdc3BlY3MuTW91bnQKCQl3YW50IFtdc3BlY3MuTW91bnQKCX17CgkJewoJCQkiTW91bnRzIGlzIG5pbCBjYXNlIiwKCQkJbmlsLAoJCQluaWwsCgkJfSwKCQl7CgkJCSJOb3JtYWwgTW91bnRzIiwKCQkJW11zcGVjcy5Nb3VudHsKCQkJCXtEZXN0aW5hdGlvbjogIi9ldGMvcmVzb2x2LmNvbmYifSwKCQkJCXtEZXN0aW5hdGlvbjogIi9ldGMifSwKCQkJfSwKCQkJW11zcGVjcy5Nb3VudHsKCQkJCXtEZXN0aW5hdGlvbjogIi9ldGMifSwKCQkJCXtEZXN0aW5hdGlvbjogIi9ldGMvcmVzb2x2LmNvbmYifSwKCQkJfSwKCQl9LAoJfQoJZm9yIF8sIHR0IDo9IHJhbmdlIHRlc3RzIHsKCQl0LlJ1bih0dC5uYW1lLCBmdW5jKHQgKnRlc3RpbmcuVCkgewoJCQlnb3QgOj0gc29ydE1vdW50cyh0dC5hcmdzKQoJCQlpZiAhcmVmbGVjdC5EZWVwRXF1YWwoZ290LCB0dC53YW50KSB7CgkJCQl0LkVycm9yZigic29ydE1vdW50cygpID0gJXYsIHdhbnQgJXYiLCBnb3QsIHR0LndhbnQpCgkJCX0KCQl9KQoJfQp9Cg==",
+    ),
+    "daemon/mgr/container_rich_mode_test.go": (
+        "1c15e6edc13807e575c2d50771e249b499e319a308f4f727d815682f21d50a55",
+        "cGFja2FnZSBtZ3IKCmltcG9ydCAoCgkic3RyaW5ncyIKCSJ0ZXN0aW5nIgoKCSJnaXRodWIuY29tL2FsaWJhYmEvcG91Y2gvYXBpcy90eXBlcyIKCgkiZ2l0aHViLmNvbS9zdHJldGNoci90ZXN0aWZ5L2Fzc2VydCIKKQoKZnVuYyBjb252ZXJ0RW52QXJyYXlUb01hcChlbnZzIFtdc3RyaW5nKSBtYXBbc3RyaW5nXXN0cmluZyB7CgltIDo9IG1hcFtzdHJpbmddc3RyaW5ne30KCWZvciBfLCBlIDo9IHJhbmdlIGVudnMgewoJCWt2cyA6PSBzdHJpbmdzLlNwbGl0KGUsICI9IikKCQlpZiBsZW4oa3ZzKSA9PSAyIHsKCQkJbVtrdnNbMF1dID0ga3ZzWzFdCgkJfQoJfQoKCXJldHVybiBtCn0KCmZ1bmMgVGVzdFJpY2hNb2RlU2V0KHQgKnRlc3RpbmcuVCkgewoJYyA6PSAmQ29udGFpbmVyewoJCUNvbmZpZzogJnR5cGVzLkNvbnRhaW5lckNvbmZpZ3sKCQkJUmljaDogdHJ1ZSwKCQl9LAoJfQoKCWVudnMxIDo9IHJpY2hDb250YWluZXJNb2RlRW52KGMpCgltRW52czEgOj0gY29udmVydEVudkFycmF5VG9NYXAoZW52czEpCgoJYXNzZXJ0LkVxdWFsKHQsICJ0cnVlIiwgbUVudnMxWyJyaWNoX21vZGUiXSkKCWFzc2VydC5FcXVhbCh0LCB0eXBlcy5Db250YWluZXJDb25maWdSaWNoTW9kZUR1bWJJbml0LCBtRW52czFbcmljaE1vZGVMYXVuY2hFbnZdKQoKCS8vdGVzdCBub3Qgc2V0IHJpY2ggbW9kZQoJYyA9ICZDb250YWluZXJ7CgkJQ29uZmlnOiAmdHlwZXMuQ29udGFpbmVyQ29uZmlnewoJCQlSaWNoOiBmYWxzZSwKCQl9LAoJfQoJZW52czIgOj0gcmljaENvbnRhaW5lck1vZGVFbnYoYykKCWFzc2VydC5FcXVhbCh0LCAwLCBsZW4oZW52czIpKQoKCS8vdGVzdCBzZXQgcmljaCBtb2RlIG1hbm5lciwgbm90IHNldCByaWNoIG1vZGUKCWMgPSAmQ29udGFpbmVyewoJCUNvbmZpZzogJnR5cGVzLkNvbnRhaW5lckNvbmZpZ3sKCQkJUmljaDogICAgIGZhbHNlLAoJCQlSaWNoTW9kZTogdHlwZXMuQ29udGFpbmVyQ29uZmlnUmljaE1vZGVTeXN0ZW1kLAoJCX0sCgl9CgllbnZzMyA6PSByaWNoQ29udGFpbmVyTW9kZUVudihjKQoJYXNzZXJ0LkVxdWFsKHQsIDAsIGxlbihlbnZzMykpCgoJLy90ZXN0IHNldCByaWNoIG1vZGUgbWFubmVyCgljID0gJkNvbnRhaW5lcnsKCQlDb25maWc6ICZ0eXBlcy5Db250YWluZXJDb25maWd7CgkJCVJpY2g6ICAgICB0cnVlLAoJCQlSaWNoTW9kZTogdHlwZXMuQ29udGFpbmVyQ29uZmlnUmljaE1vZGVTeXN0ZW1kLAoJCX0sCgl9CgllbnZzNCA6PSByaWNoQ29udGFpbmVyTW9kZUVudihjKQoJbUVudnM0IDo9IGNvbnZlcnRFbnZBcnJheVRvTWFwKGVudnM0KQoJYXNzZXJ0LkVxdWFsKHQsICJ0cnVlIiwgbUVudnM0WyJyaWNoX21vZGUiXSkKCWFzc2VydC5FcXVhbCh0LCB0eXBlcy5Db250YWluZXJDb25maWdSaWNoTW9kZVN5c3RlbWQsIG1FbnZzNFtyaWNoTW9kZUxhdW5jaEVudl0pCgoJLy90ZXN0IHNldCByaWNoIG1vZGUgYnkgZW52CgljID0gJkNvbnRhaW5lcnsKCQlDb25maWc6ICZ0eXBlcy5Db250YWluZXJDb25maWd7CgkJCUVudjogW11zdHJpbmd7CgkJCQlpbnRlclJpY2hNb2RlRW52LAoJCQl9LAoJCX0sCgl9CgllbnZzNSA6PSByaWNoQ29udGFpbmVyTW9kZUVudihjKQoJbUVudnM1IDo9IGNvbnZlcnRFbnZBcnJheVRvTWFwKGVudnM1KQoJYXNzZXJ0LkVxdWFsKHQsICJ0cnVlIiwgbUVudnM1WyJyaWNoX21vZGUiXSkKCWFzc2VydC5FcXVhbCh0LCB0eXBlcy5Db250YWluZXJDb25maWdSaWNoTW9kZVN5c3RlbWQsIG1FbnZzNVtyaWNoTW9kZUxhdW5jaEVudl0pCn0K",
+    ),
+}
+
+configured = json.load(open(config_path, encoding="utf-8"))["execution"]["protected_test_files"]
+if configured != list(snapshots):
+    raise SystemExit("protected test snapshot inventory differs from config")
+
+for relative_path, (expected_sha256, encoded) in snapshots.items():
+    data = base64.b64decode(encoded, validate=True)
+    if hashlib.sha256(data).hexdigest() != expected_sha256:
+        raise SystemExit(f"invalid embedded snapshot for {relative_path}")
+    destination = workspace / relative_path
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(destination.name + ".verifier-tmp")
+    temporary.write_bytes(data)
+    os.chmod(temporary, 0o644)
+    os.replace(temporary, destination)
+    if hashlib.sha256(destination.read_bytes()).hexdigest() != expected_sha256:
+        raise SystemExit(f"restored snapshot differs for {relative_path}")
 PY
 protected_status=$?
 if [ "$protected_status" -ne 0 ]; then
-  infrastructure_failure "could not read protected test files"
+  infrastructure_failure "could not restore protected test snapshots"
 fi
-while IFS= read -r relative_path; do
-  case "$relative_path" in
-    ctrd/*|daemon/mgr/*) ;;
-    *) infrastructure_failure "unsafe protected test path" ;;
-  esac
-  mkdir -p "$(dirname "$WORKSPACE/$relative_path")" ||
-    infrastructure_failure "could not create protected test directory"
-  git -c safe.directory="$WORKSPACE" show "$BASE_COMMIT:$relative_path" > "$WORKSPACE/$relative_path" ||
-    infrastructure_failure "could not restore protected test file $relative_path"
-done < "$VERIFIER_TMP/protected-files.txt"
 
 # Remove every verifier-owned new-file destination before applying the patch,
 # so a solver-created collision cannot suppress or corrupt the graded suite.
@@ -203,8 +266,55 @@ while IFS= read -r relative_path; do
   rm -f "$WORKSPACE/$relative_path"
 done < "$VERIFIER_TMP/new-test-paths.txt"
 
-git -c safe.directory="$WORKSPACE" apply --whitespace=nowarn "$PATCH" 2>>"$STDERR_LOG" ||
+patch -p1 --batch --forward --dry-run < "$PATCH" >>"$STDERR_LOG" 2>&1 ||
+  infrastructure_failure "tests.patch did not pass its application check"
+patch -p1 --batch --forward < "$PATCH" >>"$STDERR_LOG" 2>&1 ||
   infrastructure_failure "tests.patch did not apply"
+
+# Install a verifier-owned dependency-boundary probe. Any implementation that
+# still asks containerd to generate the starting OCI profile will panic during
+# the ownership regression test; the Pouch-owned implementation never calls it.
+CONTAINERD_OCI_SPEC="$WORKSPACE/vendor/github.com/containerd/containerd/oci/spec.go"
+CONTAINERD_OCI_ORIGINAL="$VERIFIER_TMP/containerd-oci-spec-original.go"
+CONTAINERD_OCI_PROBE="$VERIFIER_TMP/containerd-oci-spec-probe.go"
+python3 - "$VERIFIER_TMP" <<'PY'
+import base64
+import hashlib
+import sys
+from pathlib import Path
+
+verifier_tmp = Path(sys.argv[1])
+encoded = "cGFja2FnZSBvY2kKCmltcG9ydCAoCgkiY29udGV4dCIKCgkiZ2l0aHViLmNvbS9jb250YWluZXJkL2NvbnRhaW5lcmQvY29udGFpbmVycyIKCXNwZWNzICJnaXRodWIuY29tL29wZW5jb250YWluZXJzL3J1bnRpbWUtc3BlYy9zcGVjcy1nbyIKKQoKLy8gR2VuZXJhdGVTcGVjIHdpbGwgZ2VuZXJhdGUgYSBkZWZhdWx0IHNwZWMgZnJvbSB0aGUgcHJvdmlkZWQgaW1hZ2UKLy8gZm9yIHVzZSBhcyBhIGNvbnRhaW5lcmQgY29udGFpbmVyCmZ1bmMgR2VuZXJhdGVTcGVjKGN0eCBjb250ZXh0LkNvbnRleHQsIGNsaWVudCBDbGllbnQsIGMgKmNvbnRhaW5lcnMuQ29udGFpbmVyLCBvcHRzIC4uLlNwZWNPcHRzKSAoKnNwZWNzLlNwZWMsIGVycm9yKSB7CglzLCBlcnIgOj0gY3JlYXRlRGVmYXVsdFNwZWMoY3R4LCBjLklEKQoJaWYgZXJyICE9IG5pbCB7CgkJcmV0dXJuIG5pbCwgZXJyCgl9Cglmb3IgXywgbyA6PSByYW5nZSBvcHRzIHsKCQlpZiBlcnIgOj0gbyhjdHgsIGNsaWVudCwgYywgcyk7IGVyciAhPSBuaWwgewoJCQlyZXR1cm4gbmlsLCBlcnIKCQl9Cgl9CglyZXR1cm4gcywgbmlsCn0K"
+data = base64.b64decode(encoded, validate=True)
+if hashlib.sha256(data).hexdigest() != "2388af74162ae5bf00f4ee56141f3a8e479a66413214ba86547f897171e26e38":
+    raise SystemExit("containerd probe snapshot failed integrity validation")
+text = data.decode("utf-8")
+old = '''func GenerateSpec(ctx context.Context, client Client, c *containers.Container, opts ...SpecOpts) (*specs.Spec, error) {
+	s, err := createDefaultSpec(ctx, c.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, o := range opts {
+		if err := o(ctx, client, c, s); err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
+}'''
+new = '''func GenerateSpec(ctx context.Context, client Client, c *containers.Container, opts ...SpecOpts) (*specs.Spec, error) {
+	panic("verifier-owned containerd profile generator was called")
+}'''
+if text.count(old) != 1:
+    raise SystemExit("containerd profile generator snapshot is unexpected")
+(verifier_tmp / "containerd-oci-spec-original.go").write_bytes(data)
+(verifier_tmp / "containerd-oci-spec-probe.go").write_text(
+    text.replace(old, new), encoding="utf-8"
+)
+PY
+probe_status=$?
+if [ "$probe_status" -ne 0 ]; then
+  infrastructure_failure "could not install the containerd dependency probe"
+fi
 
 : > "$STATUSES"
 OVERALL_STATUS=0
@@ -214,6 +324,13 @@ PER_TEST_TIMEOUT="$(python3 -c "import json; print(json.load(open('$CONFIG'))['e
 
 while IFS=$'\t' read -r test_id package_dir package_name test_name; do
   TEST_INDEX=$((TEST_INDEX + 1))
+  if [ "$test_name" = "TestCreateSpecDoesNotUseContainerdProfileDefaults" ]; then
+    install -m 0644 "$CONTAINERD_OCI_PROBE" "$CONTAINERD_OCI_SPEC" ||
+      infrastructure_failure "could not activate the containerd dependency probe"
+  else
+    install -m 0644 "$CONTAINERD_OCI_ORIGINAL" "$CONTAINERD_OCI_SPEC" ||
+      infrastructure_failure "could not restore the containerd dependency source"
+  fi
   wrapper="$WORKSPACE/$package_dir/zz_sentinel_selected_contract_test.go"
   completion_file="$VERIFIER_TMP/completed-$TEST_INDEX"
   completion_token="$(head -c 32 /dev/urandom | sha256sum | awk '{print $1}')"

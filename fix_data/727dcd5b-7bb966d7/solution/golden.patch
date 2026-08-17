@@ -474,10 +474,10 @@ index 030a4b1..0c7118f 100644
  // Float comparison
  static INLINE vopmask vlt_vo_vd_vd(vdouble x, vdouble y) {
 diff --git a/src/libm-tester/CMakeLists.txt b/src/libm-tester/CMakeLists.txt
-index 141ea81..4fa885b 100644
+index 141ea81..09c8685 100644
 --- a/src/libm-tester/CMakeLists.txt
 +++ b/src/libm-tester/CMakeLists.txt
-@@ -15,11 +15,29 @@ if (NOT LIBRT)
+@@ -15,11 +15,30 @@ if (NOT LIBRT)
    set(LIBRT "")
  endif()
  
@@ -490,7 +490,8 @@ index 141ea81..4fa885b 100644
  
 +if (SLEEF_ARCH_X86)
 +  set(TEST3_CINZ purec_scalar sse2 sse4 avx avx512fnofma)
-+  set(TEST3_FINZ purecfma_scalar avx2128 avx2 avx512f)
++  set(TEST3_FINZ purecfma_scalar)
++  set(TEST3_FINZ_SIMD avx2128 avx2 avx512f)
 +elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
 +  set(TEST3_CINZ purec_scalar advsimdnofma svenofma)
 +  set(TEST3_FINZ purecfma_scalar advsimd sve)
@@ -507,7 +508,7 @@ index 141ea81..4fa885b 100644
  function(add_test_iut IUT)
    if (LIB_MPFR)
      set(TESTER ${TARGET_TESTER})
-@@ -99,6 +117,47 @@ macro(test_extension SIMD)
+@@ -99,6 +118,58 @@ macro(test_extension SIMD)
  	      endif()
        endforeach()
      endif()
@@ -551,30 +552,63 @@ index 141ea81..4fa885b 100644
 +	  add_test(NAME tester3${SCSIMD} COMMAND tester3${SCSIMD} ${CMAKE_SOURCE_DIR}/src/libm-tester/hash_finz.txt)
 +	endif()
 +      endif()
++
++      list(FIND TEST3_FINZ_SIMD ${SCSIMD} INDEX_TEST3_FINZ_SIMD)
++      if (NOT INDEX_TEST3_FINZ_SIMD EQUAL -1)
++	if (SDE_COMMAND)
++	  add_test(NAME tester3${SCSIMD} COMMAND ${SDE_COMMAND} "--" ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/tester3${SCSIMD} ${CMAKE_SOURCE_DIR}/src/libm-tester/hash_finz_simd.txt)
++	elseif(EMULATOR)
++	  add_test(NAME tester3${SCSIMD} COMMAND ${EMULATOR} ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/tester3${SCSIMD} ${CMAKE_SOURCE_DIR}/src/libm-tester/hash_finz_simd.txt)
++	else()
++	  add_test(NAME tester3${SCSIMD} COMMAND tester3${SCSIMD} ${CMAKE_SOURCE_DIR}/src/libm-tester/hash_finz_simd.txt)
++	endif()
++      endif()
 +    endif()
    endif(COMPILER_SUPPORTS_${SIMD})
  endmacro(test_extension)
  
 diff --git a/src/libm-tester/hash_cinz.txt b/src/libm-tester/hash_cinz.txt
 new file mode 100644
-index 0000000..c7220fb
+index 0000000..b1b758c
 --- /dev/null
 +++ b/src/libm-tester/hash_cinz.txt
-@@ -0,0 +1,4 @@
-+asin 1ea225153a931fdb9111ad6c0b2f5578
-+acos bf52a8daa3a84ef5b410a3ff4257bbab
-+asin 8d02f64a9aef00a22d57db5b7e3057ec
-+acos fabbbf67a3b769f44c10bda9a99f6238
+@@ -0,0 +1,8 @@
++asin_u35_dp 1ea225153a931fdb9111ad6c0b2f5578
++acos_u35_dp bf52a8daa3a84ef5b410a3ff4257bbab
++asin_u10_dp fc3c64669e24bbdc59c7071f2b3a6833
++acos_u10_dp ddc01c9d159b09c7d1a16f0758276841
++asin_u35_sp 8d02f64a9aef00a22d57db5b7e3057ec
++acos_u35_sp fabbbf67a3b769f44c10bda9a99f6238
++asin_u10_sp 949b2c24d5b4e89063175f541a3f78ce
++acos_u10_sp 97633e2ba58cd593beeac53c554d648d
 diff --git a/src/libm-tester/hash_finz.txt b/src/libm-tester/hash_finz.txt
 new file mode 100644
-index 0000000..e478788
+index 0000000..2a436d6
 --- /dev/null
 +++ b/src/libm-tester/hash_finz.txt
-@@ -0,0 +1,4 @@
-+asin 9f2095515e3f8a895c836a7a904b4a6c
-+acos b1fc8f67621bda7f2578a9d3439aa71e
-+asin 66a887514e9b009c79dfd0d548b8b853
-+acos 2e7f7a3bf3141659c3e1bd9f20ebb1e3
+@@ -0,0 +1,8 @@
++asin_u35_dp 9f2095515e3f8a895c836a7a904b4a6c
++acos_u35_dp b1fc8f67621bda7f2578a9d3439aa71e
++asin_u10_dp 3af8c680d75ad11b05634bdcf8eed478
++acos_u10_dp 2831b3bde9f8754401073094b6c4d7c4
++asin_u35_sp 66a887514e9b009c79dfd0d548b8b853
++acos_u35_sp 2e7f7a3bf3141659c3e1bd9f20ebb1e3
++asin_u10_sp 148e046dee79a3c6e1b3b44ae7f2e4af
++acos_u10_sp 40162c5e020f3bab7e9f2f044d89ceb2
+diff --git a/src/libm-tester/hash_finz_simd.txt b/src/libm-tester/hash_finz_simd.txt
+new file mode 100644
+index 0000000..3282f35
+--- /dev/null
++++ b/src/libm-tester/hash_finz_simd.txt
+@@ -0,0 +1,8 @@
++asin_u35_dp 9f2095515e3f8a895c836a7a904b4a6c
++acos_u35_dp b1fc8f67621bda7f2578a9d3439aa71e
++asin_u10_dp 3b6d180004364c9e6d686c7f21ae7d55
++acos_u10_dp 192ce20fa31064370cfbae3be85953c0
++asin_u35_sp 66a887514e9b009c79dfd0d548b8b853
++acos_u35_sp 2e7f7a3bf3141659c3e1bd9f20ebb1e3
++asin_u10_sp 148e046dee79a3c6e1b3b44ae7f2e4af
++acos_u10_sp 40162c5e020f3bab7e9f2f044d89ceb2
 diff --git a/src/libm-tester/iut.c b/src/libm-tester/iut.c
 index db39afb..370998a 100644
 --- a/src/libm-tester/iut.c
@@ -1306,10 +1340,10 @@ index 24b6e61..4786042 100644
  #endif
 diff --git a/src/libm-tester/tester3.c b/src/libm-tester/tester3.c
 new file mode 100644
-index 0000000..38c03d4
+index 0000000..7507b34
 --- /dev/null
 +++ b/src/libm-tester/tester3.c
-@@ -0,0 +1,290 @@
+@@ -0,0 +1,311 @@
 +//          Copyright Naoki Shibata 2010 - 2018.
 +// Distributed under the Boost Software License, Version 1.0.
 +//    (See accompanying file LICENSE.txt or copy at
@@ -1320,6 +1354,7 @@ index 0000000..38c03d4
 +#include <stdint.h>
 +#include <float.h>
 +#include <limits.h>
++#include <ctype.h>
 +#include <string.h>
 +#include <time.h>
 +
@@ -1417,17 +1452,18 @@ index 0000000..38c03d4
 +//
 +
 +#define checkDigest(NAME) do {						\
-+    unsigned char d[16], mes[64], buf[64];				\
++    unsigned char d[16], mes[128], buf[128];			\
 +    MD5_Final(d, &ctx);							\
 +    sprintf((char *)mes, "%s %02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",	\
 +	    #NAME, d[0],d[1],d[2],d[3],d[4],d[5],d[6],d[7],		\
 +	    d[8],d[9],d[10],d[11],d[12],d[13],d[14],d[15]);		\
 +    if (fp != NULL) {							\
-+      fgets((char *)buf, 60, fp);					\
-+      puts((char *)mes);						\
-+      puts((char *)buf);						\
-+      if (strncmp((char *)mes, (char *)buf, strlen((char *)mes)) != 0) { \
-+	fprintf(stderr, "%s\n", #NAME); exit(-1);			\
++      if (fgets((char *)buf, sizeof(buf), fp) == NULL) {		\
++	fprintf(stderr, "Missing expectation for %s\n", #NAME); exit(-1); \
++      }								\
++      buf[strcspn((char *)buf, "\r\n")] = '\0';			\
++      if (strcmp((char *)mes, (char *)buf) != 0) {			\
++	fprintf(stderr, "Expectation mismatch for %s\n", #NAME); exit(-1); \
 +      }									\
 +    } else puts((char *)mes);						\
 +  } while(0)
@@ -1441,18 +1477,18 @@ index 0000000..38c03d4
 +    MD5_Update(&ctx, &fx, sizeof(double));				\
 +  } while(0)
 +
-+#define test_d_d(NAME, ULP, START, END, NSTEP) do {		\
++#define test_d_d(ATRX, NAME, LABEL, ULP, START, END, NSTEP) do { \
 +    MD5_CTX ctx;						\
 +    memset(&ctx, 1, sizeof(MD5_CTX));				\
 +    MD5_Init(&ctx);						\
-+    exec_d_d(ATR, NAME, ULP, DPTYPE, DPTYPESPEC, EXTSPEC, -1.0); \
-+    exec_d_d(ATR, NAME, ULP, DPTYPE, DPTYPESPEC, EXTSPEC, -0.0); \
-+    exec_d_d(ATR, NAME, ULP, DPTYPE, DPTYPESPEC, EXTSPEC, +0.0); \
-+    exec_d_d(ATR, NAME, ULP, DPTYPE, DPTYPESPEC, EXTSPEC, +1.0); \
++    exec_d_d(ATRX, NAME, ULP, DPTYPE, DPTYPESPEC, EXTSPEC, -1.0); \
++    exec_d_d(ATRX, NAME, ULP, DPTYPE, DPTYPESPEC, EXTSPEC, -0.0); \
++    exec_d_d(ATRX, NAME, ULP, DPTYPE, DPTYPESPEC, EXTSPEC, +0.0); \
++    exec_d_d(ATRX, NAME, ULP, DPTYPE, DPTYPESPEC, EXTSPEC, +1.0); \
 +    double step = ((double)(END) - (double)(START))/NSTEP;	\
 +    for(double d = (START);d < (END);d += step)			\
-+      exec_d_d(ATR, NAME, ULP, DPTYPE, DPTYPESPEC, EXTSPEC, d);	\
-+    checkDigest(NAME);						\
++      exec_d_d(ATRX, NAME, ULP, DPTYPE, DPTYPESPEC, EXTSPEC, d); \
++    checkDigest(LABEL);						\
 +  } while(0)
 +
 +#define testu_d_d(NAME, ULP, START, END, NSTEP) do {			\
@@ -1513,17 +1549,17 @@ index 0000000..38c03d4
 +    MD5_Update(&ctx, &fx, sizeof(float));				\
 +  } while(0)
 +
-+#define test_f_f(NAME, ULP, START, END, NSTEP) do {		\
++#define test_f_f(ATRX, NAME, LABEL, ULP, START, END, NSTEP) do { \
 +    MD5_CTX ctx;						\
 +    MD5_Init(&ctx);						\
-+    exec_f_f(ATR, NAME, ULP, SPTYPE, SPTYPESPEC, EXTSPEC, -1.0f); \
-+    exec_f_f(ATR, NAME, ULP, SPTYPE, SPTYPESPEC, EXTSPEC, -0.0f); \
-+    exec_f_f(ATR, NAME, ULP, SPTYPE, SPTYPESPEC, EXTSPEC, +0.0f); \
-+    exec_f_f(ATR, NAME, ULP, SPTYPE, SPTYPESPEC, EXTSPEC, +1.0f); \
++    exec_f_f(ATRX, NAME, ULP, SPTYPE, SPTYPESPEC, EXTSPEC, -1.0f); \
++    exec_f_f(ATRX, NAME, ULP, SPTYPE, SPTYPESPEC, EXTSPEC, -0.0f); \
++    exec_f_f(ATRX, NAME, ULP, SPTYPE, SPTYPESPEC, EXTSPEC, +0.0f); \
++    exec_f_f(ATRX, NAME, ULP, SPTYPE, SPTYPESPEC, EXTSPEC, +1.0f); \
 +    float step = ((double)(END) - (double)(START))/NSTEP;	\
 +    for(float d = (START);d < (END);d += step)			\
-+      exec_f_f(ATR, NAME, ULP, SPTYPE, SPTYPESPEC, EXTSPEC, d);	\
-+    checkDigest(NAME);						\
++      exec_f_f(ATRX, NAME, ULP, SPTYPE, SPTYPESPEC, EXTSPEC, d); \
++    checkDigest(LABEL);						\
 +  } while(0)
 +
 +#define testu_f_f(NAME, ULP, START, END, NSTEP) do {			\
@@ -1580,7 +1616,12 @@ index 0000000..38c03d4
 +{
 +  FILE *fp = NULL;
 +
-+  if (argc != 1) {
++  if (argc > 2) {
++    fprintf(stderr, "Usage: %s [expectation-snapshot]\n", argv[0]);
++    exit(-1);
++  }
++
++  if (argc == 2) {
 +    fp = fopen(argv[1], "r");
 +    if (fp == NULL) {
 +      fprintf(stderr, "Could not open %s\n", argv[1]);
@@ -1590,13 +1631,27 @@ index 0000000..38c03d4
 +
 +  srand(seed = time(NULL));
 +
-+  test_d_d(asin, u35, -1.0, 1.0, 2000001);
-+  test_d_d(acos, u35, -1.0, 1.0, 2000001);
++  test_d_d(ATR, asin, asin_u35_dp, u35, -1.0, 1.0, 2000001);
++  test_d_d(ATR, acos, acos_u35_dp, u35, -1.0, 1.0, 2000001);
++  test_d_d(, asin, asin_u10_dp, u10, -1.0, 1.0, 2000001);
++  test_d_d(, acos, acos_u10_dp, u10, -1.0, 1.0, 2000001);
 +
-+  test_f_f(asin, u35, -1.0, 1.0, 2000001);
-+  test_f_f(acos, u35, -1.0, 1.0, 2000001);
++  test_f_f(ATR, asin, asin_u35_sp, u35, -1.0, 1.0, 2000001);
++  test_f_f(ATR, acos, acos_u35_sp, u35, -1.0, 1.0, 2000001);
++  test_f_f(, asin, asin_u10_sp, u10, -1.0, 1.0, 2000001);
++  test_f_f(, acos, acos_u10_sp, u10, -1.0, 1.0, 2000001);
 +
-+  if (fp != NULL) fclose(fp);
++  if (fp != NULL) {
++    int c;
++    while((c = fgetc(fp)) != EOF) {
++      if (!isspace((unsigned char)c)) {
++        fprintf(stderr, "Unexpected trailing expectation data\n");
++        fclose(fp);
++        exit(-1);
++      }
++    }
++    fclose(fp);
++  }
 +
 +  exit(0);
 +}

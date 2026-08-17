@@ -18,6 +18,7 @@
       "sentinel::deterministic_acos_abi",
       "sentinel::tester3_family_rejects_drift",
       "sentinel::tester3_expectations_are_invocation_independent",
+      "sentinel::tester3_snapshot_contract",
       "sentinel::tester3_domain_coverage",
       "sentinel::tester3_is_mpfr_free",
       "sentinel::tester3_static_dependency_free_matrix",
