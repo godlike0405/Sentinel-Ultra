@@ -13,6 +13,7 @@ RESULTS_JSON="$LOG_DIR/pester-results.json"
 OUTPUT="$LOG_DIR/output.json"
 REPORT="$LOG_DIR/report.json"
 REWARD="$LOG_DIR/reward.txt"
+BASE_COMMIT=f8fcfb14dbcddbf9b9f11a555f8971bc1379fe93
 
 mkdir -p "$LOG_DIR"
 : > "$STDOUT_LOG"
@@ -104,6 +105,29 @@ if [ "$APPLIED" != 1 ] && command -v patch >/dev/null 2>&1; then
 fi
 [ "$APPLIED" = 1 ] || infrastructure_error "tests.patch did not apply"
 
+# Restore the selected upstream regression files from the declared base commit
+# after the solver-controlled build. Agent edits to these files therefore
+# cannot weaken or replace the pass-to-pass checks.
+UPSTREAM_TESTS=(
+    test/Pester/Model.Tests.ps1
+    test/Pester/Equatable.Tests.ps1
+    test/Pester/ImportMarkdownCommandHelp.Tests.ps1
+)
+for relative_path in "${UPSTREAM_TESTS[@]}"; do
+    temporary_path=$(mktemp /tmp/platyps-base-test.XXXXXX)
+    if ! git show "$BASE_COMMIT:$relative_path" > "$temporary_path" 2>>"$STDERR_LOG"; then
+        rm -f "$temporary_path"
+        infrastructure_error "could not restore $relative_path from the base commit"
+    fi
+    if ! install -m 0644 "$temporary_path" "$WORKSPACE/$relative_path"; then
+        rm -f "$temporary_path"
+        infrastructure_error "could not install the base copy of $relative_path"
+    fi
+    rm -f "$temporary_path"
+done
+git diff --quiet "$BASE_COMMIT" -- "${UPSTREAM_TESTS[@]}" \
+    || infrastructure_error "restored regression tests differ from the base commit"
+
 # This script is created only after the agent-controlled build completes. It
 # emits no grading markers to stdout; it atomically writes structured records.
 rm -f "$RESULTS_JSON" "$RESULTS_JSON.tmp"
@@ -112,18 +136,25 @@ cat > "$RUNNER" <<'PSEOF'
 param(
     [Parameter(Mandatory)][string] $ResultsPath,
     [Parameter(Mandatory)][string] $ModulePath,
-    [Parameter(Mandatory)][string] $TestPath
+    [Parameter(Mandatory)][string] $Workspace
 )
 
 $ErrorActionPreference = 'Stop'
 Import-Module -Max 4.99 Pester
 $invokePester = Get-Command Invoke-Pester -Module Pester -ErrorAction Stop
 Import-Module -Name $ModulePath -Force
-$result = & $invokePester -Path $TestPath -PassThru -Show None
+$testPaths = @(
+    (Join-Path $Workspace 'test/Pester/SchemaMigration.Tests.ps1')
+    (Join-Path $Workspace 'test/Pester/Model.Tests.ps1')
+    (Join-Path $Workspace 'test/Pester/Equatable.Tests.ps1')
+    (Join-Path $Workspace 'test/Pester/ImportMarkdownCommandHelp.Tests.ps1')
+)
+$result = & $invokePester -Path $testPaths -PassThru -Show None
 
 $records = @($result.TestResult | ForEach-Object {
+    $nameParts = @($_.Describe, $_.Context, $_.Name) | Where-Object { -not [string]::IsNullOrEmpty($_) }
     [pscustomobject][ordered]@{
-        name = @($_.Describe, $_.Context, $_.Name) -join '.'
+        name = $nameParts -join '.'
         status = [string]$_.Result
     }
 })
@@ -146,13 +177,13 @@ if command -v timeout >/dev/null 2>&1; then
     timeout "$TIMEOUT_SEC" "$PWSH_BIN" -NoProfile -File "$RUNNER" \
         -ResultsPath "$RESULTS_JSON" \
         -ModulePath "$WORKSPACE/out/platyPS" \
-        -TestPath "$WORKSPACE/test/Pester/SchemaMigration.Tests.ps1" \
+        -Workspace "$WORKSPACE" \
         >>"$STDOUT_LOG" 2>>"$STDERR_LOG"
 else
     "$PWSH_BIN" -NoProfile -File "$RUNNER" \
         -ResultsPath "$RESULTS_JSON" \
         -ModulePath "$WORKSPACE/out/platyPS" \
-        -TestPath "$WORKSPACE/test/Pester/SchemaMigration.Tests.ps1" \
+        -Workspace "$WORKSPACE" \
         >>"$STDOUT_LOG" 2>>"$STDERR_LOG"
 fi
 PESTER_EXIT=$?

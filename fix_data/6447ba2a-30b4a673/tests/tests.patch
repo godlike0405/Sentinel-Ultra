@@ -616,3 +616,35 @@ index 0000000..ec8fb9a
 +        }
 +    }
 +}
+diff --git a/test/SeqCli.Tests/SeqCli.VerifierTests.csproj b/test/SeqCli.Tests/SeqCli.VerifierTests.csproj
+new file mode 100644
+index 0000000..88582e4
+--- /dev/null
++++ b/test/SeqCli.Tests/SeqCli.VerifierTests.csproj
+@@ -0,0 +1,26 @@
++<Project Sdk="Microsoft.NET.Sdk">
++  <PropertyGroup>
++    <TargetFramework>netcoreapp2.0</TargetFramework>
++    <Platforms>x64</Platforms>
++    <AssemblyName>SeqCli.Tests</AssemblyName>
++    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
++  </PropertyGroup>
++  <ItemGroup>
++    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="15.0.0" />
++    <PackageReference Include="xunit" Version="2.2.0" />
++    <PackageReference Include="xunit.runner.visualstudio" Version="2.2.0" />
++  </ItemGroup>
++  <ItemGroup>
++    <ProjectReference Include="..\..\src\SeqCli\SeqCli.csproj" />
++  </ItemGroup>
++  <ItemGroup>
++    <Compile Include="Cli\Commands\IngestCommandTests.cs" />
++    <Compile Include="Ingestion\IngestionTestServer.cs" />
++    <Compile Include="Csv\CsvTokenizerTests.cs" />
++    <Compile Include="PlainText\LogEventBuilderTests.cs" />
++    <Compile Include="Cli\CommandLineHostTests.cs" />
++  </ItemGroup>
++  <ItemGroup>
++    <Service Include="{82a7f48d-3b50-4b1e-b82e-3ada8210c358}" />
++  </ItemGroup>
++</Project>

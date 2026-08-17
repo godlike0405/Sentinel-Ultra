@@ -1,9 +1,9 @@
 diff --git a/test/Pester/SchemaMigration.Tests.ps1 b/test/Pester/SchemaMigration.Tests.ps1
 new file mode 100644
-index 0000000..9ea327c
+index 0000000..e6d9114
 --- /dev/null
 +++ b/test/Pester/SchemaMigration.Tests.ps1
-@@ -0,0 +1,423 @@
+@@ -0,0 +1,425 @@
 +# Copyright (c) Microsoft Corporation.
 +# Licensed under the MIT License.
 +
@@ -382,6 +382,8 @@ index 0000000..9ea327c
 +            $migratedFile = Export-MarkdownCommandHelp -Command $legacyFirstHelp -OutputFolder $migratedFolder -Force
 +            $migratedHelp = Import-MarkdownCommandHelp -LiteralPath $migratedFile.FullName
 +            $migratedDate = $migratedHelp.Parameters | Where-Object Name -eq 'Date'
++            ($migratedDate.ParameterSets | Where-Object Name -eq 'DateAndFormat').Position | Should -Be '0'
++            ($migratedDate.ParameterSets | Where-Object Name -eq 'DateAndUFormat').Position | Should -Be '0'
 +            ($migratedDate.ParameterSets | Where-Object Name -eq 'DateAndFormat').IsRequired | Should -BeTrue
 +            ($migratedDate.ParameterSets | Where-Object Name -eq 'DateAndUFormat').IsRequired | Should -BeFalse
 +            ($migratedDate.ParameterSets | Where-Object Name -eq 'DateAndFormat').ValueByPipeline | Should -BeTrue

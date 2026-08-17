@@ -2,11 +2,15 @@
   "schema_version": "compact-swebench-harborized-v1",
   "execution": {
     "commands": [
-      "dotnet test test/SeqCli.Tests/SeqCli.Tests.csproj -p:NuGetAudit=false --logger \"trx;LogFileName=results.trx\" --results-directory /tmp/testresults -- RunConfiguration.DisableParallelization=true; cat /tmp/testresults/results.trx"
+      "dotnet test test/SeqCli.Tests/SeqCli.VerifierTests.csproj -p:NuGetAudit=false --filter ${TEST_FILTER} --logger \"trx;LogFileName=results.trx\" --results-directory /tmp/testresults -- RunConfiguration.DisableParallelization=true"
     ],
     "selected_test_files_to_run": [
       "test/SeqCli.Tests/Cli/Commands/IngestCommandTests.cs",
-      "test/SeqCli.Tests/Ingestion/IngestionTestServer.cs"
+      "test/SeqCli.Tests/Ingestion/IngestionTestServer.cs",
+      "test/SeqCli.Tests/SeqCli.VerifierTests.csproj",
+      "test/SeqCli.Tests/Csv/CsvTokenizerTests.cs",
+      "test/SeqCli.Tests/PlainText/LogEventBuilderTests.cs",
+      "test/SeqCli.Tests/Cli/CommandLineHostTests.cs"
     ],
     "env": {
       "DOTNET_ROLL_FORWARD": "LatestMajor",
@@ -38,13 +42,21 @@
       "SeqCli.Tests.Cli.Commands.IngestCommandTests.ClefIngestionRemainsActiveDuringALull",
       "SeqCli.Tests.Cli.Commands.IngestCommandTests.EmptyInputCompletesWithoutPosting",
       "SeqCli.Tests.Cli.Commands.IngestCommandTests.ClefEndOfInputFlushesTheFinalEvent",
-      "SeqCli.Tests.Cli.Commands.IngestCommandTests.FailedSendReturnsNonZeroAndReportsServerDetails"
+      "SeqCli.Tests.Cli.Commands.IngestCommandTests.FailedSendReturnsNonZeroAndReportsServerDetails",
+      "SeqCli.Tests.Csv.CsvTokenizerTests.AnEmptyStringYieldsNoTokens",
+      "SeqCli.Tests.Csv.CsvTokenizerTests.TokenizesATextCell",
+      "SeqCli.Tests.Csv.CsvTokenizerTests.TokenizesARow",
+      "SeqCli.Tests.PlainText.LogEventBuilderTests.SuppliedValuesAreUsed",
+      "SeqCli.Tests.PlainText.LogEventBuilderTests.MissingValuesAreDefaulted",
+      "SeqCli.Tests.PlainText.LogEventBuilderTests.DateTimeOffsetTimestampsAreAccepted",
+      "SeqCli.Tests.Cli.CommandLineHostTests.CheckCommandLineHostPicksCorrectCommand",
+      "SeqCli.Tests.Cli.CommandLineHostTests.WhenMoreThanOneSubcommandAndTheUserRunsWithSubcommandEnsurePickedCorrect"
     ],
     "required_pass": [],
     "allow_extra_failures": false,
     "parser": {
       "framework": "custom",
-      "result_source": "stdout_stderr",
+      "result_source": "structured_trx",
       "pass_regex": "testName=\"(?P<name>[^\"]+)\"[^>]*?outcome=\"Passed\"",
       "fail_regex": "testName=\"(?P<name>[^\"]+)\"[^>]*?outcome=\"(?:Failed|Error|Timeout|Aborted)\""
     }

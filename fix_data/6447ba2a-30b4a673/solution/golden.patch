@@ -311,6 +311,22 @@ index 0000000..64b184d
 +    }
 +}
 \ No newline at end of file
+diff --git a/src/SeqCli/PlainText/Extraction/ExtractionPatternInterpreter.cs b/src/SeqCli/PlainText/Extraction/ExtractionPatternInterpreter.cs
+index 7883d66..95b349f 100644
+--- a/src/SeqCli/PlainText/Extraction/ExtractionPatternInterpreter.cs
++++ b/src/SeqCli/PlainText/Extraction/ExtractionPatternInterpreter.cs
+@@ -7,11 +7,6 @@ namespace SeqCli.PlainText.Extraction
+ {
+     static class ExtractionPatternInterpreter
+     {
+-        public static NameValueExtractor MultilineMessageExtractor { get; } = new NameValueExtractor(new[]
+-        {
+-            new SimplePatternElement(Matchers.MultiLineMessage, ReifiedProperties.Message)
+-        });
+-
+         static PatternElement[] CreatePatternElements(ExtractionPattern pattern)
+         {
+             if (pattern == null) throw new ArgumentNullException(nameof(pattern));
 diff --git a/src/SeqCli/PlainText/Extraction/Matchers.cs b/src/SeqCli/PlainText/Extraction/Matchers.cs
 index 1eb482a..8692046 100644
 --- a/src/SeqCli/PlainText/Extraction/Matchers.cs

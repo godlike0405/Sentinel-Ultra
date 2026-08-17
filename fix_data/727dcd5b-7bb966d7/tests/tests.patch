@@ -1,6 +1,6 @@
 diff --git a/.sentinel-tests/test_tester3_contract.py b/.sentinel-tests/test_tester3_contract.py
 new file mode 100644
-index 0000000..f24b206
+index 0000000..82a4bca
 --- /dev/null
 +++ b/.sentinel-tests/test_tester3_contract.py
 @@ -0,0 +1,726 @@
@@ -246,7 +246,7 @@ index 0000000..f24b206
 +        cpu_features = set(feature_line.split())
 +        target_features = {
 +            "tester3purec_scalar": set(),
-+            "tester3purecfma_scalar": set(),
++            "tester3purecfma_scalar": {"fma"},
 +            "tester3sse2": {"sse2"},
 +            "tester3sse4": {"sse4_1"},
 +            "tester3avx": {"avx"},

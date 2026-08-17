@@ -27,9 +27,14 @@ pr_merged_at = "2018-03-06T06:38:49Z"
 
 [verifier]
 timeout_sec = 1800.0
+network_mode = "no-network"
 
 [agent]
 timeout_sec = 1800.0
+network_mode = "allowlist"
+allowed_hosts = [
+    "api.portkey.ai",
+]
 
 [environment]
 build_timeout_sec = 900.0
@@ -37,3 +42,4 @@ cpus = 4
 memory_mb = 8192
 storage_mb = 10240
 gpus = 0
+network_mode = "public"

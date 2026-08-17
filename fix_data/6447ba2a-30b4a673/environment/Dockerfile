@@ -1,5 +1,5 @@
 # ---- build stage: restore + build the whole solution (incl. test projects) ----
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:e1fc6e423f543119c406d24e2e687d67c569f18f04a37a8b0005d80ad0dcee80 AS build
 WORKDIR /app
 COPY repo/ .
 # Restore + build in a single layer; retry restore for transient network hiccups.
@@ -10,7 +10,7 @@ RUN n=0; until dotnet restore -p:NuGetAudit=false; do n=$((n+1)); if [ $n -ge 3 
     && dotnet build --no-restore -p:NuGetAudit=false
 
 # ---- final stage: flattened image that runs the tests fully offline ----
-FROM mcr.microsoft.com/dotnet/sdk:10.0
+FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:e1fc6e423f543119c406d24e2e687d67c569f18f04a37a8b0005d80ad0dcee80
 # Harbor/Terminus runtime tools + git (early so they cache across rebuilds)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git tmux asciinema \

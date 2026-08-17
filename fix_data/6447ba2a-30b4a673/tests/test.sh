@@ -8,15 +8,18 @@
 # A fallback trap guarantees reward.txt exists.
 set -uo pipefail
 
-CONFIG="/tests/config.json"
-LOG_DIR="/logs/verifier"
+CONFIG="${SENTINEL_TEST_CONFIG:-/tests/config.json}"
+TESTS_PATCH="${SENTINEL_TEST_PATCH:-/tests/tests.patch}"
+LOG_DIR="${SENTINEL_LOG_DIR:-/logs/verifier}"
 STDOUT_LOG="$LOG_DIR/test-stdout.txt"
 STDERR_LOG="$LOG_DIR/test-stderr.txt"
 REPORT="$LOG_DIR/report.json"
 OUTPUT="$LOG_DIR/output.json"
 REWARD="$LOG_DIR/reward.txt"
+RESULTS_FILE="/tmp/testresults/results.trx"
 
 mkdir -p "$LOG_DIR"
+export CONFIG
 
 # Safety net: if we crash before the grader writes the reward, write 0.
 write_zero_reward_if_missing() {
@@ -32,10 +35,12 @@ if [ ! -f "$CONFIG" ]; then
 fi
 
 # Resolve the workspace from hardcoded fallbacks (config carries no workspace).
-WORKSPACE=""
-for p in /app /testbed /workspace; do
-  if [ -d "$p" ]; then WORKSPACE="$p"; break; fi
-done
+WORKSPACE="${SENTINEL_WORKSPACE:-}"
+if [ -z "$WORKSPACE" ]; then
+  for p in /app /testbed /workspace; do
+    if [ -d "$p" ]; then WORKSPACE="$p"; break; fi
+  done
+fi
 if [ -z "$WORKSPACE" ]; then
   echo "ERROR: could not resolve workspace" | tee "$STDERR_LOG"
   echo '{"success": false, "infrastructure_error": "missing workspace", "reward": 0.0}' > "$REPORT"
@@ -44,10 +49,16 @@ if [ -z "$WORKSPACE" ]; then
 fi
 cd "$WORKSPACE" || exit 2
 
+# Verifier-owned files must replace any solver-created collisions.
+rm -f \
+  test/SeqCli.Tests/Cli/Commands/IngestCommandTests.cs \
+  test/SeqCli.Tests/Ingestion/IngestionTestServer.cs \
+  test/SeqCli.Tests/SeqCli.VerifierTests.csproj
+
 # Export configured env vars (execution.env).
 python3 - <<'PY' > /tmp/verifier_env.sh
-import json, shlex
-cfg = json.load(open("/tests/config.json"))
+import json, os, shlex
+cfg = json.load(open(os.environ["CONFIG"]))
 env = (cfg.get("execution") or {}).get("env", {})
 if isinstance(env, dict):
     for k, v in env.items():
@@ -63,16 +74,16 @@ source /tmp/verifier_env.sh
 # patch(1), which patch_dockerfile injects into every task image — a slim/alpine
 # base without git must not zero the reward. A hard failure means we cannot
 # grade -> infra error, reward 0.
-if [ -f /tests/tests.patch ]; then
+if [ -f "$TESTS_PATCH" ]; then
   APPLIED=0
   if command -v git >/dev/null 2>&1; then
-    if git apply /tests/tests.patch 2>>"$STDERR_LOG" \
-       || git apply --3way /tests/tests.patch 2>>"$STDERR_LOG"; then
+    if git apply "$TESTS_PATCH" 2>>"$STDERR_LOG" \
+       || git apply --3way "$TESTS_PATCH" 2>>"$STDERR_LOG"; then
       APPLIED=1
     fi
   fi
   if [ "$APPLIED" != "1" ] && command -v patch >/dev/null 2>&1; then
-    if patch -p1 --forward < /tests/tests.patch >>"$STDERR_LOG" 2>&1; then
+    if patch -p1 --forward < "$TESTS_PATCH" >>"$STDERR_LOG" 2>&1; then
       APPLIED=1
     fi
   fi
@@ -87,8 +98,8 @@ fi
 # Build the test command(s) from config (expands ${TEST_FILES}; language default
 # from grading.parser.framework when execution.commands is empty).
 python3 - <<'PY' > /tmp/run_tests.sh
-import ast, json, shlex
-cfg = json.load(open("/tests/config.json"))
+import ast, json, os, shlex
+cfg = json.load(open(os.environ["CONFIG"]))
 execution = cfg.get("execution", {}) or {}
 
 def parse_list(value):
@@ -105,6 +116,13 @@ def parse_list(value):
     return []
 
 test_files = parse_list(execution.get("selected_test_files_to_run") or [])
+grading = cfg.get("grading", {}) or {}
+required = parse_list(grading.get("required_pass") or [])
+if not required:
+    required = [
+        *parse_list(grading.get("fail_to_pass") or []),
+        *parse_list(grading.get("pass_to_pass") or []),
+    ]
 commands = execution.get("commands", [])
 if isinstance(commands, str):
     commands = [commands]
@@ -122,18 +140,20 @@ if not commands:
         raise SystemExit("No execution.commands configured and no framework default")
 
 files_arg = " ".join(shlex.quote(str(x)) for x in test_files)
+filter_arg = shlex.quote("|".join(f"FullyQualifiedName={name}" for name in required))
 for cmd in commands:
-    print(cmd.replace("${TEST_FILES}", files_arg))
+    print(cmd.replace("${TEST_FILES}", files_arg).replace("${TEST_FILTER}", filter_arg))
 PY
 chmod +x /tmp/run_tests.sh
 
 # Wrap with timeout(1) if available + configured.
-TIMEOUT_SEC="$(python3 -c "import json;print((json.load(open('/tests/config.json')).get('execution') or {}).get('timeout_sec',''))" 2>/dev/null || true)"
+TIMEOUT_SEC="$(python3 -c "import json,os;print((json.load(open(os.environ['CONFIG'])).get('execution') or {}).get('timeout_sec',''))" 2>/dev/null || true)"
 RUNNER=(bash /tmp/run_tests.sh)
 if [ -n "${TIMEOUT_SEC:-}" ] && command -v timeout >/dev/null 2>&1; then
   RUNNER=(timeout "${TIMEOUT_SEC}" bash /tmp/run_tests.sh)
 fi
 
+rm -f "$RESULTS_FILE"
 set +e
 "${RUNNER[@]}" > "$STDOUT_LOG" 2> "$STDERR_LOG"
 TEST_EXIT_CODE=$?
@@ -504,7 +524,19 @@ def main(argv: list[str] | None = None) -> int:
             if r["status"] in (FAILED, ERROR) and r["name"] not in req_norm
         ]
 
-    success = not missing_required and not unexpected
+    normalized_required = {normalize_name(r) for r in required}
+    observed_names = [r["name"] for r in results]
+    duplicate_results = sorted({name for name in observed_names if observed_names.count(name) > 1})
+    unexpected_results = sorted({name for name in observed_names if name not in normalized_required})
+
+    success = (
+        args.raw_exit_code == 0
+        and not missing_required
+        and not unexpected
+        and not duplicate_results
+        and not unexpected_results
+        and len(results) == len(required)
+    )
     reward = 1.0 if success else 0.0
     return finish(
         reward,
@@ -517,6 +549,8 @@ def main(argv: list[str] | None = None) -> int:
             "passed_required_tests": passed_required,
             "missing_required_tests": missing_required,
             "unexpected_failures": unexpected,
+            "duplicate_results": duplicate_results,
+            "unexpected_results": unexpected_results,
         },
         0 if success else 1,
     )
@@ -529,8 +563,8 @@ GRADE_PY_EOF
 
 python3 /tmp/grade.py \
   --config "$CONFIG" \
-  --stdout "$STDOUT_LOG" \
-  --stderr "$STDERR_LOG" \
+  --stdout "$RESULTS_FILE" \
+  --stderr /dev/null \
   --raw-exit-code "$TEST_EXIT_CODE" \
   --output "$OUTPUT" \
   --report "$REPORT" \
