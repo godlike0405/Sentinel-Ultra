@@ -14,7 +14,9 @@ Every enabled vector extension for which this tester is supported must have a co
 
 Cross-configuring the project must expose `tester3purec_scalar` and `tester3purecfma_scalar` for ARM32; `tester3advsimd`, `tester3advsimdnofma`, `tester3sve`, and `tester3svenofma` for AArch64; and `tester3vsx` and `tester3vsxnofma` for PPC64.
 
-The new tests must detect deterministic drift in both single- and double-precision `asin` and `acos` over their valid input domain. Every registered native `tester3` CTest must compare current results with expectations that are available offline and fixed independently of that invocation. An unchanged build must pass repeatedly, while deliberately altered library results must make every affected scalar, FMA, and vector CTest fail. The expectation format, storage location, and comparison strategy are implementation choices rather than part of the external contract.
+The new tests must detect deterministic drift in both single- and double-precision `asin` and `acos` throughout their full valid input domain, with enough coverage to catch localized drift rather than only isolated sample points. Every registered native `tester3` CTest must compare current results with expectations that are available offline and fixed independently of that invocation. An unchanged build must pass repeatedly, while deliberately altered library results must make every affected scalar, FMA, and vector CTest fail. The expectation format, storage location, and comparison strategy are implementation choices rather than part of the external contract.
+
+The portable scalar and scalar FMA tests must build, remain registered with CTest, and pass both in the normal shared-library configuration and when `libsleef` is built statically in a configuration without MPFR, GMP, or OpenSSL. Their executables must not acquire runtime dependencies on those libraries in the dependency-free static configuration, and both configurations must accept unchanged library results.
 
 The portable scalar tester must run without runtime dependencies on MPFR or GMP.
 

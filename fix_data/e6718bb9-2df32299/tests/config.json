@@ -2,7 +2,7 @@
   "schema_version": "compact-swebench-harborized-v1",
   "execution": {
     "commands": [
-      "/usr/local/go/bin/go test -race -json -run '^(TestSequentialConcurrencyPreservesTargetOrder|TestZeroConcurrencyRunsSequentially|TestNegativeConcurrencyRunsSequentially|TestParallelRunOverlapsAndHonorsWorkerBound|TestConcurrencyIsCappedAtTargetCount|TestParallelAPIOutputKeepsInputOrderAndIsolation|TestParallelRunMergesReportsAndLogsInInputOrder|TestParallelRunMergesScanLabelsAndLogSummary|TestParallelRunMergesFindingsInInputOrder|TestParallelConsoleOutputKeepsTargetLinesIntact|TestSequentialRunPreservesLiveConsoleOutput|TestParallelTargetErrorIsSurfaced|TestParallelBestEffortModuleErrorLogsAndContinues|TestParallelPanicBecomesError|TestParallelRunReportsStartedFailuresInInputOrderAndStopsQueuedTargets|TestOverlappingParallelRunsKeepConsoleSafeUntilBothFinish|TestConcurrencyFlagDefaultsToOne|TestConcurrencyFlagAcceptsExplicitValue|TestProgressZeroTotalNoPanic|TestSetSilentRoutesChromeToStderr)$' . ./internal/config ./internal/output"
+      "/usr/local/go/bin/go test -race -json -run '^(TestSequentialConcurrencyPreservesTargetOrder|TestZeroConcurrencyRunsSequentially|TestNegativeConcurrencyRunsSequentially|TestParallelRunOverlapsAndHonorsWorkerBound|TestConcurrencyIsCappedAtTargetCount|TestParallelAPIOutputKeepsInputOrderAndIsolation|TestParallelRunMergesReportsAndLogsInInputOrder|TestParallelRunMergesScanLabelsAndLogSummary|TestParallelRunMergesFindingsInInputOrder|TestParallelConsoleOutputKeepsTargetLinesIntact|TestSequentialRunPreservesLiveConsoleOutput|TestParallelTargetErrorIsSurfaced|TestParallelBestEffortModuleErrorLogsAndContinues|TestParallelPanicBecomesError|TestParallelRunReportsStartedFailuresInInputOrderAndStopsQueuedTargets|TestOverlappingParallelRunsKeepConsoleSafeUntilBothFinish|TestParallelFailureFinalizesCompletedTargetsAndDropsQueuedWork|TestReusableAppHasFreshRunStateAndCombinesIndependentFailures|TestConcurrencyFlagDefaultsToOne|TestConcurrencyFlagAcceptsExplicitValue|TestProgressZeroTotalNoPanic|TestSetSilentRoutesChromeToStderr)$' . ./internal/config ./internal/output"
     ],
     "selected_test_files_to_run": [
       "sif_concurrency_behavior_test.go",
@@ -32,6 +32,8 @@
       "github.com/vmfunc/sif::TestParallelPanicBecomesError",
       "github.com/vmfunc/sif::TestParallelRunReportsStartedFailuresInInputOrderAndStopsQueuedTargets",
       "github.com/vmfunc/sif::TestOverlappingParallelRunsKeepConsoleSafeUntilBothFinish",
+      "github.com/vmfunc/sif::TestParallelFailureFinalizesCompletedTargetsAndDropsQueuedWork",
+      "github.com/vmfunc/sif::TestReusableAppHasFreshRunStateAndCombinesIndependentFailures",
       "github.com/vmfunc/sif/internal/config::TestConcurrencyFlagDefaultsToOne",
       "github.com/vmfunc/sif/internal/config::TestConcurrencyFlagAcceptsExplicitValue"
     ],

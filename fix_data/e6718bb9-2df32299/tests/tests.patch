@@ -38,10 +38,10 @@ index 0000000..d98288a
 +}
 diff --git a/sif_concurrency_behavior_test.go b/sif_concurrency_behavior_test.go
 new file mode 100644
-index 0000000..aba21b2
+index 0000000..28e0431
 --- /dev/null
 +++ b/sif_concurrency_behavior_test.go
-@@ -0,0 +1,827 @@
+@@ -0,0 +1,1055 @@
 +package sif
 +
 +import (
@@ -867,5 +867,233 @@ index 0000000..aba21b2
 +	sequentialOutput := got[sequentialStart:sequentialEnd]
 +	if !strings.Contains(sequentialOutput, "\033[2K") || !strings.Contains(sequentialOutput, "\r") {
 +		t.Fatalf("normal live output was not restored after parallel runs ended: %q", sequentialOutput)
++	}
++}
++
++func TestParallelFailureFinalizesCompletedTargetsAndDropsQueuedWork(t *testing.T) {
++	prepareConcurrentRunTest(t)
++	servers := make([]*httptest.Server, 3)
++	targets := make([]string, len(servers))
++	for i := range servers {
++		servers[i] = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++			w.Header().Set("X-Partial-Probe", "present")
++			w.WriteHeader(http.StatusOK)
++		}))
++		targets[i] = servers[i].URL
++		defer servers[i].Close()
++	}
++
++	type failureRun struct {
++		output     string
++		err        error
++		reportText string
++		logDir     string
++		visits     map[string]int
++	}
++	runFailure := func(apiMode bool) failureRun {
++		t.Helper()
++		firstStarted := make(chan struct{})
++		fatalReturned := make(chan struct{})
++		var visitsMu sync.Mutex
++		visits := make(map[string]int, len(targets))
++		installBehaviorModule(t, behaviorModule{
++			id: "partial-results",
++			execute: func(target string) (*modules.Result, error) {
++				visitsMu.Lock()
++				visits[target]++
++				visitsMu.Unlock()
++				switch target {
++				case targets[0]:
++					close(firstStarted)
++					<-fatalReturned
++					return &modules.Result{
++						ModuleID: "partial-results",
++						Target:   target,
++						Findings: []modules.Finding{{URL: target, Severity: "high", Evidence: "completed result"}},
++					}, nil
++				case targets[1]:
++					<-firstStarted
++					close(fatalReturned)
++					panic("fatal target failure")
++				default:
++					return &modules.Result{ModuleID: "partial-results", Target: target}, nil
++				}
++			},
++		})
++
++		dir := t.TempDir()
++		app := headersApp(targets, 2)
++		app.settings.ApiMode = apiMode
++		app.settings.Silent = !apiMode
++		app.settings.LogDir = dir
++		app.settings.Modules = "partial-results"
++		app.settings.Markdown = filepath.Join(dir, "partial.md")
++		got, runErr := captureRunOutput(t, app.Run)
++		if runErr == nil {
++			t.Fatal("Run returned nil after a fatal target failure")
++		}
++		for _, marker := range []string{targets[1], "fatal target failure"} {
++			if count := strings.Count(runErr.Error(), marker); count != 1 {
++				t.Fatalf("error marker %q occurs %d times, want once: %q", marker, count, runErr)
++			}
++		}
++		reportData, err := os.ReadFile(app.settings.Markdown)
++		if err != nil {
++			t.Fatalf("read partial report: %v", err)
++		}
++		visitsMu.Lock()
++		visitsCopy := make(map[string]int, len(visits))
++		for target, count := range visits {
++			visitsCopy[target] = count
++		}
++		visitsMu.Unlock()
++		return failureRun{output: got, err: runErr, reportText: string(reportData), logDir: dir, visits: visitsCopy}
++	}
++
++	apiRun := runFailure(true)
++
++	var apiRecords []UrlResult
++	for _, line := range strings.Split(apiRun.output, "\n") {
++		line = strings.TrimSpace(line)
++		if !strings.HasPrefix(line, "{") {
++			continue
++		}
++		var record UrlResult
++		if err := json.Unmarshal([]byte(line), &record); err != nil {
++			t.Fatalf("API record is not JSON: %v; line=%q", err, line)
++		}
++		apiRecords = append(apiRecords, record)
++	}
++	if len(apiRecords) != 1 || apiRecords[0].Url != targets[0] {
++		t.Fatalf("API records = %+v, want only the completed target", apiRecords)
++	}
++	foundPartial := false
++	for _, result := range apiRecords[0].Results {
++		foundPartial = foundPartial || result.Id == "partial-results"
++	}
++	if !foundPartial {
++		t.Fatalf("completed target results = %+v, want partial-results record", apiRecords[0].Results)
++	}
++	if count := strings.Count(apiRun.reportText, "## "+targets[0]+"\n"); count != 1 {
++		t.Fatalf("completed target report count = %d, want 1\n%s", count, apiRun.reportText)
++	}
++	for _, target := range targets[1:] {
++		if strings.Contains(apiRun.reportText, "## "+target+"\n") {
++			t.Fatalf("failed or queued target leaked into report: %q\n%s", target, apiRun.reportText)
++		}
++	}
++	if apiRun.visits[targets[0]] != 1 || apiRun.visits[targets[1]] != 1 || apiRun.visits[targets[2]] != 0 {
++		t.Fatalf("API target visits = %v, want completed/fatal once and queued never", apiRun.visits)
++	}
++
++	consoleRun := runFailure(false)
++	var scansLine, outputLine string
++	var partialFindingLines []string
++	for _, line := range strings.Split(consoleRun.output, "\n") {
++		switch {
++		case strings.Contains(line, "Scans:"):
++			scansLine = line
++		case strings.Contains(line, "Output:"):
++			outputLine = line
++		case strings.Contains(line, "[high]") && strings.Contains(line, "partial-results"):
++			partialFindingLines = append(partialFindingLines, line)
++		}
++	}
++	if count := strings.Count(scansLine, "HTTP Headers"); count != 1 {
++		t.Fatalf("completed scan-label count = %d, want 1; summary=%q", count, scansLine)
++	}
++	wantLog := filepath.Join(consoleRun.logDir, strings.TrimPrefix(targets[0], "http://")+".log")
++	if count := strings.Count(outputLine, wantLog); count != 1 {
++		t.Fatalf("completed log path occurs %d times, want once; summary=%q", count, outputLine)
++	}
++	for _, target := range targets[1:] {
++		unwantedLog := filepath.Join(consoleRun.logDir, strings.TrimPrefix(target, "http://")+".log")
++		if strings.Contains(outputLine, unwantedLog) {
++			t.Fatalf("failed or queued log path leaked into summary: %q", outputLine)
++		}
++	}
++	if len(partialFindingLines) != 1 || !strings.Contains(partialFindingLines[0], targets[0]) {
++		t.Fatalf("partial-result finding lines = %v, want completed target exactly once", partialFindingLines)
++	}
++	if consoleRun.visits[targets[0]] != 1 || consoleRun.visits[targets[1]] != 1 || consoleRun.visits[targets[2]] != 0 {
++		t.Fatalf("console target visits = %v, want completed/fatal once and queued never", consoleRun.visits)
++	}
++}
++
++func TestReusableAppHasFreshRunStateAndCombinesIndependentFailures(t *testing.T) {
++	prepareConcurrentRunTest(t)
++	targets := []string{"http://reuse-one", "http://reuse-two"}
++	var failSecond atomic.Bool
++	installBehaviorModule(t, behaviorModule{
++		id: "reuse-state",
++		execute: func(target string) (*modules.Result, error) {
++			if failSecond.Load() && target == targets[1] {
++				panic("reuse target failure")
++			}
++			return &modules.Result{
++				ModuleID: "reuse-state",
++				Target:   target,
++				Findings: []modules.Finding{{URL: target, Severity: "medium", Evidence: "fresh run"}},
++			}, nil
++		},
++	})
++
++	dir := t.TempDir()
++	reportPath := filepath.Join(dir, "reuse.md")
++	app := idleApp(targets, 2)
++	app.settings.LogDir = dir
++	app.settings.Markdown = reportPath
++	app.settings.Modules = "reuse-state"
++
++	assertSuccessfulRun := func(concurrency int) string {
++		t.Helper()
++		app.settings.Concurrency = concurrency
++		got, err := captureRunOutput(t, app.Run)
++		if err != nil {
++			t.Fatalf("Run with concurrency %d: %v", concurrency, err)
++		}
++		for _, target := range targets {
++			path := filepath.Join(dir, strings.TrimPrefix(target, "http://")+".log")
++			if count := strings.Count(got, path); count != 1 {
++				t.Fatalf("current log path %q occurs %d times in summary, want once: %q", path, count, got)
++			}
++		}
++		reportData, err := os.ReadFile(reportPath)
++		if err != nil {
++			t.Fatalf("read reuse report: %v", err)
++		}
++		for _, target := range targets {
++			if count := strings.Count(string(reportData), "## "+target+"\n"); count != 1 {
++				t.Fatalf("report section for %q occurs %d times, want once\n%s", target, count, reportData)
++			}
++		}
++		return got
++	}
++
++	assertSuccessfulRun(2)
++	assertSuccessfulRun(1)
++
++	failSecond.Store(true)
++	app.settings.Concurrency = 2
++	badReport := filepath.Join(dir, "missing", "reuse.md")
++	app.settings.Markdown = badReport
++	_, runErr := captureRunOutput(t, app.Run)
++	if runErr == nil {
++		t.Fatal("Run returned nil when target processing and finalization both failed")
++	}
++	for _, marker := range []string{targets[1], "reuse target failure"} {
++		if count := strings.Count(runErr.Error(), marker); count != 1 {
++			t.Fatalf("combined error marker %q occurs %d times, want once: %q", marker, count, runErr)
++		}
++	}
++	if !strings.Contains(runErr.Error(), badReport) {
++		t.Fatalf("combined error does not identify finalization failure for %q: %q", badReport, runErr)
++	}
++
++	failSecond.Store(false)
++	app.settings.Markdown = reportPath
++	finalOutput := assertSuccessfulRun(1)
++	if strings.Contains(finalOutput, badReport) {
++		t.Fatalf("failed-run artifact leaked into later summary: %q", finalOutput)
 +	}
 +}

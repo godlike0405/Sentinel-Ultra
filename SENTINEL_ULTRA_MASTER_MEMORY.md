@@ -90,6 +90,16 @@ Two independent routes require revision:
 One to four Minor defects require specific coaching comments in a review; when
 creating or fixing a task, correct them instead of knowingly shipping them.
 
+### Mandatory 10-axis Agentic Judge threshold
+
+Assess `clarity`, `oracle_no_gaming`, `oracle_reproducibility`,
+`oracle_spec_faithfulness`, `packaging`, `prescriptiveness`, `realism`,
+`self_containedness`, `test_coverage`, and `test_faithfulness` independently.
+Every axis must reach at least **3.5/5** before the task is ready. Use actual
+platform scores when available; otherwise label the result as an internal
+preflight estimate. Revise any axis below threshold, cite exact evidence per
+axis, and do not average away a low individual coverage/faithfulness concern.
+
 ### Major Pillars
 
 1. Oracle/golden correctness: applies cleanly, implements the instruction,
@@ -144,6 +154,14 @@ test, and recoverable difficulty drift.
   runs does not prove another initializer stays inactive.
 - Clarify observable capacity, readiness, shutdown, locking, and compatibility
   meanings without dictating code location or mechanism.
+- Define vague success language such as deterministic validation, graceful
+  handling, or drift detection with an observable baseline, exit/status
+  contract, and unsupported-case semantics.
+- Target existence, registration, compilation, repeated exit-zero runs, or
+  transitive execution do not by themselves prove the promised behavior.
+- Include a controlled negative case showing that a stub/no-op implementation
+  fails, and deliberately induce conditions such as drift when the instruction
+  promises that they will be detected.
 
 ## 7. Test quality
 

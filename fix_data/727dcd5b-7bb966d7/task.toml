@@ -12,16 +12,16 @@ repo_license = "BSL-1.0"
 source_pr_url = "https://github.com/shibatch/sleef/pull/202"
 base_commit_sha = "883859cc0faa62d6c50dd7911b68079c7609b949"
 model_difficulty = "hard"
-difficulty_explanation = "The change spans CMake extension discovery, deterministic scalar and SIMD math paths, self-contained digest validation, graceful execution across FMA and non-FMA targets, and cross-platform build integration. A solver must preserve the existing tester and GNU ABI behavior while integrating a new dependency-light runtime test family."
-tags = ["testing", "digest-regression", "cmake"]
+difficulty_explanation = "The change spans CMake extension discovery, dense full-domain deterministic coverage of scalar and SIMD math paths, normal shared and dependency-free static configurations, graceful execution across FMA and non-FMA targets, and cross-platform build integration. A solver must preserve the existing tester and GNU ABI behavior while keeping unchanged results accepted across this expanded configuration matrix."
+tags = ["testing", "deterministic-regression", "cmake", "dependency-isolation", "static-linking"]
 # --- legacy aliases (kept for backward-compatible internal consumers) ---
 difficulty = "hard"
 task_type = "implementation"
 task_subtype = "feature"
 source = "https://github.com/shibatch/sleef/pull/202"
 language = "c"
-expert_time_estimate_min = 180.0
-junior_time_estimate_min = 360.0
+expert_time_estimate_min = 240.0
+junior_time_estimate_min = 480.0
 pr_created_at = "2018-07-14T16:36:58Z"
 pr_merged_at = "2018-07-14T17:23:07Z"
 

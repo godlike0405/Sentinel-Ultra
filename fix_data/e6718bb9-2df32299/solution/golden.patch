@@ -173,7 +173,7 @@ index 019ef1a..217bf34 100644
  		return
  	}
 diff --git a/sif.go b/sif.go
-index c81bbe6..847c7c1 100644
+index c81bbe6..01610aa 100644
 --- a/sif.go
 +++ b/sif.go
 @@ -19,10 +19,13 @@ import (
@@ -190,7 +190,18 @@ index c81bbe6..847c7c1 100644
  
  	"github.com/charmbracelet/log"
  	"github.com/vmfunc/sif/internal/config"
-@@ -322,409 +325,561 @@ func (app *App) Run() error {
+@@ -234,6 +237,10 @@ func normalizeTarget(target string) (string, error) {
+ // Run runs the pentesting suite, with the targets specified, according to the
+ // settings specified.
+ func (app *App) Run() error {
++	// Every invocation owns a fresh run summary. An App is reusable, and paths
++	// collected by an earlier success or failure must not leak into this run.
++	app.logFiles = nil
++
+ 	// Handle --list-modules before any other processing
+ 	if app.settings.ListModules {
+ 		loader, err := modules.NewLoader()
+@@ -322,409 +329,563 @@ func (app *App) Run() error {
  		}
  	}
  
@@ -198,9 +209,10 @@ index c81bbe6..847c7c1 100644
 -		output.Info("Starting scan on %s", output.Highlight.Render(url))
 -
 -		moduleResults := make([]ModuleResult, 0, 16)
-+	results, err := app.scanAllTargets(storeDir, wantReport)
-+	if err != nil {
-+		return err
++	parallel := app.settings.Concurrency > 1 && len(app.targets) > 1
++	results, scanErr := app.scanAllTargets(storeDir, wantReport)
++	if scanErr != nil && !parallel {
++		return scanErr
 +	}
  
 -		if app.settings.LogDir != "" {
@@ -225,7 +237,8 @@ index c81bbe6..847c7c1 100644
  		}
 +	}
 +
-+	return app.finishRun(scansRun, allFindings, reportResults, wantReport)
++	finishErr := app.finishRun(scansRun, allFindings, reportResults, wantReport)
++	return errors.Join(scanErr, finishErr)
 +}
 +
 +// targetScan holds one target's isolated scan output: its findings, report rows,
@@ -364,7 +377,7 @@ index c81bbe6..847c7c1 100644
  		}
 +	}
 +	if len(failures) > 0 {
-+		return nil, errors.Join(failures...)
++		return results, errors.Join(failures...)
 +	}
 +	return results, nil
 +}

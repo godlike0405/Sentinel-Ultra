@@ -28,7 +28,6 @@ RUN pip install --no-cache-dir -r /tmp/frozen-requirements.txt
 # test run and the coverage-based oracle build.
 RUN pip install --no-cache-dir -e ".[dev]"
 
-CMD ["sh", "-c", "python -m pytest"]
 RUN mkdir -p /installed-agent
 RUN command -v patch >/dev/null 2>&1 || ( (apt-get update && apt-get install -y --no-install-recommends patch && rm -rf /var/lib/apt/lists/*) 2>/dev/null || apk add --no-cache patch 2>/dev/null || yum install -y patch 2>/dev/null || true )
 COPY test-requirements.txt /tmp/test-requirements.txt

@@ -449,13 +449,15 @@ agent.
 
 ## Harbor egress-control compatibility
 
-- Do not add `network_mode` or `allowed_hosts` to a task unless the target
-  Harbor installation is confirmed to support its egress-control sidecar and
-  Docker buildx invocation.
-- On installations whose Docker CLI rejects the sidecar build with
-  `unknown flag: --file`, remove those task-level fields. The later compose
-  error about an unset `EGRESS_CONTROL_SIDECAR_IMAGE_NAME` is a cleanup
-  consequence of the same failed sidecar build, not an independent defect.
+- Do not add `network_mode` or `allowed_hosts` speculatively. Preserve them
+  when the seed/current platform contract explicitly requires verifier
+  `no-network`, agent `allowlist`, and environment `public` behavior.
+- A Docker CLI rejection of the sidecar build with `unknown flag: --file` is a
+  host-tooling incompatibility when those settings are required; report it and
+  validate on a compatible runner instead of erasing the network contract. If
+  the settings are optional for that platform, removing them avoids the
+  sidecar. The later unset `EGRESS_CONTROL_SIDECAR_IMAGE_NAME` compose error is
+  a cleanup consequence of the failed sidecar build, not an independent defect.
 - Keep graded behavior network-independent through test fixtures and
   tool-specific offline settings such as `GOPROXY=off` and
   `GOTOOLCHAIN=local`, while allowing the environment image build to preload

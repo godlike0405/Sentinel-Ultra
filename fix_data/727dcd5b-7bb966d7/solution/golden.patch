@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index e349f5ffe..a68457b2f 100644
+index e349f5f..a68457b 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -77,15 +77,15 @@ set(TARGET_IUTFMA4 "iutfma4")
@@ -23,7 +23,7 @@ index e349f5ffe..a68457b2f 100644
  set(TARGET_LLVM_BITCODE "llvm-bitcode")
  # Generates the helper executable file mkrename needed to write the sleef header
 diff --git a/Configure.cmake b/Configure.cmake
-index a4704c049..aa1cdd0b4 100644
+index a4704c0..aa1cdd0 100644
 --- a/Configure.cmake
 +++ b/Configure.cmake
 @@ -23,10 +23,10 @@ endif()
@@ -251,7 +251,7 @@ index a4704c049..aa1cdd0b4 100644
  
  # Check if compilation with OpenMP really succeeds
 diff --git a/Jenkinsfile b/Jenkinsfile
-index 4254a3ad3..3c91ab7f6 100644
+index 4254a3a..3c91ab7 100644
 --- a/Jenkinsfile
 +++ b/Jenkinsfile
 @@ -53,6 +53,7 @@ pipeline {
@@ -263,7 +263,7 @@ index 4254a3ad3..3c91ab7f6 100644
   			 mkdir build
  			 cd build
 diff --git a/src/arch/helperadvsimd.h b/src/arch/helperadvsimd.h
-index 79552b5a7..e87b0dec6 100644
+index 79552b5..e87b0de 100644
 --- a/src/arch/helperadvsimd.h
 +++ b/src/arch/helperadvsimd.h
 @@ -147,6 +147,7 @@ static INLINE vfloat vdiv_vf_vf_vf(vfloat n, vfloat d) {
@@ -322,7 +322,7 @@ index 79552b5a7..e87b0dec6 100644
    return vneg_vd_vd(vfmanp_vd_vd_vd_vd(x, y, z));
  }
 diff --git a/src/arch/helperavx512f.h b/src/arch/helperavx512f.h
-index f2306fb35..ebceabad3 100644
+index f2306fb..ebceaba 100644
 --- a/src/arch/helperavx512f.h
 +++ b/src/arch/helperavx512f.h
 @@ -174,11 +174,17 @@ static INLINE vdouble vrec_vd_vd(vdouble x) { return _mm512_div_pd(_mm512_set1_p
@@ -366,7 +366,7 @@ index f2306fb35..ebceabad3 100644
  static INLINE vfloat vfma_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return _mm512_fmadd_ps(x, y, z); }
  static INLINE vfloat vfmapp_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return _mm512_fmadd_ps(x, y, z); }
 diff --git a/src/arch/helperpower_128.h b/src/arch/helperpower_128.h
-index 54b0668d6..6e7028fde 100644
+index 54b0668..6e7028f 100644
 --- a/src/arch/helperpower_128.h
 +++ b/src/arch/helperpower_128.h
 @@ -203,14 +203,20 @@ static INLINE vfloat vnegpos_vf_vf(vfloat d) { return vreinterpret_vf_vm(vxor_vm
@@ -418,7 +418,7 @@ index 54b0668d6..6e7028fde 100644
  static INLINE vfloat vfmapp_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vec_madd(x, y, z); }
  static INLINE vfloat vfmapn_vf_vf_vf_vf(vfloat x, vfloat y, vfloat z) { return vec_msub(x, y, z); }
 diff --git a/src/arch/helpersve.h b/src/arch/helpersve.h
-index 030a4b126..0c7118fa4 100644
+index 030a4b1..0c7118f 100644
 --- a/src/arch/helpersve.h
 +++ b/src/arch/helpersve.h
 @@ -220,6 +220,7 @@ static INLINE vint2 vrint_vi2_vf(vfloat d) {
@@ -474,10 +474,17 @@ index 030a4b126..0c7118fa4 100644
  // Float comparison
  static INLINE vopmask vlt_vo_vd_vd(vdouble x, vdouble y) {
 diff --git a/src/libm-tester/CMakeLists.txt b/src/libm-tester/CMakeLists.txt
-index 141ea8172..03fff529a 100644
+index 141ea81..4fa885b 100644
 --- a/src/libm-tester/CMakeLists.txt
 +++ b/src/libm-tester/CMakeLists.txt
-@@ -20,6 +20,22 @@ string(CONCAT CMAKE_C_FLAGS ${SLEEF_C_FLAGS})
+@@ -15,11 +15,29 @@ if (NOT LIBRT)
+   set(LIBRT "")
+ endif()
+ 
++find_package(OpenSSL QUIET)
++
+ set(CMAKE_C_FLAGS ORG_CMAKE_C_FLAGS)
+ string(CONCAT CMAKE_C_FLAGS ${SLEEF_C_FLAGS})
  
  #
  
@@ -500,7 +507,7 @@ index 141ea8172..03fff529a 100644
  function(add_test_iut IUT)
    if (LIB_MPFR)
      set(TESTER ${TARGET_TESTER})
-@@ -99,6 +115,42 @@ macro(test_extension SIMD)
+@@ -99,6 +117,47 @@ macro(test_extension SIMD)
  	      endif()
        endforeach()
      endif()
@@ -514,6 +521,11 @@ index 141ea8172..03fff529a 100644
 +      target_compile_definitions(${T} PRIVATE ${COMMON_TARGET_DEFINITIONS} ${TESTER3_DEFINITIONS_${SIMD}})
 +      set_target_properties(${T} PROPERTIES C_STANDARD 99)
 +      target_link_libraries(${T} ${TARGET_LIBSLEEF} ${LIBM})
++      if (OpenSSL_FOUND)
++        target_compile_definitions(${T} PRIVATE HAVE_OPENSSL=1)
++        target_include_directories(${T} PRIVATE ${OPENSSL_INCLUDE_DIR})
++        target_link_libraries(${T} ${OPENSSL_CRYPTO_LIBRARY})
++      endif()
 +      add_dependencies(${T} ${TARGET_HEADERS})
 +      add_dependencies(${T} ${TARGET_LIBSLEEF})
 +
@@ -545,26 +557,26 @@ index 141ea8172..03fff529a 100644
  
 diff --git a/src/libm-tester/hash_cinz.txt b/src/libm-tester/hash_cinz.txt
 new file mode 100644
-index 000000000..6a2dca1a5
+index 0000000..c7220fb
 --- /dev/null
 +++ b/src/libm-tester/hash_cinz.txt
 @@ -0,0 +1,4 @@
-+asin 1588c13c077d02f784cf2d63693a74c2
-+acos 7a8cafabe67aa1c257ea6c6591f1b094
-+asin d59f3ccaabc6e56d92d568b0532cf42b
-+acos dd8ccf02dfbbd0582aaeb7b2853524cf
++asin 1ea225153a931fdb9111ad6c0b2f5578
++acos bf52a8daa3a84ef5b410a3ff4257bbab
++asin 8d02f64a9aef00a22d57db5b7e3057ec
++acos fabbbf67a3b769f44c10bda9a99f6238
 diff --git a/src/libm-tester/hash_finz.txt b/src/libm-tester/hash_finz.txt
 new file mode 100644
-index 000000000..305d6f3a2
+index 0000000..e478788
 --- /dev/null
 +++ b/src/libm-tester/hash_finz.txt
 @@ -0,0 +1,4 @@
-+asin 25382463092c463e29328ed5dedc3740
-+acos 74fe6fda02f86c36ff49b93805369bc7
-+asin 4f1478684ffbd730db3ca9bdfbd3e672
-+acos 6789c8fd8ea0bd9ce8caab0f43510a81
++asin 9f2095515e3f8a895c836a7a904b4a6c
++acos b1fc8f67621bda7f2578a9d3439aa71e
++asin 66a887514e9b009c79dfd0d548b8b853
++acos 2e7f7a3bf3141659c3e1bd9f20ebb1e3
 diff --git a/src/libm-tester/iut.c b/src/libm-tester/iut.c
-index db39afb28..370998a10 100644
+index db39afb..370998a 100644
 --- a/src/libm-tester/iut.c
 +++ b/src/libm-tester/iut.c
 @@ -39,7 +39,7 @@
@@ -577,7 +589,7 @@ index db39afb28..370998a10 100644
  
    //fprintf(stderr, "IUT start\n");
 diff --git a/src/libm-tester/iutsimd.c b/src/libm-tester/iutsimd.c
-index c0a6f3103..6bea66f3b 100644
+index c0a6f31..6bea66f 100644
 --- a/src/libm-tester/iutsimd.c
 +++ b/src/libm-tester/iutsimd.c
 @@ -91,10 +91,10 @@ typedef Sleef___m512d_2 vdouble2;
@@ -668,7 +680,7 @@ index c0a6f3103..6bea66f3b 100644
  
 diff --git a/src/libm-tester/md5.c b/src/libm-tester/md5.c
 new file mode 100644
-index 000000000..b235e17a5
+index 0000000..b235e17
 --- /dev/null
 +++ b/src/libm-tester/md5.c
 @@ -0,0 +1,291 @@
@@ -965,7 +977,7 @@ index 000000000..b235e17a5
 +#endif
 diff --git a/src/libm-tester/md5.h b/src/libm-tester/md5.h
 new file mode 100644
-index 000000000..2da44bf35
+index 0000000..2da44bf
 --- /dev/null
 +++ b/src/libm-tester/md5.h
 @@ -0,0 +1,45 @@
@@ -1015,7 +1027,7 @@ index 000000000..2da44bf35
 +
 +#endif
 diff --git a/src/libm-tester/tester.c b/src/libm-tester/tester.c
-index 97652594c..344041c35 100644
+index 9765259..344041c 100644
 --- a/src/libm-tester/tester.c
 +++ b/src/libm-tester/tester.c
 @@ -205,6 +205,9 @@ double child_lgamma_u1(double x) { child_d_d("lgamma_u1", x); }
@@ -1181,7 +1193,7 @@ index 97652594c..344041c35 100644
  
    if (enableFlushToZero) fprintf(stderr, "\n\n*** Flush to zero enabled\n");
 diff --git a/src/libm-tester/tester2simddp.c b/src/libm-tester/tester2simddp.c
-index 8faac6ce7..9b3093ef7 100644
+index 8faac6c..9b3093e 100644
 --- a/src/libm-tester/tester2simddp.c
 +++ b/src/libm-tester/tester2simddp.c
 @@ -88,10 +88,10 @@ typedef Sleef___m512d_2 vdouble2;
@@ -1237,7 +1249,7 @@ index 8faac6ce7..9b3093ef7 100644
  typedef Sleef_vector_float_2 vfloat2;
  #endif
 diff --git a/src/libm-tester/tester2simdsp.c b/src/libm-tester/tester2simdsp.c
-index 24b6e615e..478604230 100644
+index 24b6e61..4786042 100644
 --- a/src/libm-tester/tester2simdsp.c
 +++ b/src/libm-tester/tester2simdsp.c
 @@ -89,10 +89,10 @@ typedef Sleef___m512d_2 vdouble2;
@@ -1294,10 +1306,10 @@ index 24b6e615e..478604230 100644
  #endif
 diff --git a/src/libm-tester/tester3.c b/src/libm-tester/tester3.c
 new file mode 100644
-index 000000000..d3d9932ed
+index 0000000..38c03d4
 --- /dev/null
 +++ b/src/libm-tester/tester3.c
-@@ -0,0 +1,282 @@
+@@ -0,0 +1,290 @@
 +//          Copyright Naoki Shibata 2010 - 2018.
 +// Distributed under the Boost Software License, Version 1.0.
 +//    (See accompanying file LICENSE.txt or copy at
@@ -1331,7 +1343,7 @@ index 000000000..d3d9932ed
 +  uint8_t *q = p;
 +  for(int i=0;i<size;i++) {
 +    q[i] = (seed >> 16) & 255;
-+    seed = seed * 1103515245 + 12345; 
++    seed = seed * 1103515245 + 12345;
 +  }
 +}
 +
@@ -1433,6 +1445,10 @@ index 000000000..d3d9932ed
 +    MD5_CTX ctx;						\
 +    memset(&ctx, 1, sizeof(MD5_CTX));				\
 +    MD5_Init(&ctx);						\
++    exec_d_d(ATR, NAME, ULP, DPTYPE, DPTYPESPEC, EXTSPEC, -1.0); \
++    exec_d_d(ATR, NAME, ULP, DPTYPE, DPTYPESPEC, EXTSPEC, -0.0); \
++    exec_d_d(ATR, NAME, ULP, DPTYPE, DPTYPESPEC, EXTSPEC, +0.0); \
++    exec_d_d(ATR, NAME, ULP, DPTYPE, DPTYPESPEC, EXTSPEC, +1.0); \
 +    double step = ((double)(END) - (double)(START))/NSTEP;	\
 +    for(double d = (START);d < (END);d += step)			\
 +      exec_d_d(ATR, NAME, ULP, DPTYPE, DPTYPESPEC, EXTSPEC, d);	\
@@ -1500,6 +1516,10 @@ index 000000000..d3d9932ed
 +#define test_f_f(NAME, ULP, START, END, NSTEP) do {		\
 +    MD5_CTX ctx;						\
 +    MD5_Init(&ctx);						\
++    exec_f_f(ATR, NAME, ULP, SPTYPE, SPTYPESPEC, EXTSPEC, -1.0f); \
++    exec_f_f(ATR, NAME, ULP, SPTYPE, SPTYPESPEC, EXTSPEC, -0.0f); \
++    exec_f_f(ATR, NAME, ULP, SPTYPE, SPTYPESPEC, EXTSPEC, +0.0f); \
++    exec_f_f(ATR, NAME, ULP, SPTYPE, SPTYPESPEC, EXTSPEC, +1.0f); \
 +    float step = ((double)(END) - (double)(START))/NSTEP;	\
 +    for(float d = (START);d < (END);d += step)			\
 +      exec_f_f(ATR, NAME, ULP, SPTYPE, SPTYPESPEC, EXTSPEC, d);	\
@@ -1582,7 +1602,7 @@ index 000000000..d3d9932ed
 +}
 diff --git a/src/libm-tester/tester3main.c b/src/libm-tester/tester3main.c
 new file mode 100644
-index 000000000..ad9e31fdf
+index 0000000..ad9e31f
 --- /dev/null
 +++ b/src/libm-tester/tester3main.c
 @@ -0,0 +1,25 @@
@@ -1612,7 +1632,7 @@ index 000000000..ad9e31fdf
 +  exit(0);
 +}
 diff --git a/src/libm/dd.h b/src/libm/dd.h
-index 69f208953..183c3115b 100644
+index 69f2089..183c311 100644
 --- a/src/libm/dd.h
 +++ b/src/libm/dd.h
 @@ -3,7 +3,7 @@
@@ -1625,7 +1645,7 @@ index 69f208953..183c3115b 100644
    svfloat64_t x;
    svfloat64_t y;
 diff --git a/src/libm/df.h b/src/libm/df.h
-index 2899e8623..82b9d560b 100644
+index 2899e86..82b9d56 100644
 --- a/src/libm/df.h
 +++ b/src/libm/df.h
 @@ -3,7 +3,7 @@
@@ -1638,7 +1658,7 @@ index 2899e8623..82b9d560b 100644
    svfloat32_t x;
    svfloat32_t y;
 diff --git a/src/libm/funcproto.h b/src/libm/funcproto.h
-index 821e6c4c1..b647aee84 100644
+index 821e6c4..b647aee 100644
 --- a/src/libm/funcproto.h
 +++ b/src/libm/funcproto.h
 @@ -49,7 +49,8 @@ funcSpec funcList[] = {
@@ -1652,7 +1672,7 @@ index 821e6c4c1..b647aee84 100644
    { "atan2", 35, 0, 1, DET_COMMON },
    { "log", 35, 0, 0, DET_COMMON },
 diff --git a/src/libm/mkrename.c b/src/libm/mkrename.c
-index a66c3a333..dee9897e4 100644
+index a66c3a3..dee9897 100644
 --- a/src/libm/mkrename.c
 +++ b/src/libm/mkrename.c
 @@ -41,9 +41,6 @@ int main(int argc, char **argv) {
@@ -1666,7 +1686,7 @@ index a66c3a333..dee9897e4 100644
        if ((funcList[i].flags & DET) != 0 && strcmp(atrPrefix, "-") == 0) continue;
        if (funcList[i].ulp >= 0) {
 diff --git a/src/libm/norename.h b/src/libm/norename.h
-index 969bbe877..55d9afb74 100755
+index 969bbe8..55d9afb 100755
 --- a/src/libm/norename.h
 +++ b/src/libm/norename.h
 @@ -1,4 +1,4 @@
@@ -1694,7 +1714,7 @@ index 969bbe877..55d9afb74 100755
 +vfloat yacosf(vfloat s);
  #endif
 diff --git a/src/libm/sleeflibm_header.h.org b/src/libm/sleeflibm_header.h.org
-index 71ce0483d..d92ad02f9 100644
+index 71ce048..d92ad02 100644
 --- a/src/libm/sleeflibm_header.h.org
 +++ b/src/libm/sleeflibm_header.h.org
 @@ -15,7 +15,7 @@
@@ -1707,7 +1727,7 @@ index 71ce0483d..d92ad02f9 100644
  #define FP_FAST_FMA
  #endif
 diff --git a/src/libm/sleefsimddp.c b/src/libm/sleefsimddp.c
-index c1eb77826..0ba640dbb 100644
+index c1eb778..f5ca2c9 100644
 --- a/src/libm/sleefsimddp.c
 +++ b/src/libm/sleefsimddp.c
 @@ -96,11 +96,11 @@ extern const double rempitabdp[];
@@ -1793,10 +1813,24 @@ index c1eb77826..0ba640dbb 100644
    ex = vandnot_vi_vi_vi(vsra_vi_vi_i(ex, 31), ex);
    ex = vand_vi_vi_vi(ex, vcast_vi_i(1023));
  #endif
-@@ -1474,32 +1474,6 @@ EXPORT CONST vdouble xasin(vdouble d) {
-   return vmulsign_vd_vd_vd(r, d);
+@@ -442,7 +442,7 @@ EXPORT CONST vdouble xsin(vdouble d) {
+   u = vadd_vd_vd_vd(vmul_vd_vd_vd(s, vmul_vd_vd_vd(u, d)), d);
+ 
+   u = vsel_vd_vo_vd_vd(visnegzero_vo_vd(r), r, u);
+-  
++
+   return u;
  }
  
+@@ -1469,36 +1469,10 @@ EXPORT CONST vdouble xasin(vdouble d) {
+ #endif
+ 
+   u = vmla_vd_vd_vd_vd(u, vmul_vd_vd_vd(x, x2), x);
+-  
+-  vdouble r = vsel_vd_vo_vd_vd(o, u, vmla_vd_vd_vd_vd(u, vcast_vd_d(-2), vcast_vd_d(M_PI/2)));
+-  return vmulsign_vd_vd_vd(r, d);
+-}
+-
 -#ifndef ENABLE_GNUABI
 -EXPORT CONST vdouble yasin(vdouble d) {
 -  vopmask o = vlt_vo_vd_vd(vabs_vd_vd(d), vcast_vd_d(0.5));
@@ -1815,17 +1849,16 @@ index c1eb77826..0ba640dbb 100644
 -  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.4464285681377102438e-1));
 -  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.7500000000378581611e-1));
 -  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.1666666666666497543e+0));
--
+ 
 -  u = vmla_vd_vd_vd_vd(u, vmul_vd_vd_vd(x, x2), x);
 -  
--  vdouble r = vsel_vd_vo_vd_vd(o, u, vmla_vd_vd_vd_vd(u, vcast_vd_d(-2), vcast_vd_d(M_PI/2)));
--  return vmulsign_vd_vd_vd(r, d);
--}
+   vdouble r = vsel_vd_vo_vd_vd(o, u, vmla_vd_vd_vd_vd(u, vcast_vd_d(-2), vcast_vd_d(M_PI/2)));
+   return vmulsign_vd_vd_vd(r, d);
+ }
 -#endif
--
+ 
  EXPORT CONST vdouble xasin_u1(vdouble d) {
    vopmask o = vlt_vo_vd_vd(vabs_vd_vd(d), vcast_vd_d(0.5));
-   vdouble x2 = vsel_vd_vo_vd_vd(o, vmul_vd_vd_vd(d, d), vmul_vd_vd_vd(vsub_vd_vd_vd(vcast_vd_d(1), vabs_vd_vd(d)), vcast_vd_d(0.5))), u;
 @@ -1651,6 +1625,62 @@ EXPORT CONST vdouble xacos_u1(vdouble d) {
    return vadd_vd_vd_vd(y.x, y.y);
  }
@@ -1850,7 +1883,7 @@ index c1eb77826..0ba640dbb 100644
 +  u = vmla_vd_vd_vd_vd(u, x2, vcast_vd_d(+0.1666666666666497543e+0));
 +
 +  u = vmla_vd_vd_vd_vd(u, vmul_vd_vd_vd(x, x2), x);
-+  
++
 +  vdouble r = vsel_vd_vo_vd_vd(o, u, vmla_vd_vd_vd_vd(u, vcast_vd_d(-2), vcast_vd_d(M_PI/2)));
 +  return vmulsign_vd_vd_vd(r, d);
 +}
@@ -2061,7 +2094,7 @@ index c1eb77826..0ba640dbb 100644
      vdouble2 a, b;
    } dd2;
 diff --git a/src/libm/sleefsimdsp.c b/src/libm/sleefsimdsp.c
-index eb6f5d1e6..980a402d9 100644
+index eb6f5d1..980a402 100644
 --- a/src/libm/sleefsimdsp.c
 +++ b/src/libm/sleefsimdsp.c
 @@ -96,11 +96,11 @@ extern const float rempitabsp[];

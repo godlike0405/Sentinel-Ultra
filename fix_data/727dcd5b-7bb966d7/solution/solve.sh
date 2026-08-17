@@ -15,3 +15,13 @@ else
   echo "Golden patch does not apply cleanly to this checkout." >&2
   exit 1
 fi
+
+if [ ! -f src/libm-tester/tester3.c ] || [ ! -f src/libm-tester/tester3main.c ]; then
+  echo "Golden patch verification failed: tester3 sources are absent." >&2
+  exit 1
+fi
+if ! grep -q 'test_d_d(acos' src/libm-tester/tester3.c \
+    || ! grep -q 'test_f_f(acos' src/libm-tester/tester3.c; then
+  echo "Golden patch verification failed: deterministic acos coverage is absent." >&2
+  exit 1
+fi

@@ -155,8 +155,16 @@ if not commands:
         raise SystemExit("No execution.commands configured and no framework default")
 
 files_arg = " ".join(shlex.quote(str(x)) for x in test_files)
+# Every command must run (a failing fail-to-pass command must not stop the
+# pass-to-pass command from producing results on an unsolved tree), but the
+# script's exit status must still reflect the worst outcome — otherwise a
+# later passing command masks an earlier failure and the raw exit code stops
+# being a usable integrity signal.
+print("__rc=0")
 for cmd in commands:
     print(cmd.replace("${TEST_FILES}", files_arg))
+    print('__c=$?; if [ "$__c" -gt "$__rc" ]; then __rc=$__c; fi')
+print('exit "$__rc"')
 PY
 chmod +x /tmp/run_tests.sh
 

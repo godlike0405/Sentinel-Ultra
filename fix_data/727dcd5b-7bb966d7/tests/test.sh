@@ -20,9 +20,13 @@ mkdir -p "$log_dir"
 rm -f "$stdout_log" "$stderr_log" "$results" "$output" "$report" "$reward"
 
 verifier_tmp=""
+compat_tmp=""
 cleanup() {
   if [ -n "$verifier_tmp" ] && [ -d "$verifier_tmp" ]; then
     rm -rf "$verifier_tmp"
+  fi
+  if [ -n "$compat_tmp" ] && [ -d "$compat_tmp" ]; then
+    rm -rf "$compat_tmp"
   fi
   if [ ! -f "$reward" ]; then
     echo "0" > "$reward"
@@ -51,12 +55,29 @@ cd "$workspace" || infrastructure_failure "could not enter workspace"
 build_dir="$workspace/build"
 rm -rf "$build_dir" "$workspace/.sentinel-tests"
 
+real_cc="$(command -v "$cc_command")" || infrastructure_failure "C compiler is unavailable"
+compat_tmp="$(mktemp -d)"
+mkdir -p "$compat_tmp/include"
+printf '%s\n' \
+  '#ifndef SENTINEL_MPFR_COMPAT_WRAPPER_H' \
+  '#define SENTINEL_MPFR_COMPAT_WRAPPER_H' \
+  '#define mpfr_sinpi sentinel_system_mpfr_sinpi' \
+  '#define mpfr_cospi sentinel_system_mpfr_cospi' \
+  '#include_next <mpfr.h>' \
+  '#undef mpfr_sinpi' \
+  '#undef mpfr_cospi' \
+  '#endif' > "$compat_tmp/include/mpfr.h"
+printf '#!/bin/sh\nexec "%s" -fcommon "$@"\n' "$real_cc" > "$compat_tmp/cc"
+chmod 700 "$compat_tmp/cc"
+
 pre_stdout="$(mktemp)"
 pre_stderr="$(mktemp)"
 
 set +e
 "$cmake_command" -S "$workspace" -B "$build_dir" -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+  -DCMAKE_C_COMPILER="$compat_tmp/cc" \
+  -DMPFR_INCLUDE_DIR="$compat_tmp/include" \
   >"$pre_stdout" 2>"$pre_stderr"
 configure_exit=$?
 if [ "$configure_exit" -eq 0 ]; then

@@ -17,12 +17,17 @@
       "sentinel::target_tester3avx512fnofma",
       "sentinel::deterministic_acos_abi",
       "sentinel::tester3_family_rejects_drift",
+      "sentinel::tester3_domain_coverage",
       "sentinel::tester3_is_mpfr_free",
+      "sentinel::tester3_static_dependency_free_matrix",
       "sentinel::arm32_target_matrix",
       "sentinel::aarch64_target_matrix",
       "sentinel::ppc64_target_matrix"
     ],
     "pass_to_pass": [
+      "sentinel::existing_tester_smoke",
+      "sentinel::existing_tester2_dp_smoke",
+      "sentinel::existing_tester2_sp_smoke",
       "sentinel::existing_gnuabi_sse2",
       "sentinel::existing_gnuabi_avx2"
     ],

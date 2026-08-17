@@ -1,9 +1,9 @@
 diff --git a/.sentinel-tests/test_tester3_contract.py b/.sentinel-tests/test_tester3_contract.py
-new file mode 100755
-index 0000000..2a68952
+new file mode 100644
+index 0000000..f24b206
 --- /dev/null
 +++ b/.sentinel-tests/test_tester3_contract.py
-@@ -0,0 +1,292 @@
+@@ -0,0 +1,726 @@
 +#!/usr/bin/env python3
 +from __future__ import annotations
 +
@@ -13,6 +13,7 @@ index 0000000..2a68952
 +from pathlib import Path
 +import re
 +import shutil
++import signal
 +import subprocess
 +import sys
 +import tempfile
@@ -111,6 +112,77 @@ index 0000000..2a68952
 +        lambda: build_and_run_ctest("gnuabi_compatibility_AVX2"),
 +    )
 +
++    def build_and_smoke_legacy_tester(
++        target: str,
++        command: list[str],
++        *,
++        progress_text: str | None = None,
++    ) -> None:
++        build_targets = [target, "iut"] if target == "tester" else [target]
++        built = run(
++            [
++                args.cmake,
++                "--build",
++                str(build_dir),
++                "--parallel",
++                "4",
++                "--target",
++                *build_targets,
++            ],
++            timeout=900,
++        )
++        require_success(built, f"building pre-existing {target}")
++        env = os.environ.copy()
++        env.update({"LC_ALL": "C", "LANG": "C"})
++        process = subprocess.Popen(
++            command,
++            cwd=workspace,
++            env=env,
++            text=True,
++            stdout=subprocess.PIPE,
++            stderr=subprocess.PIPE,
++            start_new_session=True,
++        )
++        try:
++            stdout, stderr = process.communicate(timeout=4)
++        except subprocess.TimeoutExpired:
++            os.killpg(process.pid, signal.SIGTERM)
++            try:
++                stdout, stderr = process.communicate(timeout=5)
++            except subprocess.TimeoutExpired:
++                os.killpg(process.pid, signal.SIGKILL)
++                stdout, stderr = process.communicate(timeout=5)
++        else:
++            output = (stdout + "\n" + stderr)[-6000:]
++            raise AssertionError(
++                f"pre-existing {target} exited unexpectedly with {process.returncode}:\n{output}"
++            )
++        if progress_text is not None and progress_text not in stdout + stderr:
++            raise AssertionError(f"pre-existing {target} produced no expected test progress")
++
++    record(
++        "sentinel::existing_tester_smoke",
++        lambda: build_and_smoke_legacy_tester(
++            "tester",
++            [str(build_dir / "bin" / "tester"), str(build_dir / "bin" / "iut")],
++            progress_text="denormal/nonnumber test",
++        ),
++    )
++    record(
++        "sentinel::existing_tester2_dp_smoke",
++        lambda: build_and_smoke_legacy_tester(
++            "tester2sse2dp",
++            [str(build_dir / "bin" / "tester2sse2dp")],
++        ),
++    )
++    record(
++        "sentinel::existing_tester2_sp_smoke",
++        lambda: build_and_smoke_legacy_tester(
++            "tester2sse2sp",
++            [str(build_dir / "bin" / "tester2sse2sp")],
++        ),
++    )
++
 +    tester3_targets = [
 +        "tester3purec_scalar",
 +        "tester3purecfma_scalar",
@@ -165,56 +237,297 @@ index 0000000..2a68952
 +    record("sentinel::deterministic_acos_abi", check_deterministic_acos_abi)
 +
 +    def check_tester3_family_rejects_drift() -> None:
++        cpuinfo = Path("/proc/cpuinfo").read_text(encoding="ascii", errors="ignore").lower()
++        feature_line = " ".join(
++            line.split(":", 1)[1]
++            for line in cpuinfo.splitlines()
++            if ":" in line and line.split(":", 1)[0].strip() in {"flags", "features"}
++        )
++        cpu_features = set(feature_line.split())
++        target_features = {
++            "tester3purec_scalar": set(),
++            "tester3purecfma_scalar": set(),
++            "tester3sse2": {"sse2"},
++            "tester3sse4": {"sse4_1"},
++            "tester3avx": {"avx"},
++            "tester3avx2128": {"avx2", "fma"},
++            "tester3avx2": {"avx2", "fma"},
++            "tester3avx512f": {"avx512f", "fma"},
++            "tester3avx512fnofma": {"avx512f"},
++        }
++        shapes = ("asind", "acosd", "asinf", "acosf")
 +        for target in tester3_targets:
 +            binary = build_dir / "bin" / target
 +            imported = imported_inverse_trig_symbols(binary)
-+            with tempfile.TemporaryDirectory(prefix=f"sentinel-{target}-interpose-") as tmp:
-+                temp_dir = Path(tmp)
-+                source = temp_dir / "interpose.s"
-+                marker_source = temp_dir / "marker.c"
-+                marker = temp_dir / "called"
-+                library = temp_dir / "interpose.so"
-+                assembly = [".text"]
-+                for name in sorted(imported):
-+                    assembly.extend(
++            for shape_index, shape in enumerate(shapes):
++                selected = sorted(name for name in imported if shape in name)
++                if not selected:
++                    raise AssertionError(f"{target} has no imported {shape} implementation")
++                with tempfile.TemporaryDirectory(
++                    prefix=f"sentinel-{target}-{shape}-interpose-"
++                ) as tmp:
++                    temp_dir = Path(tmp)
++                    source = temp_dir / "interpose.s"
++                    marker_source = temp_dir / "marker.c"
++                    marker = temp_dir / "calls"
++                    library = temp_dir / "interpose.so"
++                    assembly = [".text"]
++                    for symbol_index, name in enumerate(selected):
++                        nonnegative = f".Lnonnegative_{shape_index}_{symbol_index}"
++                        finished = f".Lfinished_{shape_index}_{symbol_index}"
++                        assembly.extend(
++                            [
++                                f".globl {name}",
++                                f".type {name}, @function",
++                                f"{name}:",
++                                "  mov sentinel_count@GOTPCREL(%rip), %rax",
++                                "  addq $1, (%rax)",
++                            ]
++                        )
++                        if shape.endswith("d"):
++                            assembly.extend(
++                                [
++                                    "  movq %xmm0, %rdx",
++                                    "  movq %rdx, %rcx",
++                                    "  btrq $63, %rcx",
++                                    "  testq %rcx, %rcx",
++                                    f"  jz {finished}",
++                                    "  movabsq $0x3ff0000000000000, %r8",
++                                    "  cmpq %r8, %rcx",
++                                    f"  ja {finished}",
++                                ]
++                            )
++                        else:
++                            assembly.extend(
++                                [
++                                    "  movd %xmm0, %edx",
++                                    "  movl %edx, %ecx",
++                                    "  andl $0x7fffffff, %ecx",
++                                    "  testl %ecx, %ecx",
++                                    f"  jz {finished}",
++                                    "  cmpl $0x3f800000, %ecx",
++                                    f"  ja {finished}",
++                                ]
++                            )
++                        assembly.extend(
++                            [
++                                "  mov sentinel_domain_count@GOTPCREL(%rip), %rax",
++                                "  addq $1, (%rax)",
++                                "  mov sentinel_domain_signs@GOTPCREL(%rip), %rax",
++                            ]
++                        )
++                        if shape.endswith("d"):
++                            assembly.append("  btq $63, %rdx")
++                        else:
++                            assembly.append("  btl $31, %edx")
++                        assembly.extend(
++                            [
++                                f"  jnc {nonnegative}",
++                                "  orl $1, (%rax)",
++                                f"  jmp {finished}",
++                                f"{nonnegative}:",
++                                "  orl $2, (%rax)",
++                                f"{finished}:",
++                                "  ret",
++                            ]
++                        )
++                    assembly.append('.section .note.GNU-stack,"",@progbits')
++                    source.write_text("\n".join(assembly) + "\n", encoding="ascii")
++                    marker_source.write_text(
++                        "#include <fcntl.h>\n"
++                        "#include <stdio.h>\n"
++                        "#include <unistd.h>\n"
++                        "volatile unsigned long long sentinel_count = 0;\n"
++                        "volatile unsigned long long sentinel_domain_count = 0;\n"
++                        "volatile unsigned sentinel_domain_signs = 0;\n"
++                        "__attribute__((destructor)) static void sentinel_done(void) {\n"
++                        "  if (sentinel_count) {\n"
++                        f"    int fd = open({json.dumps(str(marker))}, O_WRONLY | O_CREAT | O_TRUNC, 0600);\n"
++                        "    if (fd >= 0) {\n"
++                        "      dprintf(fd, \"%llu %llu %u\\n\", sentinel_count, "
++                        "sentinel_domain_count, sentinel_domain_signs);\n"
++                        "      close(fd);\n"
++                        "    }\n"
++                        "  }\n"
++                        "}\n",
++                        encoding="ascii",
++                    )
++                    compiled = run(
 +                        [
-+                            f".globl {name}",
-+                            f".type {name}, @function",
-+                            f"{name}:",
-+                            "  mov sentinel_called@GOTPCREL(%rip), %rax",
-+                            "  movl $1, (%rax)",
-+                            "  ret",
++                            args.cc,
++                            "-shared",
++                            "-fPIC",
++                            str(source),
++                            str(marker_source),
++                            "-o",
++                            str(library),
 +                        ]
 +                    )
-+                assembly.append('.section .note.GNU-stack,"",@progbits')
-+                source.write_text("\n".join(assembly) + "\n", encoding="ascii")
-+                marker_source.write_text(
-+                    "#include <fcntl.h>\n"
-+                    "#include <unistd.h>\n"
-+                    "volatile int sentinel_called = 0;\n"
-+                    "__attribute__((destructor)) static void sentinel_done(void) {\n"
-+                    "  if (sentinel_called) {\n"
-+                    f"    int fd = open({json.dumps(str(marker))}, O_WRONLY | O_CREAT, 0600);\n"
-+                    "    if (fd >= 0) close(fd);\n"
-+                    "  }\n"
-+                    "}\n",
-+                    encoding="ascii",
-+                )
-+                compiled = run(
-+                    [args.cc, "-shared", "-fPIC", str(source), str(marker_source), "-o", str(library)]
-+                )
-+                require_success(compiled, f"building the public-ABI result interposer for {target}")
-+                executed = run_ctest(target, extra_env={"LD_PRELOAD": str(library)})
-+                altered_results_were_used = marker.exists()
-+            if altered_results_were_used and executed.returncode == 0:
-+                raise AssertionError(f"{target} accepted deliberately altered inverse-trig results")
-+            if not altered_results_were_used and executed.returncode != 0:
-+                raise AssertionError(
-+                    f"{target} failed before reaching the altered public math calls:\n"
-+                    f"{(executed.stdout + executed.stderr)[-4000:]}"
-+                )
++                    require_success(
++                        compiled,
++                        f"building the {shape} public-ABI result interposer for {target}",
++                    )
++                    executed = run_ctest(target, extra_env={"LD_PRELOAD": str(library)})
++                    call_data = marker.read_text(encoding="ascii").split() if marker.exists() else []
++                if call_data:
++                    count, domain_count, domain_signs = (int(value) for value in call_data)
++                    if domain_count < 2 or domain_signs != 3:
++                        raise AssertionError(
++                            f"{target} exercised {shape} too narrowly over its valid domain: "
++                            f"count={count}, domain_count={domain_count}, "
++                            f"domain_signs={domain_signs}"
++                        )
++                    if executed.returncode == 0:
++                        raise AssertionError(f"{target} accepted deliberately altered {shape} results")
++                else:
++                    missing_features = sorted(target_features[target] - cpu_features)
++                    if not missing_features:
++                        raise AssertionError(
++                            f"{target} never executed {shape} on a supported CPU"
++                        )
++                    if executed.returncode != 0:
++                        raise AssertionError(
++                            f"{target} did not exit cleanly when CPU features "
++                            f"{missing_features} were unavailable:\n"
++                            f"{(executed.stdout + executed.stderr)[-4000:]}"
++                        )
 +
 +    record("sentinel::tester3_family_rejects_drift", check_tester3_family_rejects_drift)
++
++    def check_tester3_domain_coverage() -> None:
++        cpuinfo = Path("/proc/cpuinfo").read_text(encoding="ascii", errors="ignore").lower()
++        cpu_features = set(
++            " ".join(
++                line.split(":", 1)[1]
++                for line in cpuinfo.splitlines()
++                if ":" in line and line.split(":", 1)[0].strip() in {"flags", "features"}
++            ).split()
++        )
++        target_features = {
++            "tester3purec_scalar": set(),
++            "tester3purecfma_scalar": {"fma"},
++            "tester3sse2": {"sse2"},
++            "tester3sse4": {"sse4_1"},
++            "tester3avx": {"avx"},
++            "tester3avx2128": {"avx2", "fma"},
++            "tester3avx2": {"avx2", "fma"},
++            "tester3avx512f": {"avx512f", "fma"},
++            "tester3avx512fnofma": {"avx512f"},
++        }
++        target_flags = {
++            "tester3purec_scalar": [],
++            "tester3purecfma_scalar": ["-mfma"],
++            "tester3sse2": ["-msse2"],
++            "tester3sse4": ["-msse4.1"],
++            "tester3avx": ["-mavx"],
++            "tester3avx2128": ["-mavx2", "-mfma"],
++            "tester3avx2": ["-mavx2", "-mfma"],
++            "tester3avx512f": ["-mavx512f", "-mfma"],
++            "tester3avx512fnofma": ["-mavx512f"],
++        }
++        shapes = ("asind", "acosd", "asinf", "acosf")
++        for target in tester3_targets:
++            required_features = target_features[target]
++            if required_features - cpu_features:
++                continue
++            binary = build_dir / "bin" / target
++            imported = imported_inverse_trig_symbols(binary)
++            for shape in shapes:
++                selected = sorted(name for name in imported if shape in name)
++                if not selected:
++                    raise AssertionError(f"{target} has no imported {shape} implementation")
++                with tempfile.TemporaryDirectory(
++                    prefix=f"sentinel-{target}-{shape}-domain-"
++                ) as tmp:
++                    temp_dir = Path(tmp)
++                    marker_source = temp_dir / "marker.c"
++                    marker = temp_dir / "calls"
++                    library = temp_dir / "interpose.so"
++                    wrappers = []
++                    for name in selected:
++                        signature = re.search(r"(?:asin|acos)([df])(\d+)_", name)
++                        if signature is None:
++                            raise AssertionError(f"could not identify the public ABI shape of {name}")
++                        precision, lane_text = signature.groups()
++                        lane_count = int(lane_text)
++                        scalar_type = "double" if precision == "d" else "float"
++                        zero = "0.0" if precision == "d" else "0.0f"
++                        if lane_count == 1:
++                            wrappers.append(
++                                f"{scalar_type} {name}({scalar_type} value) {{ "
++                                f"sentinel_observe((double)value); return {zero}; }}\n"
++                            )
++                            continue
++                        vector_bytes = lane_count * (8 if precision == "d" else 4)
++                        type_name = f"sentinel_vector_{precision}_{lane_count}_{len(wrappers)}"
++                        wrappers.append(
++                            f"typedef {scalar_type} {type_name} "
++                            f"__attribute__((vector_size({vector_bytes})));\n"
++                            f"{type_name} {name}({type_name} value) {{\n"
++                            f"  union {{ {type_name} vector; {scalar_type} lane[{lane_count}]; }} "
++                            "unpacked = { value };\n"
++                            f"  for (unsigned i = 0; i < {lane_count}; ++i) "
++                            "sentinel_observe((double)unpacked.lane[i]);\n"
++                            f"  return ({type_name}){{ 0 }};\n"
++                            "}\n"
++                        )
++                    marker_source.write_text(
++                        "#include <fcntl.h>\n"
++                        "#include <stdio.h>\n"
++                        "#include <unistd.h>\n"
++                        "static volatile unsigned long long sentinel_count = 0;\n"
++                        "static volatile unsigned sentinel_regions = 0;\n"
++                        "static volatile unsigned sentinel_bins = 0;\n"
++                        "static void sentinel_observe(double value) {\n"
++                        "  if (value < -1.0 || value > 1.0) return;\n"
++                        "  ++sentinel_count;\n"
++                        "  if (value < 0.0) sentinel_regions |= 1u;\n"
++                        "  if (value > 0.0) sentinel_regions |= 2u;\n"
++                        "  if (value < -0.9) sentinel_regions |= 4u;\n"
++                        "  if (value > 0.9) sentinel_regions |= 8u;\n"
++                        "  if (value > -0.1 && value < 0.1) sentinel_regions |= 16u;\n"
++                        "  unsigned bin = (unsigned)((value + 1.0) * 16.0);\n"
++                        "  if (bin > 31u) bin = 31u;\n"
++                        "  sentinel_bins |= 1u << bin;\n"
++                        "}\n"
++                        "__attribute__((destructor)) static void sentinel_done(void) {\n"
++                        "  if (sentinel_count) {\n"
++                        f"  int fd = open({json.dumps(str(marker))}, O_WRONLY | O_CREAT | O_TRUNC, 0600);\n"
++                        "  if (fd >= 0) {\n"
++                        "    dprintf(fd, \"%llu %u %u\\n\", sentinel_count, "
++                        "sentinel_regions, sentinel_bins);\n"
++                        "    close(fd);\n"
++                        "  }\n"
++                        "  }\n"
++                        "}\n"
++                        + "".join(wrappers),
++                        encoding="ascii",
++                    )
++                    compiled = run(
++                        [
++                            args.cc,
++                            *target_flags[target],
++                            "-shared",
++                            "-fPIC",
++                            str(marker_source),
++                            "-o",
++                            str(library),
++                        ]
++                    )
++                    require_success(compiled, f"building the {shape} domain observer for {target}")
++                    run_ctest(target, extra_env={"LD_PRELOAD": str(library)})
++                    call_data = marker.read_text(encoding="ascii").split() if marker.exists() else []
++                if len(call_data) != 3:
++                    raise AssertionError(f"{target} never exercised observable {shape} inputs")
++                count, regions, bins = (int(value) for value in call_data)
++                populated_bins = bins.bit_count()
++                if count < 1000 or regions != 31 or populated_bins < 24:
++                    raise AssertionError(
++                        f"{target} covered {shape} too sparsely across its valid domain: "
++                        f"count={count}, regions={regions:#x}, populated_bins={populated_bins}"
++                    )
++
++    record("sentinel::tester3_domain_coverage", check_tester3_domain_coverage)
 +
 +    def check_mpfr_free_runtime() -> None:
 +        completed = run(["ldd", str(purec_binary)])
@@ -225,6 +538,127 @@ index 0000000..2a68952
 +            raise AssertionError(f"tester3 has forbidden runtime dependencies {forbidden}:\n{dependency_text}")
 +
 +    record("sentinel::tester3_is_mpfr_free", check_mpfr_free_runtime)
++
++    def check_static_dependency_free_matrix() -> None:
++        with tempfile.TemporaryDirectory(prefix="sentinel-static-dependency-free-") as tmp:
++            temp_dir = Path(tmp)
++            static_build = temp_dir / "build"
++            blocked_include = temp_dir / "unavailable-include"
++            (blocked_include / "openssl").mkdir(parents=True)
++            for header in ("mpfr.h", "gmp.h"):
++                (blocked_include / header).write_text(
++                    '#error "dependency is unavailable in this configuration"\n',
++                    encoding="ascii",
++                )
++            for header in ("md5.h", "evp.h", "sha.h", "crypto.h", "opensslv.h"):
++                (blocked_include / "openssl" / header).write_text(
++                    '#error "OpenSSL is unavailable in this configuration"\n',
++                    encoding="ascii",
++                )
++            real_compiler = shutil.which(args.cc)
++            if real_compiler is None:
++                raise AssertionError(f"could not resolve C compiler {args.cc!r}")
++            guarded_compiler = temp_dir / "cc-without-optional-dependencies"
++            guarded_compiler.write_text(
++                "#!/bin/sh\n"
++                "for arg in \"$@\"; do\n"
++                "  case \"$arg\" in\n"
++                "    -lmpfr|-lgmp|-lssl|-lcrypto|*/libmpfr.*|*/libgmp.*|*/libssl.*|*/libcrypto.*)\n"
++                "      echo \"forbidden optional library in compiler invocation: $arg\" >&2\n"
++                "      exit 86\n"
++                "      ;;\n"
++                "  esac\n"
++                "done\n"
++                f"exec {json.dumps(real_compiler)} -I{json.dumps(str(blocked_include))} \"$@\"\n",
++                encoding="ascii",
++            )
++            guarded_compiler.chmod(0o700)
++            dependency_free_env = {
++                "CPATH": "",
++                "C_INCLUDE_PATH": "",
++                "CPLUS_INCLUDE_PATH": "",
++                "LIBRARY_PATH": "",
++                "CMAKE_INCLUDE_PATH": "",
++                "CMAKE_LIBRARY_PATH": "",
++                "OPENSSL_ROOT_DIR": "",
++            }
++            configured = run(
++                [
++                    args.cmake,
++                    "-S",
++                    str(workspace),
++                    "-B",
++                    str(static_build),
++                    "-DCMAKE_BUILD_TYPE=Release",
++                    "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
++                    "-DBUILD_SHARED_LIBS=OFF",
++                    f"-DCMAKE_C_COMPILER={guarded_compiler}",
++                    "-DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE",
++                    "-DLIB_MPFR:FILEPATH=",
++                    "-DLIBGMP:FILEPATH=",
++                    "-DMPFR_INCLUDE_DIR:PATH=",
++                ],
++                timeout=300,
++                extra_env=dependency_free_env,
++            )
++            require_success(configured, "configuring the dependency-free static build")
++            built = run(
++                [
++                    args.cmake,
++                    "--build",
++                    str(static_build),
++                    "--parallel",
++                    "4",
++                    "--target",
++                    "tester3purec_scalar",
++                    "tester3purecfma_scalar",
++                ],
++                timeout=900,
++                extra_env=dependency_free_env,
++            )
++            require_success(built, "building the dependency-free static scalar tester3 targets")
++            if not (static_build / "lib" / "libsleef.a").is_file():
++                raise AssertionError("the static configuration did not produce libsleef.a")
++            for target in ("tester3purec_scalar", "tester3purecfma_scalar"):
++                listing = run(
++                    [args.ctest, "--test-dir", str(static_build), "-N", "-R", f"^{target}$"],
++                    extra_env=dependency_free_env,
++                )
++                require_success(listing, f"listing static CTest {target}")
++                if not re.search(r"Total Tests:\s*1\s*$", listing.stdout, re.MULTILINE):
++                    raise AssertionError(f"static build did not register exactly one {target} test")
++                for attempt in range(2):
++                    executed = run(
++                        [
++                            args.ctest,
++                            "--test-dir",
++                            str(static_build),
++                            "--output-on-failure",
++                            "-R",
++                            f"^{target}$",
++                        ],
++                        timeout=900,
++                        extra_env=dependency_free_env,
++                    )
++                    require_success(executed, f"running static CTest {target} (attempt {attempt + 1})")
++                dependencies = run(["ldd", str(static_build / "bin" / target)])
++                require_success(dependencies, f"inspecting static tester dependencies for {target}")
++                dependency_text = (dependencies.stdout + dependencies.stderr).lower()
++                forbidden = [
++                    name
++                    for name in ("libsleef", "libcrypto", "libmpfr", "libgmp")
++                    if name in dependency_text
++                ]
++                if forbidden:
++                    raise AssertionError(
++                        f"dependency-free static {target} retained forbidden runtime dependencies {forbidden}:\n"
++                        f"{dependency_text}"
++                    )
++
++    record(
++        "sentinel::tester3_static_dependency_free_matrix",
++        check_static_dependency_free_matrix,
++    )
 +
 +    def check_cross_target_matrix(
 +        toolchain_name: str,

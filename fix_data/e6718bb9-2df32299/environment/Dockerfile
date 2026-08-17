@@ -1,4 +1,4 @@
-FROM golang:1.25.7
+FROM golang:1.25.7@sha256:5a79b94c34c299ac0361fbb7c7fca6dc552e166b42341050323fa3ab137d7be9
 
 ENV GOTOOLCHAIN=local \
     GOPROXY=https://proxy.golang.org
