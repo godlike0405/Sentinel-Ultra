@@ -1,0 +1,48 @@
+{
+  "schema_version": "compact-swebench-harborized-v1",
+  "execution": {
+    "commands": [
+      "node --test --test-reporter=tap ${TEST_FILES}"
+    ],
+    "selected_test_files_to_run": [
+      "web/__tests__/crit-renderer.test.js",
+      "web/__tests__/story-line-navigation.test.js"
+    ],
+    "env": {},
+    "timeout_sec": 1800
+  },
+  "grading": {
+    "fail_to_pass": [
+      "new-side line wins over an old-side collision after a net deletion",
+      "old-side line wins over a new-side collision",
+      "merged visual hunk preserves raw ownership for both sides",
+      "comment-gap expansion preserves the later raw hunk owner",
+      "automatic small-gap expansion preserves synthesized context ownership",
+      "existing insertion mapping still selects its new-side hunk",
+      "deleted lines fall back to their old-side raw hunk",
+      "side-less legacy lookup keeps new-then-old fallback",
+      "side-less legacy display mapping follows the matched coordinate side",
+      "file-level navigation activates the first chapter containing the file",
+      "display mapping preserves route side while matching split and unified DOM semantics",
+      "production Story callers thread side and display mapping into scroll routing",
+      "anchorFromComment with line anchor",
+      "anchorFromComment preserves file scope without inventing a side"
+    ],
+    "pass_to_pass": [],
+    "required_pass": [],
+    "allow_extra_failures": true,
+    "parser": {
+      "framework": "custom",
+      "result_source": "stdout_stderr",
+      "pass_regex": "^\\s*ok \\d+ - (?P<name>.+?)\\s*$",
+      "fail_regex": "^\\s*not ok \\d+ - (?P<name>.+?)\\s*$"
+    }
+  },
+  "artifacts": {
+    "stdout_log": "/logs/verifier/test-stdout.txt",
+    "stderr_log": "/logs/verifier/test-stderr.txt",
+    "parsed_results": "/logs/verifier/output.json",
+    "report": "/logs/verifier/report.json",
+    "reward": "/logs/verifier/reward.txt"
+  }
+}
