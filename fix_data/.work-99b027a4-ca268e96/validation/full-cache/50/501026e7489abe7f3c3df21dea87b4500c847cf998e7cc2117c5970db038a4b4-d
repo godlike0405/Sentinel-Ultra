@@ -1,6 +1,0 @@
-./goal_state.go
-./meta_state.go
-./mode_state.go
-./sessions.go
-./todo_state.go
-./user_input_state.go

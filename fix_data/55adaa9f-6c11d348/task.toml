@@ -1,7 +1,7 @@
 schema_version = "1.3"
 
 [metadata]
-hardening_cycles = "2"
+hardening_cycles = "3"
 agent_hardened = "true"
 author_name = "anonymous"
 author_email = "anonymous@snorkel.ai"
@@ -14,7 +14,7 @@ repo_license = "MIT"
 source_pr_url = "https://github.com/specta-rs/specta/pull/458"
 base_commit_sha = "4a2878cad6f1064f573479c60c55bcdba7922477"
 model_difficulty = "medium"
-difficulty_explanation = "Requires designing a new Rust workspace crate, traversing recursive Specta datatype graphs, maintaining a compact serialization protocol, and generating two distinct JavaScript/TypeScript transformation strategies across primitives, collections, generics, and enum representations. The latest packaged tier was medium; the expanded full-PR contract requires a fresh platform difficulty run."
+difficulty_explanation = "The latest completed platform screen classified the task as medium. Solving it requires adding a Rust workspace crate, traversing recursive and generic Specta datatype graphs, preserving a compact public protocol, and producing two executable JavaScript/TypeScript transformation paths across primitives, collections, named types, and enum representations."
 tags = ["code-generation", "javascript-codegen", "type-mapping", "specta", "rust"]
 # --- legacy aliases (kept for backward-compatible internal consumers) ---
 difficulty = "medium"

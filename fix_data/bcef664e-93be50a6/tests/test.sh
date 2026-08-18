@@ -11,8 +11,8 @@ REPORT="$LOG_DIR/report.json"
 OUTPUT="$LOG_DIR/output.json"
 REWARD="$LOG_DIR/reward.txt"
 
-EXPECTED_CONFIG_SHA256="c147f5a76d0a741668bf6751ce64c364b9a296747d149d9ac19683c2170e5153"
-EXPECTED_PATCH_SHA256="17f3e38dea4520a92f2431bece5ee51e255d6a94ad0543d26ce6a8196b283141"
+EXPECTED_CONFIG_SHA256="d47966d68dae55cf96256638429584a1fb0ac6f0419d49e6fa7f2ab5d501e7c2"
+EXPECTED_PATCH_SHA256="8d316dac5e004dd297208e99ebd74a63c72fb945e7ee4f6eb126501a526f293f"
 EXPECTED_GRADER_SHA256="11a80825bd3d54bc3d5041d6f354ae6797922c4a9da1d92ef145599f41c02e18"
 
 mkdir -p "$LOG_DIR"
@@ -136,8 +136,8 @@ p2p = grading["pass_to_pass"]
 expected = [*f2p, *p2p]
 protected = execution["protected_test_ids"]
 
-if not 10 <= len(f2p) <= 40:
-    raise SystemExit("fail_to_pass count is outside 10..40")
+if not 10 <= len(f2p) <= 20:
+    raise SystemExit("fail_to_pass count is outside 10..20")
 if len(expected) != len(set(expected)):
     raise SystemExit("declared test IDs are duplicated")
 if not protected or any(test_id not in p2p for test_id in protected):

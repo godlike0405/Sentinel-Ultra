@@ -38,9 +38,6 @@ else
   exit 2
 fi
 
-grep -Fq 'function storyRawHunkForLine(' web/app.js
-grep -Fq 'function storyDisplayAnchorForLine(' web/app.js
-grep -Fq 'scope: comment.scope' web/crit-renderer.js
 printf '%s  %s\n' \
   '70fe17bd06c7fa819f03a1ed10957904318103624198845dc893b309bf495e28' 'web/markdown-it.min.js' \
   '74d7c46dabca328c2294733910a8aa1ed0c37451776e8d5295da38a2b758fb9b' 'web/mermaid.min.js' \

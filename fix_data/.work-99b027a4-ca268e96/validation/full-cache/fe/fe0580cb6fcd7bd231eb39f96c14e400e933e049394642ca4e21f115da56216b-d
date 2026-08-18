@@ -1,5 +1,0 @@
-./commands.go
-./exit.go
-./plugin_commands.go
-./root.go
-./update_prompt.go

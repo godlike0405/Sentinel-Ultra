@@ -1,6 +1,0 @@
-./composer.go
-./composer_keys.go
-./composer_paste.go
-./composer_state.go
-./composer_view.go
-./composer_wrap.go

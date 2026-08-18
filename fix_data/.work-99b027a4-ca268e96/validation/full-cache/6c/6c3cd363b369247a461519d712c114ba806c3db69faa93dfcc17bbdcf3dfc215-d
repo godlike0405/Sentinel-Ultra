@@ -1,9 +1,0 @@
-./config.go
-./manager.go
-./names.go
-./stdio_transport.go
-./tool.go
-./config_test.go
-./manager_test.go
-./names_test.go
-./tool_test.go

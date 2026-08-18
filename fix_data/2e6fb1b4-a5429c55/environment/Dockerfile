@@ -44,7 +44,25 @@ RUN n=0; until npm ci --ignore-scripts --no-audit --no-fund; do \
       '74d7c46dabca328c2294733910a8aa1ed0c37451776e8d5295da38a2b758fb9b' '/opt/crit-deps/mermaid.min.js' \
       | sha256sum -c -
 
+# Install the lockfile-pinned browser test runner and its matching Chromium
+# build during the networked image build. Keep a verifier-owned copy outside
+# the candidate workspace for air-gapped, tamper-resistant execution.
+RUN cd test/e2e \
+    && n=0 \
+    && until npm ci --ignore-scripts --no-audit --no-fund; do \
+      n=$((n+1)); \
+      if [ "$n" -ge 3 ]; then exit 1; fi; \
+      echo "Browser dependency install failed (attempt $n/3), retrying" >&2; \
+      sleep $((n * 10)); \
+    done \
+    && PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright ./node_modules/.bin/playwright install --with-deps chromium \
+    && mkdir -p /opt/crit-e2e \
+    && cp -a node_modules /opt/crit-e2e/node_modules \
+    && test -f /opt/crit-e2e/node_modules/@playwright/test/cli.js \
+    && test -d /opt/ms-playwright
+
 ENV GOPROXY=off
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 RUN command -v go && command -v node && command -v git \
     && command -v patch && command -v python3 && command -v tmux && command -v asciinema
 

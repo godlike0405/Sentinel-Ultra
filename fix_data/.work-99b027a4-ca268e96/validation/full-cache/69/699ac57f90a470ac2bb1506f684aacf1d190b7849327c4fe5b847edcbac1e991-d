@@ -1,8 +1,0 @@
-./classify.go
-./classify_bounded_write.go
-./classify_builtin.go
-./classify_helpers.go
-./classify_parse.go
-./classify_safety.go
-./classify_sed.go
-./classify_sort_uniq.go

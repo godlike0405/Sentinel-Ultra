@@ -2,46 +2,48 @@
   "schema_version": "compact-swebench-harborized-v1",
   "execution": {
     "commands": [
-      "node --test web/__tests__/sentinel-story-navigation.test.js"
+      "node --test web/__tests__/sentinel-story-navigation.test.js",
+      "playwright test test/e2e/tests/sentinel-story-navigation.spec.ts"
     ],
     "selected_test_files_to_run": [
       "web/__tests__/sentinel-story-navigation.test.js",
-      "web/__tests__/crit-renderer.test.js"
+      "web/__tests__/crit-renderer.test.js",
+      "test/e2e/tests/sentinel-story-navigation.spec.ts",
+      "test/e2e/sentinel.playwright.config.ts"
     ],
     "env": {},
     "timeout_sec": 240
   },
   "grading": {
     "fail_to_pass": [
-      "line comment anchors preserve side and scope",
-      "file comment anchors preserve file scope without a side",
-      "new-side lookup ignores an old-side collision",
-      "old-side lookup ignores a new-side collision",
-      "legacy lookup remains new-first and covers insertions and deletions",
-      "automatic gap merging retains both raw owners and preceding context ownership",
-      "comment gap merging retains later ownership and assigns synthesized context backward",
-      "unified display mapping translates old context but retains deletions",
-      "split and legacy display mapping use the matched coordinate space",
-      "file navigation selects the first owning chapter and reports misses",
-      "line navigation uses raw ownership and explicit misses do not fall back to a file",
-      "comment-card navigation forwards the comment side",
-      "file-scoped comment cards navigate by file ownership",
-      "renderer routing activates by side and targets the translated DOM row",
-      "scope reload invalidates Story clones before replacement file data loads",
-      "npm and Bun lockfiles agree on embedded runtime versions",
-      "embedded markdown runtime matches the repository-pinned dependency",
-      "embedded diagram runtime matches the repository-pinned dependency"
+      "line comment anchor preserves side and scope",
+      "file comment anchor preserves scope without a side",
+      "npm and Bun lockfiles select markdown-it 14.3.0 and mermaid 11.16.0",
+      "embedded markdown runtime matches markdown-it 14.3.0",
+      "embedded diagram runtime matches mermaid 11.16.0",
+      "renderer honors an old-side collision and scrolls the deleted row",
+      "renderer keeps a colliding new-side line in the second chapter",
+      "renderer explicit new-side miss stays on the current Story page",
+      "renderer keeps a colliding new-side row on the rendered new side",
+      "renderer maps unified old context to the displayed new-side row",
+      "scope reload replaces same-hash Story clones"
     ],
     "pass_to_pass": [
       "register and current",
       "register throws on missing method",
       "anchorFromComment with line anchor",
-      "anchorFromComment with DOM anchor"
+      "anchorFromComment with DOM anchor",
+      "automatic merge routes a new-side line to the second chapter",
+      "automatic merge routes an old-side line to the second chapter",
+      "file-scoped comment opens the first chapter containing its file",
+      "file-scoped renderer anchor opens the first chapter containing its file",
+      "split renderer preserves the old-side row",
+      "flat renderer navigation remains compatible"
     ],
     "required_pass": [],
     "allow_extra_failures": false,
     "parser": {
-      "framework": "verifier-owned-node-status",
+      "framework": "verifier-owned-node-and-playwright-status",
       "result_source": "verifier_owned"
     }
   },

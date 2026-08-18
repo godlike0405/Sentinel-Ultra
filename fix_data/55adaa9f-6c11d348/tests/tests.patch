@@ -1,12 +1,12 @@
 diff --git a/specta-tags/tests/sentinel_transform_contract.rs b/specta-tags/tests/sentinel_transform_contract.rs
 new file mode 100644
-index 0000000..6c40d51
+index 0000000..b3e3ee3
 --- /dev/null
 +++ b/specta-tags/tests/sentinel_transform_contract.rs
-@@ -0,0 +1,701 @@
+@@ -0,0 +1,789 @@
 +#![allow(dead_code)]
 +
-+use std::{borrow::Cow, collections::BTreeMap, process::Command};
++use std::{borrow::Cow, collections::BTreeMap, fs, process::Command};
 +
 +use serde::Serialize;
 +use serde_json::{Value, json};
@@ -49,18 +49,6 @@ index 0000000..6c40d51
 +    (dt, types)
 +}
 +
-+fn assert_trusting(js: &str) {
-+    for forbidden in [
-+        "typeof ",
-+        "Array.isArray(",
-+        "Number.isInteger(",
-+        "try {",
-+        " catch ",
-+    ] {
-+        assert!(!js.contains(forbidden), "found {forbidden:?} in {js}");
-+    }
-+}
-+
 +const NORMALIZE_JS: &str = r#"
 +const normalize = (value) => {
 +    if (typeof value === "bigint") return { "$bigint": value.toString() };
@@ -95,6 +83,48 @@ index 0000000..6c40d51
 +        "{runtime}\nconst input = {};\nconst result = ({expression});\n{NORMALIZE_JS}\nprocess.stdout.write(JSON.stringify(normalize(result)));",
 +        serde_json::to_string(&input).unwrap()
 +    ))
++}
++
++fn run_typescript(runtime: &str, body: &str) -> Value {
++    let tsc = std::env::var("SENTINEL_TSC").unwrap_or_else(|_| "tsc".into());
++    let node = std::env::var("SENTINEL_NODE").unwrap_or_else(|_| "node".into());
++    let root = std::env::temp_dir().join(format!("specta-tags-typescript-{}", std::process::id()));
++    if root.exists() {
++        fs::remove_dir_all(&root).expect("clear stale TypeScript output");
++    }
++    let output_dir = root.join("out");
++    fs::create_dir_all(&output_dir).expect("create TypeScript output directory");
++    let source_path = root.join("runtime.ts");
++    fs::write(&source_path, format!("{runtime}\n{body}\n")).expect("write TypeScript source");
++
++    let compiled = Command::new(tsc)
++        .args([
++            "--strict", "--target", "ES2020", "--module", "commonjs", "--pretty", "false",
++            "--outDir",
++        ])
++        .arg(&output_dir)
++        .arg(&source_path)
++        .output()
++        .expect("compile the generated TypeScript runtime");
++    assert!(
++        compiled.status.success(),
++        "TypeScript compilation failed:\n{}",
++        String::from_utf8_lossy(&compiled.stdout)
++    );
++
++    let executed = Command::new(node)
++        .arg(output_dir.join("runtime.js"))
++        .output()
++        .expect("execute the compiled TypeScript runtime");
++    assert!(
++        executed.status.success(),
++        "compiled TypeScript execution failed:\n{}",
++        String::from_utf8_lossy(&executed.stderr)
++    );
++    let value = serde_json::from_slice(&executed.stdout)
++        .expect("compiled TypeScript must print one JSON value");
++    fs::remove_dir_all(root).expect("remove TypeScript output directory");
++    value
 +}
 +
 +#[derive(Type)]
@@ -292,7 +322,27 @@ index 0000000..6c40d51
 +
 +    let generic_dt = Wrapper::<u128>::definition(&mut types);
 +    let generic = Analyzer::with_builtins().analyze(&generic_dt, &types, &[]);
-+    assert!(generic.to_json().contains("[\"value\",1]"));
++    let generic: Value = serde_json::from_str(&generic.to_json()).unwrap();
++    assert_eq!(generic[0], 7);
++    assert!(
++        generic[1]
++            .as_array()
++            .unwrap()
++            .iter()
++            .any(|field| field[0] == "value" && field[1] == 1)
++    );
++
++    let recursive_dt = Recursive::definition(&mut types);
++    let recursive = Analyzer::with_builtins().analyze(&recursive_dt, &types, &[]);
++    let recursive: Value = serde_json::from_str(&recursive.to_json()).unwrap();
++    assert_eq!(recursive[0], 7);
++    assert!(
++        recursive[1]
++            .as_array()
++            .unwrap()
++            .iter()
++            .any(|field| field[0] == "value" && field[1] == 1)
++    );
 +});
 +
 +contract_test!(v1_bytes_opt_in_contract, {
@@ -349,16 +399,6 @@ index 0000000..6c40d51
 +    let req = RuntimeRequirements::from_specs([&TransformSpec::BigInt]);
 +    let js = render_runtime(RuntimeTarget::JavaScript, &req);
 +    let ts = render_runtime(RuntimeTarget::TypeScript, &req);
-+    assert!(js.contains("function __TS_transform(value, spec)"));
-+    assert!(!js.contains("type __TS_TransformSpec"));
-+    assert!(ts.contains("type __TS_TransformSpec"));
-+    assert!(ts.contains("function __TS_transform<T>"));
-+    assert!(js.contains("case 1:"));
-+    for absent in [
-+        "case 2:", "case 3:", "case 4:", "case 5:", "case 6:", "case 7:", "case 8:", "case 9:",
-+    ] {
-+        assert!(!js.contains(absent), "unexpected {absent}");
-+    }
 +    assert_eq!(
 +        evaluate_javascript(&js, json!("9007199254740993"), "__TS_transform(input, 1)"),
 +        json!({ "$bigint": "9007199254740993" })
@@ -366,6 +406,22 @@ index 0000000..6c40d51
 +    assert_eq!(
 +        evaluate_javascript(&js, json!("not-an-integer"), "__TS_transform(input, 1)"),
 +        json!("not-an-integer")
++    );
++    assert_eq!(
++        evaluate_javascript(
++            &js,
++            json!("2026-03-25T01:02:03Z"),
++            "__TS_transform(input, 2)"
++        ),
++        json!("2026-03-25T01:02:03Z")
++    );
++    assert_eq!(
++        run_typescript(
++            &ts,
++            r#"const output = __TS_transform("9007199254740993", 1);
++console.log(JSON.stringify({ bigint: output.toString() }));"#
++        ),
++        json!({ "bigint": "9007199254740993" })
 +    );
 +});
 +
@@ -398,21 +454,11 @@ index 0000000..6c40d51
 +    }]);
 +    let req = RuntimeRequirements::from_specs([&object_spec, &enum_spec]).with_result_helper(true);
 +    let runtime = render_runtime(RuntimeTarget::JavaScript, &req);
-+    for case in [
-+        "case 1:", "case 2:", "case 3:", "case 4:", "case 5:", "case 6:", "case 7:", "case 8:",
-+        "case 9:",
-+    ] {
-+        assert!(runtime.contains(case), "missing {case}");
-+    }
-+    assert!(runtime.contains("function __TS_transformEnum"));
-+    assert!(runtime.contains("function __TS_transformResult"));
 +
 +    let helper_only = render_runtime(
 +        RuntimeTarget::JavaScript,
 +        &RuntimeRequirements::default().with_result_helper(true),
 +    );
-+    assert!(helper_only.contains("function __TS_transform(value, spec)"));
-+    assert!(helper_only.contains("function __TS_transformResult"));
 +    let helper_only_source = format!(
 +        "{helper_only}\nPromise.all([\n  __TS_transformResult(Promise.resolve({{ status: 'ok', data: 'plain' }}), 0, 0),\n  __TS_transformResult(Promise.resolve({{ status: 'error', error: 'problem' }}), 0, 0),\n]).then((result) => process.stdout.write(JSON.stringify(result)));"
 +    );
@@ -455,6 +501,39 @@ index 0000000..6c40d51
 +        })
 +    );
 +
++    assert_eq!(
++        evaluate_javascript(
++            &runtime,
++            json!({ "Data": { "payload": "13" } }),
++            &format!("__TS_transform(input, {})", enum_spec.to_json())
++        ),
++        json!({ "Data": { "payload": { "$bigint": "13" } } })
++    );
++
++    let enum_json = enum_spec.to_json();
++    for (input, spec) in [
++        (json!(42), "2".to_owned()),
++        (json!("not-a-date"), "2".to_owned()),
++        (json!([1, "bad"]), "3".to_owned()),
++        (json!([1, -1]), "3".to_owned()),
++        (json!([256]), "3".to_owned()),
++        (json!([1.5]), "3".to_owned()),
++        (json!({ "not": "a list" }), "[5,1]".to_owned()),
++        (json!({ "not": "a tuple" }), "[6,[1]]".to_owned()),
++        (Value::Null, r#"[7,[["id",1]]]"#.to_owned()),
++        (json!([]), "[8,1]".to_owned()),
++        (json!("not-an-enum"), enum_json),
++    ] {
++        assert_eq!(
++            evaluate_javascript(
++                &runtime,
++                input.clone(),
++                &format!("__TS_transform(input, {spec})")
++            ),
++            input
++        );
++    }
++
 +    let result_source = format!(
 +        "{runtime}\n{NORMALIZE_JS}\nPromise.all([\n  __TS_transformResult(Promise.resolve({{ status: 'ok', data: '17' }}), 1, 2),\n  __TS_transformResult(Promise.resolve({{ status: 'error', error: '2026-04-05T06:07:08Z' }}), 1, 2),\n]).then((result) => process.stdout.write(JSON.stringify(normalize(result))));"
 +    );
@@ -485,9 +564,10 @@ index 0000000..6c40d51
 +        Primitive::i128,
 +        Primitive::u128,
 +    ] {
++        let expression = TransformPlan::analyze(primitive.into(), &Types::default()).map("input");
 +        assert_eq!(
-+            TransformPlan::analyze(primitive.into(), &Types::default()).map("input"),
-+            "BigInt(input)"
++            evaluate_javascript("", json!("18446744073709551616"), &expression),
++            json!({ "$bigint": "18446744073709551616" })
 +        );
 +    }
 +    for primitive in [Primitive::u32, Primitive::bool, Primitive::str] {
@@ -496,48 +576,51 @@ index 0000000..6c40d51
 +            "input"
 +        );
 +    }
-+    let js = TransformPlan::analyze(Primitive::u128.into(), &Types::default()).map("input");
-+    assert_eq!(
-+        evaluate_javascript("", json!("18446744073709551616"), &js),
-+        json!({ "$bigint": "18446744073709551616" })
-+    );
 +});
 +
 +contract_test!(v2_named_matcher_matrix_contract, {
 +    let cases = [
-+        ("std::time", "SystemTime", "new Date(value)"),
-+        ("toml::value", "Datetime", "new Date(value)"),
-+        ("chrono", "NaiveDateTime", "new Date(value)"),
-+        ("chrono", "NaiveDate", "new Date(value)"),
-+        ("chrono", "Date", "new Date(value)"),
-+        ("chrono", "DateTime", "new Date(value)"),
-+        ("time", "PrimitiveDateTime", "new Date(value)"),
-+        ("time", "OffsetDateTime", "new Date(value)"),
-+        ("time", "Date", "new Date(value)"),
-+        ("jiff", "Timestamp", "new Date(value)"),
-+        ("jiff", "Zoned", "new Date(value)"),
-+        ("jiff::civil", "Date", "new Date(value)"),
-+        ("jiff::civil", "DateTime", "new Date(value)"),
-+        ("bson", "DateTime", "new Date(value)"),
-+        ("bytes", "Bytes", "Uint8Array.from(value)"),
-+        ("bytes", "BytesMut", "Uint8Array.from(value)"),
++        ("std::time", "SystemTime"),
++        ("toml::value", "Datetime"),
++        ("chrono", "NaiveDateTime"),
++        ("chrono", "NaiveDate"),
++        ("chrono", "Date"),
++        ("chrono", "DateTime"),
++        ("time", "PrimitiveDateTime"),
++        ("time", "OffsetDateTime"),
++        ("time", "Date"),
++        ("jiff", "Timestamp"),
++        ("jiff", "Zoned"),
++        ("jiff::civil", "Date"),
++        ("jiff::civil", "DateTime"),
++        ("bson", "DateTime"),
++        ("bytes", "Bytes"),
++        ("bytes", "BytesMut"),
 +    ];
-+    for (module, name, expected) in cases {
++    for (module, name) in cases {
 +        let (dt, types) = named_type(module, name);
-+        assert_eq!(TransformPlan::analyze(dt, &types).map("value"), expected);
++        let expression = TransformPlan::analyze(dt, &types).map("input");
++        let (input, expected) = if module == "bytes" {
++            (json!([7, 8]), json!({ "$bytes": [7, 8] }))
++        } else {
++            (
++                json!("2026-08-09T10:11:12Z"),
++                json!({ "$date": "2026-08-09T10:11:12.000Z" }),
++            )
++        };
++        assert_eq!(evaluate_javascript("", input, &expression), expected);
 +    }
++
++    let (unrelated, types) = named_type("other", "DateTime");
++    assert_eq!(
++        TransformPlan::analyze(unrelated, &types).map("input"),
++        "input"
++    );
 +});
 +
 +contract_test!(v2_nested_object_key_and_variable_contract, {
 +    let mut types = Types::default();
 +    let plan = TransformPlan::analyze(Root::definition(&mut types), &types);
-+    let js = plan.map("payload");
-+    assert!(js.contains("...payload"));
-+    assert!(js.contains(r#""bigint": BigInt(payload["bigint"])"#));
-+    assert!(js.contains(r#"new Date(payload["nested"]["date"])"#));
-+    assert!(js.contains(r#"Uint8Array.from(payload["nested"]["bytes"])"#));
-+    assert!(!js.contains("payload.bigint"));
-+    assert_trusting(&js);
 +    let behavior = plan.map("input");
 +    assert_eq!(
 +        evaluate_javascript(
@@ -578,11 +661,6 @@ index 0000000..6c40d51
 +
 +contract_test!(v2_list_tuple_map_nullable_contract, {
 +    let mut types = Types::default();
-+    let js = TransformPlan::analyze(Composite::definition(&mut types), &types).map("v");
-+    assert!(js.contains(r#"v["tuple"][0]"#));
-+    assert!(js.contains("BigInt(v[\"tuple\"][0])"));
-+    assert!(js.contains("== null ?"));
-+    assert_trusting(&js);
 +    let behavior = TransformPlan::analyze(Composite::definition(&mut types), &types).map("input");
 +    assert_eq!(
 +        evaluate_javascript(
@@ -604,12 +682,6 @@ index 0000000..6c40d51
 +
 +contract_test!(v2_external_enum_contract, {
 +    let mut types = Types::default();
-+    let js = TransformPlan::analyze(External::definition(&mut types), &types).map("v");
-+    assert!(js.contains(r#""Big""#));
-+    assert!(js.contains(r#""Record""#));
-+    assert!(js.contains("BigInt("));
-+    assert!(js.contains("new Date("));
-+    assert_trusting(&js);
 +    let behavior = TransformPlan::analyze(External::definition(&mut types), &types).map("input");
 +    assert_eq!(
 +        evaluate_javascript("", json!({ "Big": "41" }), &behavior),
@@ -627,12 +699,6 @@ index 0000000..6c40d51
 +
 +contract_test!(v2_internal_enum_contract, {
 +    let mut types = Types::default();
-+    let js = TransformPlan::analyze(Internal::definition(&mut types), &types).map("v");
-+    assert!(js.contains(r#"["kind"] === "Big""#), "got {js}");
-+    assert!(js.contains(r#"["kind"] === "Record""#), "got {js}");
-+    assert!(js.contains("BigInt("));
-+    assert!(js.contains("new Date("));
-+    assert_trusting(&js);
 +    let behavior = TransformPlan::analyze(Internal::definition(&mut types), &types).map("input");
 +    assert_eq!(
 +        evaluate_javascript("", json!({ "kind": "Big", "id": "51" }), &behavior),
@@ -650,12 +716,6 @@ index 0000000..6c40d51
 +
 +contract_test!(v2_adjacent_enum_contract, {
 +    let mut types = Types::default();
-+    let js = TransformPlan::analyze(Adjacent::definition(&mut types), &types).map("v");
-+    assert!(js.contains(r#"["kind"] === "Big""#), "got {js}");
-+    assert!(js.contains(r#"["payload"]"#), "got {js}");
-+    assert!(js.contains("BigInt("));
-+    assert!(js.contains("new Date("));
-+    assert_trusting(&js);
 +    let behavior = TransformPlan::analyze(Adjacent::definition(&mut types), &types).map("input");
 +    assert_eq!(
 +        evaluate_javascript("", json!({ "kind": "Big", "payload": "61" }), &behavior),
@@ -682,26 +742,54 @@ index 0000000..6c40d51
 +
 +contract_test!(v2_recursive_and_generic_contract, {
 +    let mut types = Types::default();
-+    let generic = TransformPlan::analyze(Wrapper::<u128>::definition(&mut types), &types).map("v");
-+    assert!(generic.contains(r#"BigInt(v["value"])"#));
++    let generic =
++        TransformPlan::analyze(Wrapper::<u128>::definition(&mut types), &types).map("input");
++    assert_eq!(
++        evaluate_javascript("", json!({ "value": "71" }), &generic),
++        json!({ "value": { "$bigint": "71" } })
++    );
 +
-+    let recursive = TransformPlan::analyze(Recursive::definition(&mut types), &types).map("v");
-+    assert!(recursive.contains(r#"BigInt(v["value"])"#));
-+    assert_trusting(&recursive);
++    let recursive = TransformPlan::analyze(Recursive::definition(&mut types), &types).map("input");
++    assert_eq!(
++        evaluate_javascript("", json!({ "value": "72", "next": null }), &recursive),
++        json!({ "value": { "$bigint": "72" }, "next": null })
++    );
 +});
 +
-+contract_test!(v2_trusting_output_across_graph_contract, {
++contract_test!(v2_caller_expression_contract, {
 +    let mut types = Types::default();
-+    let plans = [
-+        TransformPlan::analyze(Root::definition(&mut types), &types),
-+        TransformPlan::analyze(Composite::definition(&mut types), &types),
-+        TransformPlan::analyze(External::definition(&mut types), &types),
-+        TransformPlan::analyze(Internal::definition(&mut types), &types),
-+        TransformPlan::analyze(Adjacent::definition(&mut types), &types),
-+    ];
-+    for (index, plan) in plans.iter().enumerate() {
-+        let input = format!("input{index}");
-+        let js = plan.map(&input);
-+        assert_trusting(&js);
-+    }
++    let plan = TransformPlan::analyze(Root::definition(&mut types), &types);
++    let expression = plan.map("input.payload");
++    assert_eq!(
++        evaluate_javascript(
++            "",
++            json!({
++                "payload": {
++                    "bigint": "81",
++                    "date": "2026-09-10T11:12:13Z",
++                    "bytes": [5, 6],
++                    "nested": {
++                        "bigint": "82",
++                        "date": "2026-10-11T12:13:14Z",
++                        "bytes": [7, 8],
++                        "plain": "kept"
++                    },
++                    "list": ["83"]
++                }
++            }),
++            &expression
++        ),
++        json!({
++            "bigint": { "$bigint": "81" },
++            "date": { "$date": "2026-09-10T11:12:13.000Z" },
++            "bytes": { "$bytes": [5, 6] },
++            "nested": {
++                "bigint": { "$bigint": "82" },
++                "date": { "$date": "2026-10-11T12:13:14.000Z" },
++                "bytes": { "$bytes": [7, 8] },
++                "plain": "kept"
++            },
++            "list": [{ "$bigint": "83" }]
++        })
++    );
 +});

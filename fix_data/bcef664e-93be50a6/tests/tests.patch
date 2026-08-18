@@ -1,9 +1,9 @@
 diff --git a/daemon/mgr/spec_default_integration_test.go b/daemon/mgr/spec_default_integration_test.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..fe8748ca9aec207a2202630eda1782bf65fd9769
+index 0000000000000000000000000000000000000000..ab989b54f770b8ca7980672f68eb7f6eecc93a53
 --- /dev/null
 +++ b/daemon/mgr/spec_default_integration_test.go
-@@ -0,0 +1,984 @@
+@@ -0,0 +1,975 @@
 +package mgr
 +
 +import (
@@ -336,24 +336,23 @@ index 0000000000000000000000000000000000000000..fe8748ca9aec207a2202630eda1782bf
 +	}
 +}
 +
-+func TestFailedSpecBuildLeavesEmptyWrapperUnpublished(t *testing.T) {
-+	container := containerForProfileTest("failed-empty-wrapper", &types.HostConfig{
-+		CapAdd: []string{"NOT_A_CAPABILITY"},
-+	})
-+	wrapper := &SpecWrapper{}
-+	err, panicValue := tryCreateSpecForProfileTest(container, wrapper)
-+	if panicValue != nil {
-+		t.Fatalf("createSpec panicked for invalid input: %v", panicValue)
-+	}
-+	if err == nil {
-+		t.Fatal("createSpec accepted an invalid capability")
-+	}
-+	if wrapper.s != nil {
-+		t.Errorf("failed build published a partial specification: %+v", wrapper.s)
-+	}
-+}
-+
 +func TestSpecWrapperRecoversAfterFailedBuild(t *testing.T) {
++	t.Run("failed build leaves an empty wrapper unpublished", func(t *testing.T) {
++		container := containerForProfileTest("failed-empty-wrapper", &types.HostConfig{
++			CapAdd: []string{"NOT_A_CAPABILITY"},
++		})
++		wrapper := &SpecWrapper{}
++		err, panicValue := tryCreateSpecForProfileTest(container, wrapper)
++		if panicValue != nil {
++			t.Fatalf("createSpec panicked for invalid input: %v", panicValue)
++		}
++		if err == nil {
++			t.Fatal("createSpec accepted an invalid capability")
++		}
++		if wrapper.s != nil {
++			t.Errorf("failed build published a partial specification: %+v", wrapper.s)
++		}
++	})
 +	container := containerForProfileTest("retry-after-failure", &types.HostConfig{
 +		CapAdd: []string{"NOT_A_CAPABILITY"},
 +	})
@@ -496,20 +495,16 @@ index 0000000000000000000000000000000000000000..fe8748ca9aec207a2202630eda1782bf
 +		}
 +		assertStringSetForProfileTest(t, contract.destination+" options", mount.Options, contract.options)
 +	}
-+}
-+
-+func TestCreateSpecHardensProcMount(t *testing.T) {
-+	s := createSpecForProfileTest(t, containerForProfileTest("proc-profile", &types.HostConfig{}))
-+	proc := mountForProfileTest(t, s.Mounts, "/proc")
-+	assertStringSetForProfileTest(t, "/proc options", proc.Options, []string{"nosuid", "noexec", "nodev"})
-+}
-+
-+func TestCreateSpecDoesNotLimitDevTmpfs(t *testing.T) {
-+	s := createSpecForProfileTest(t, containerForProfileTest("dev-profile", &types.HostConfig{}))
-+	dev := mountForProfileTest(t, s.Mounts, "/dev")
-+	if got := sizeOptionsForProfileTest(dev.Options); len(got) != 0 {
-+		t.Errorf("/dev retained a size limit: %v", got)
-+	}
++	t.Run("proc is hardened", func(t *testing.T) {
++		proc := mountForProfileTest(t, s.Mounts, "/proc")
++		assertStringSetForProfileTest(t, "/proc options", proc.Options, []string{"nosuid", "noexec", "nodev"})
++	})
++	t.Run("dev is not size limited", func(t *testing.T) {
++		dev := mountForProfileTest(t, s.Mounts, "/dev")
++		if got := sizeOptionsForProfileTest(dev.Options); len(got) != 0 {
++			t.Errorf("/dev retained a size limit: %v", got)
++		}
++	})
 +}
 +
 +func TestCreateSpecUsesExpectedProtectedPaths(t *testing.T) {
@@ -522,7 +517,7 @@ index 0000000000000000000000000000000000000000..fe8748ca9aec207a2202630eda1782bf
 +	})
 +}
 +
-+func TestCreateSpecBeginsWithDenyAllDevicePolicy(t *testing.T) {
++func TestCreateSpecUsesPouchDevicePolicy(t *testing.T) {
 +	s := createSpecForProfileTest(t, containerForProfileTest("device-policy", &types.HostConfig{}))
 +	rules := s.Linux.Resources.Devices
 +	if len(rules) != 8 {
@@ -532,6 +527,29 @@ index 0000000000000000000000000000000000000000..fe8748ca9aec207a2202630eda1782bf
 +	if first.Allow || first.Type != "" || first.Major != nil || first.Minor != nil || first.Access != "rwm" {
 +		t.Errorf("first device rule is not deny-all rwm: %+v", first)
 +	}
++	t.Run("standard devices are allowed", func(t *testing.T) {
++		want := map[profileTestDevice]bool{
++			{1, 3}: true, {1, 5}: true, {1, 8}: true, {1, 9}: true, {5, 0}: true, {5, 1}: true,
++		}
++		got := make(map[profileTestDevice]bool)
++		for _, rule := range s.Linux.Resources.Devices {
++			if rule.Allow && rule.Type == "c" && rule.Major != nil && rule.Minor != nil && rule.Access == "rwm" {
++				got[profileTestDevice{*rule.Major, *rule.Minor}] = true
++			}
++		}
++		if !reflect.DeepEqual(got, want) {
++			t.Errorf("allowed character devices = %v, want %v", got, want)
++		}
++	})
++	t.Run("fuse remains denied", func(t *testing.T) {
++		for _, rule := range s.Linux.Resources.Devices {
++			if !rule.Allow && rule.Type == "c" && rule.Major != nil && rule.Minor != nil &&
++				*rule.Major == 10 && *rule.Minor == 229 && rule.Access == "rwm" {
++				return
++			}
++		}
++		t.Error("FUSE denial is missing from the final device policy")
++	})
 +}
 +
 +type profileTestDevice struct {
@@ -539,71 +557,44 @@ index 0000000000000000000000000000000000000000..fe8748ca9aec207a2202630eda1782bf
 +	minor int64
 +}
 +
-+func TestCreateSpecAllowsStandardDevices(t *testing.T) {
-+	s := createSpecForProfileTest(t, containerForProfileTest("allowed-devices", &types.HostConfig{}))
-+	want := map[profileTestDevice]bool{
-+		{1, 3}: true, {1, 5}: true, {1, 8}: true, {1, 9}: true, {5, 0}: true, {5, 1}: true,
-+	}
-+	got := make(map[profileTestDevice]bool)
-+	for _, rule := range s.Linux.Resources.Devices {
-+		if rule.Allow && rule.Type == "c" && rule.Major != nil && rule.Minor != nil && rule.Access == "rwm" {
-+			got[profileTestDevice{*rule.Major, *rule.Minor}] = true
++func TestSharedMemoryProfile(t *testing.T) {
++	t.Run("configured positive size wins", func(t *testing.T) {
++		requested := int64(134217728)
++		s := createSpecForProfileTest(t, containerForProfileTest("custom-shm-size", &types.HostConfig{ShmSize: &requested}))
++		got := sizeOptionsForProfileTest(mountForProfileTest(t, s.Mounts, "/dev/shm").Options)
++		if !reflect.DeepEqual(got, []string{"size=134217728"}) {
++			t.Errorf("effective /dev/shm size options = %v, want the configured size only", got)
 +		}
-+	}
-+	if !reflect.DeepEqual(got, want) {
-+		t.Errorf("allowed character devices = %v, want %v", got, want)
-+	}
-+}
-+
-+func TestCreateSpecPreservesFuseDenial(t *testing.T) {
-+	s := createSpecForProfileTest(t, containerForProfileTest("fuse-policy", &types.HostConfig{}))
-+	for _, rule := range s.Linux.Resources.Devices {
-+		if !rule.Allow && rule.Type == "c" && rule.Major != nil && rule.Minor != nil &&
-+			*rule.Major == 10 && *rule.Minor == 229 && rule.Access == "rwm" {
-+			return
++	})
++	t.Run("zero size keeps the default", func(t *testing.T) {
++		zero := int64(0)
++		s := createSpecForProfileTest(t, containerForProfileTest("zero-shm-size", &types.HostConfig{ShmSize: &zero}))
++		got := sizeOptionsForProfileTest(mountForProfileTest(t, s.Mounts, "/dev/shm").Options)
++		if !reflect.DeepEqual(got, []string{"size=65536k"}) {
++			t.Errorf("effective /dev/shm size options = %v, want the 64 MiB default", got)
 +		}
-+	}
-+	t.Error("FUSE denial is missing from the final device policy")
-+}
-+
-+func TestPositiveSharedMemorySizeWins(t *testing.T) {
-+	requested := int64(134217728)
-+	s := createSpecForProfileTest(t, containerForProfileTest("custom-shm-size", &types.HostConfig{ShmSize: &requested}))
-+	got := sizeOptionsForProfileTest(mountForProfileTest(t, s.Mounts, "/dev/shm").Options)
-+	if !reflect.DeepEqual(got, []string{"size=134217728"}) {
-+		t.Errorf("effective /dev/shm size options = %v, want the configured size only", got)
-+	}
-+}
-+
-+func TestZeroSharedMemorySizeKeepsDefault(t *testing.T) {
-+	zero := int64(0)
-+	s := createSpecForProfileTest(t, containerForProfileTest("zero-shm-size", &types.HostConfig{ShmSize: &zero}))
-+	got := sizeOptionsForProfileTest(mountForProfileTest(t, s.Mounts, "/dev/shm").Options)
-+	if !reflect.DeepEqual(got, []string{"size=65536k"}) {
-+		t.Errorf("effective /dev/shm size options = %v, want the 64 MiB default", got)
-+	}
-+}
-+
-+func TestUserSharedMemoryMountPreservesBindSemantics(t *testing.T) {
-+	requested := int64(134217728)
-+	c := containerForProfileTest("bound-shm", &types.HostConfig{ShmSize: &requested})
-+	c.Mounts = []*types.MountPoint{{
-+		Source: "/custom/shm", Destination: "/dev/shm", RW: false, Propagation: RPrivatePropagationMode,
-+	}}
-+	s := createSpecForProfileTest(t, c)
-+	if count := mountCountForProfileTest(s.Mounts, "/dev/shm"); count != 1 {
-+		t.Fatalf("/dev/shm mount count = %d, want 1", count)
-+	}
-+	shm := mountForProfileTest(t, s.Mounts, "/dev/shm")
-+	if shm.Type != "bind" || shm.Source != "/custom/shm" {
-+		t.Errorf("custom /dev/shm mount = %+v", shm)
-+	}
-+	if !reflect.DeepEqual(shm.Options, []string{"rbind", "ro", RPrivatePropagationMode}) {
-+		t.Errorf("custom /dev/shm options = %v", shm.Options)
-+	}
-+	if sizes := sizeOptionsForProfileTest(shm.Options); len(sizes) != 0 {
-+		t.Errorf("tmpfs sizing leaked into the bind mount: %v", sizes)
-+	}
++	})
++	t.Run("user bind mount keeps bind semantics", func(t *testing.T) {
++		requested := int64(134217728)
++		c := containerForProfileTest("bound-shm", &types.HostConfig{ShmSize: &requested})
++		c.Mounts = []*types.MountPoint{{
++			Source: "/custom/shm", Destination: "/dev/shm", RW: false, Propagation: RPrivatePropagationMode,
++		}}
++		s := createSpecForProfileTest(t, c)
++		if count := mountCountForProfileTest(s.Mounts, "/dev/shm"); count != 1 {
++			t.Fatalf("/dev/shm mount count = %d, want 1", count)
++		}
++		shm := mountForProfileTest(t, s.Mounts, "/dev/shm")
++		if shm.Type != "bind" || shm.Source != "/custom/shm" {
++			t.Errorf("custom /dev/shm mount = %+v", shm)
++		}
++		if !reflect.DeepEqual(shm.Options, []string{"rbind", "ro", RPrivatePropagationMode}) {
++			t.Errorf("custom /dev/shm options = %v", shm.Options)
++		}
++		if sizes := sizeOptionsForProfileTest(shm.Options); len(sizes) != 0 {
++			t.Errorf("tmpfs sizing leaked into the bind mount: %v", sizes)
++		}
++	})
 +}
 +
 +func TestCreateSpecResultsRemainIndependent(t *testing.T) {

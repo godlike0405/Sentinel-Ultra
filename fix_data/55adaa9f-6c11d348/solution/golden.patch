@@ -773,7 +773,7 @@ index 0000000..51cf462
 +];
 +"#;
 +
-+const TRANSFORM_FN_PREFIX_TS: &str = "function __TS_transform<T>(value: T, spec: __TS_TransformSpec): T {\n    if (spec == null || spec === 0) return value;\n\n    const rawValue = value as any;\n    const op = Array.isArray(spec) ? spec[0] : spec;\n\n    switch (op) {\n";
++const TRANSFORM_FN_PREFIX_TS: &str = "function __TS_transform<T>(value: T, spec: __TS_TransformSpec): any {\n    if (spec == null || spec === 0) return value;\n\n    const rawValue = value as any;\n    const op = Array.isArray(spec) ? spec[0] : spec;\n\n    switch (op) {\n";
 +const TRANSFORM_FN_PREFIX_JS: &str = "function __TS_transform(value, spec) {\n    if (spec == null || spec === 0) return value;\n\n    const rawValue = value;\n    const op = Array.isArray(spec) ? spec[0] : spec;\n\n    switch (op) {\n";
 +
 +const CASE_BIGINT: &str = r#"        case 1:
@@ -789,8 +789,8 @@ index 0000000..51cf462
 +            return value;
 +"#;
 +
-+const CASE_DATE: &str = "        case 2:\n            return (typeof rawValue === \"string\" ? new Date(rawValue) : value);\n";
-+const CASE_BYTES: &str = "        case 3:\n            return (Array.isArray(rawValue) && rawValue.every((v) => typeof v === \"number\") ? Uint8Array.from(rawValue) : value);\n";
++const CASE_DATE: &str = "        case 2: {\n            if (typeof rawValue !== \"string\") return value;\n            const next = new Date(rawValue);\n            return (Number.isNaN(next.getTime()) ? value : next);\n        }\n";
++const CASE_BYTES: &str = "        case 3:\n            return (Array.isArray(rawValue) && rawValue.every((v) => Number.isInteger(v) && v >= 0 && v <= 255) ? Uint8Array.from(rawValue) : value);\n";
 +const CASE_NULLABLE: &str = "        case 4:\n            return (Array.isArray(spec) ? (rawValue == null ? value : __TS_transform(value, spec[1])) : value);\n";
 +const CASE_LIST: &str = "        case 5:\n            return (Array.isArray(spec) && Array.isArray(rawValue) ? rawValue.map((item) => __TS_transform(item, spec[1])) : value);\n";
 +const CASE_TUPLE: &str = "        case 6:\n            return (Array.isArray(spec) && Array.isArray(spec[1]) && Array.isArray(rawValue)\n                ? rawValue.map((item, index) => __TS_transform(item, spec[1][index] ?? 0))\n                : value);\n";

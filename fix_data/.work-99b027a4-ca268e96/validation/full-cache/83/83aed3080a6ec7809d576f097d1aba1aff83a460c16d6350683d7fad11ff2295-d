@@ -1,9 +1,0 @@
-./approval.go
-./stats.go
-./tool_input.go
-./usage_log.go
-./usage_log_lock_unix.go
-./approval_test.go
-./stats_test.go
-./tool_input_test.go
-./usage_log_test.go

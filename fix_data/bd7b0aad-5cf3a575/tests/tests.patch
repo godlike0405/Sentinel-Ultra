@@ -1,16 +1,16 @@
 diff --git a/tests/core/test_otel_instrumentation.py b/tests/core/test_otel_instrumentation.py
 new file mode 100644
-index 0000000..39490c8
+index 0000000..5563e28
 --- /dev/null
 +++ b/tests/core/test_otel_instrumentation.py
-@@ -0,0 +1,565 @@
+@@ -0,0 +1,870 @@
 +"""Behavioral coverage for MCP-level OpenTelemetry integration."""
 +
 +from __future__ import annotations
 +
++import asyncio
 +import json
 +import os
-+import re
 +import subprocess
 +import sys
 +from pathlib import Path
@@ -99,6 +99,24 @@ index 0000000..39490c8
 +        self.durations.append((name, duration))
 +
 +
++class CompatibleResult:
++    """Unrelated result class implementing the documented field protocol."""
++
++    def __init__(self, *, structured_content: Any = None, content: Any = None) -> None:
++        self.structured_content = structured_content
++        self.content = content
++
++
++class HostileResult:
++    @property
++    def structured_content(self) -> Any:
++        raise RuntimeError("payload access failed")
++
++    @property
++    def content(self) -> Any:
++        raise RuntimeError("payload access failed")
++
++
 +def test_public_exports_and_provider_accessor(monkeypatch: pytest.MonkeyPatch) -> None:
 +    for name in _REQUIRED_EXPORTS:
 +        assert name in telemetry.__all__
@@ -126,7 +144,12 @@ index 0000000..39490c8
 +    middleware = telemetry.OpenTelemetryMiddleware()
 +
 +    cases = (
-+        ("structured", ToolResult(structured_content={"answer": 42}), {"answer": 42}),
++        (
++            "structured",
++            ToolResult(structured_content={"answer": 42}),
++            {"answer": 42},
++            "ToolResult",
++        ),
 +        (
 +            "blocks",
 +            ToolResult(
@@ -136,9 +159,24 @@ index 0000000..39490c8
 +                ]
 +            ),
 +            ["first", "second"],
++            "ToolResult",
++        ),
++        (
++            "compatible-structured",
++            CompatibleResult(structured_content={"answer": 43}),
++            {"answer": 43},
++            "CompatibleResult",
++        ),
++        (
++            "compatible-blocks",
++            CompatibleResult(
++                content=[SimpleNamespace(text="third"), SimpleNamespace(text="fourth")]
++            ),
++            ["third", "fourth"],
++            "CompatibleResult",
 +        ),
 +    )
-+    for name, result, expected in cases:
++    for name, result, expected, result_type in cases:
 +        async def call_next(context: Any, value: Any = result) -> Any:
 +            return value
 +
@@ -147,7 +185,8 @@ index 0000000..39490c8
 +        span = finished_span(exporter, f"mcp.tool.{name}.execute")
 +        output = span.attributes["mcp.tool.output"]
 +        assert json.loads(output) == expected
-+        assert "ToolResult" not in output and "TextContent" not in output
++        assert span.attributes["mcp.tool.result.type"] == result_type
++        assert result_type not in output and "TextContent" not in output
 +
 +
 +@pytest.mark.asyncio
@@ -439,6 +478,232 @@ index 0000000..39490c8
 +    assert span.parent is None
 +
 +
++@pytest.mark.asyncio
++async def test_payload_capture_is_bounded_valid_json_and_observational(
++    tracing,
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    _, exporter = tracing
++    recorder = MetricsRecorder()
++    import golf.metrics as metrics
++
++    monkeypatch.setattr(metrics, "get_metrics_collector", lambda: recorder)
++    middleware = telemetry.OpenTelemetryMiddleware()
++
++    large = CompatibleResult(structured_content={"payload": "x" * 5000})
++
++    async def return_large(context: Any) -> Any:
++        return large
++
++    assert await middleware.on_call_tool(make_context(name="large"), return_large) is large
++    large_output = finished_span(exporter, "mcp.tool.large.execute").attributes[
++        "mcp.tool.output"
++    ]
++    assert len(large_output) <= 1000
++    json.loads(large_output)
++
++    cyclic: dict[str, Any] = {}
++    cyclic["self"] = cyclic
++    cyclic_context = make_context(name="cyclic")
++    cyclic_context.message.arguments = cyclic
++    marker = object()
++
++    async def return_marker(context: Any) -> Any:
++        return marker
++
++    assert await middleware.on_call_tool(cyclic_context, return_marker) is marker
++    cyclic_input = finished_span(exporter, "mcp.tool.cyclic.execute").attributes[
++        "mcp.tool.input"
++    ]
++    assert len(cyclic_input) <= 1000
++    json.loads(cyclic_input)
++
++    hostile = HostileResult()
++
++    async def return_hostile(context: Any) -> Any:
++        return hostile
++
++    assert await middleware.on_call_tool(make_context(name="hostile"), return_hostile) is hostile
++    hostile_span = finished_span(exporter, "mcp.tool.hostile.execute")
++    assert hostile_span.status.status_code is StatusCode.OK
++
++
++@pytest.mark.asyncio
++async def test_metrics_failures_never_change_tool_outcomes(
++    tracing,
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    _, exporter = tracing
++    import golf.metrics as metrics
++
++    class BrokenCollector:
++        def increment_tool_execution(self, name: str, outcome: str) -> None:
++            raise RuntimeError("metrics backend unavailable")
++
++        def record_tool_duration(self, name: str, duration: float) -> None:
++            raise RuntimeError("metrics backend unavailable")
++
++    monkeypatch.setattr(metrics, "get_metrics_collector", lambda: BrokenCollector())
++    middleware = telemetry.OpenTelemetryMiddleware()
++    marker = object()
++
++    async def succeed(context: Any) -> Any:
++        return marker
++
++    assert await middleware.on_call_tool(make_context(name="metrics-success"), succeed) is marker
++    assert finished_span(exporter, "mcp.tool.metrics-success.execute").status.status_code is StatusCode.OK
++
++    failure = LookupError("downstream failed")
++
++    async def fail(context: Any) -> Any:
++        raise failure
++
++    with pytest.raises(LookupError) as caught:
++        await middleware.on_call_tool(make_context(name="metrics-error"), fail)
++    assert caught.value is failure
++    assert finished_span(exporter, "mcp.tool.metrics-error.execute").status.status_code is StatusCode.ERROR
++
++    monkeypatch.setattr(metrics, "get_metrics_collector", lambda: None)
++    assert await middleware.on_call_tool(make_context(name="metrics-absent"), succeed) is marker
++
++
++@pytest.mark.asyncio
++async def test_tool_failure_and_cancellation_record_complete_metrics(
++    tracing,
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    _, exporter = tracing
++    recorder = MetricsRecorder()
++    import golf.metrics as metrics
++
++    monkeypatch.setattr(metrics, "get_metrics_collector", lambda: recorder)
++    middleware = telemetry.OpenTelemetryMiddleware()
++    failure = RuntimeError("ordinary failure")
++    cancellation = asyncio.CancelledError("cancelled tool")
++
++    async def fail(context: Any) -> Any:
++        raise failure
++
++    async def cancel(context: Any) -> Any:
++        raise cancellation
++
++    with pytest.raises(RuntimeError) as failed:
++        await middleware.on_call_tool(make_context(name="ordinary"), fail)
++    assert failed.value is failure
++    with pytest.raises(asyncio.CancelledError) as cancelled:
++        await middleware.on_call_tool(make_context(name="cancelled"), cancel)
++    assert cancelled.value is cancellation
++
++    assert recorder.executions == [("ordinary", "error"), ("cancelled", "error")]
++    assert [name for name, _ in recorder.durations] == ["ordinary", "cancelled"]
++    assert all(duration >= 0 for _, duration in recorder.durations)
++    for name in ("ordinary", "cancelled"):
++        span = finished_span(exporter, f"mcp.tool.{name}.execute")
++        assert span.status.status_code is StatusCode.ERROR
++        assert any(event.name == "exception" for event in span.events)
++
++
++@pytest.mark.asyncio
++async def test_non_tool_cancellations_mark_error_and_reraise(tracing) -> None:
++    _, exporter = tracing
++    middleware = telemetry.OpenTelemetryMiddleware()
++    cases = (
++        (
++            middleware.on_read_resource,
++            make_context(method="resources/read"),
++            "mcp.resource.read",
++        ),
++        (
++            middleware.on_get_prompt,
++            make_context(method="prompts/get", name="cancelled"),
++            "mcp.prompt.cancelled.generate",
++        ),
++        (
++            middleware.on_message,
++            make_context(method="cancelled/message"),
++            "mcp.request.cancelled.message",
++        ),
++    )
++    for hook, context, span_name in cases:
++        cancellation = asyncio.CancelledError(span_name)
++
++        async def cancel(next_context: Any, error: BaseException = cancellation) -> Any:
++            raise error
++
++        with pytest.raises(asyncio.CancelledError) as caught:
++            await hook(context, cancel)
++        assert caught.value is cancellation
++        span = finished_span(exporter, span_name)
++        assert span.status.status_code is StatusCode.ERROR
++        assert any(event.name == "exception" for event in span.events)
++
++
++@pytest.mark.asyncio
++async def test_concurrent_http_requests_keep_distinct_parents(tracing) -> None:
++    tracer, exporter = tracing
++    middleware = telemetry.OpenTelemetryMiddleware()
++    both_entered = asyncio.Event()
++    entered = 0
++
++    async def call_next(context: Any) -> str:
++        return context.method
++
++    async def app(scope: Any, receive: Any, send: Any) -> None:
++        nonlocal entered
++        entered += 1
++        if entered == 2:
++            both_entered.set()
++        await both_entered.wait()
++        await middleware.on_message(
++            make_context(method=f"concurrent/{scope['request_name']}"), call_next
++        )
++
++    asgi = telemetry.OTelContextCapturingMiddleware(app)
++
++    async def run_request(name: str) -> tuple[str, int]:
++        with tracer.start_as_current_span(f"http.{name}") as parent:
++            parent_id = parent.get_span_context().span_id
++            await asgi({"type": "http", "request_name": name}, object(), object())
++        return name, parent_id
++
++    parents = dict(await asyncio.gather(run_request("one"), run_request("two")))
++    for name, parent_id in parents.items():
++        span = finished_span(exporter, f"mcp.request.concurrent.{name}")
++        assert span.parent is not None and span.parent.span_id == parent_id
++
++
++@pytest.mark.asyncio
++async def test_nested_http_capture_restores_outer_parent_after_cancellation(tracing) -> None:
++    tracer, exporter = tracing
++    middleware = telemetry.OpenTelemetryMiddleware()
++    cancellation = asyncio.CancelledError("inner request cancelled")
++
++    async def call_next(context: Any) -> str:
++        return context.method
++
++    async def inner_app(scope: Any, receive: Any, send: Any) -> None:
++        raise cancellation
++
++    inner = telemetry.OTelContextCapturingMiddleware(inner_app)
++
++    async def outer_app(scope: Any, receive: Any, send: Any) -> None:
++        await middleware.on_message(make_context(method="outer/before"), call_next)
++        with tracer.start_as_current_span("http.inner"):
++            with pytest.raises(asyncio.CancelledError) as caught:
++                await inner({"type": "http"}, receive, send)
++            assert caught.value is cancellation
++        await middleware.on_message(make_context(method="outer/after"), call_next)
++
++    outer = telemetry.OTelContextCapturingMiddleware(outer_app)
++    with tracer.start_as_current_span("http.outer") as parent:
++        outer_id = parent.get_span_context().span_id
++        await outer({"type": "http"}, object(), object())
++
++    for name in ("mcp.request.outer.before", "mcp.request.outer.after"):
++        span = finished_span(exporter, name)
++        assert span.parent is not None and span.parent.span_id == outer_id
++
++
 +def write_project(project: Path) -> None:
 +    (project / "tools").mkdir(parents=True)
 +    (project / "resources").mkdir()
@@ -475,6 +740,65 @@ index 0000000..39490c8
 +        "    async def on_message(self, context, call_next):\n"
 +        "        return await call_next(context)\n"
 +    )
++
++
++def assert_generated_runtime(
++    output: Path,
++    project: Path,
++    build_env: dict[str, str],
++    *,
++    expect_otel: bool,
++) -> None:
++    probe = r'''
++import asyncio
++import importlib
++import importlib.util
++import sys
++
++output, project, expected = sys.argv[1:]
++sys.path[:0] = [output, project]
++spec = importlib.util.spec_from_file_location("generated_server", output + "/server.py")
++server = importlib.util.module_from_spec(spec)
++spec.loader.exec_module(server)
++
++from golf.telemetry import OpenTelemetryMiddleware
++from middleware import CustomMiddleware
++
++otel = [i for i, item in enumerate(server.mcp.middleware) if isinstance(item, OpenTelemetryMiddleware)]
++custom = [i for i, item in enumerate(server.mcp.middleware) if isinstance(item, CustomMiddleware)]
++assert len(custom) == 1
++if expected == "enabled":
++    assert len(otel) == 1 and otel[0] < custom[0]
++else:
++    assert not otel
++
++objects = (
++    asyncio.run(server.mcp.get_tool("adder")),
++    asyncio.run(server.mcp.get_resource("status://current")),
++    asyncio.run(server.mcp.get_prompt("welcome")),
++)
++for component in objects:
++    function = component.fn
++    owner = importlib.import_module(function.__module__)
++    assert getattr(owner, function.__name__) is function
++'''
++    completed = subprocess.run(
++        [
++            sys.executable,
++            "-c",
++            probe,
++            str(output),
++            str(project),
++            "enabled" if expect_otel else "disabled",
++        ],
++        cwd=project,
++        env=build_env,
++        text=True,
++        capture_output=True,
++        timeout=90,
++        check=False,
++    )
++    assert completed.returncode == 0, completed.stdout + completed.stderr
 +
 +
 +def test_public_build_uses_one_mcp_boundary_and_original_components(tmp_path: Path) -> None:
@@ -516,25 +840,7 @@ index 0000000..39490c8
 +    server_path = output / "server.py"
 +    server = server_path.read_text()
 +    compile(server, str(server_path), "exec")
-+
-+    otel_registration = "mcp.add_middleware(OpenTelemetryMiddleware())"
-+    custom_registration = "mcp.add_middleware(CustomMiddleware())"
-+    assert server.count(otel_registration) == 1
-+    assert otel_registration in server and custom_registration in server
-+    assert server.index(otel_registration) < server.index(custom_registration)
-+    assert "_wrapped_func" not in server
-+    assert not re.search(r"\binstrument_(tool|resource|prompt)\s*\(", server)
-+    assert re.search(
-+        r"Tool\.from_function\(\s*components\.tools\.adder\.adder\b", server
-+    )
-+    assert re.search(
-+        r"Resource\.from_function\(\s*components\.resources\.status\.read_status\b",
-+        server,
-+    )
-+    assert re.search(
-+        r"Prompt\.from_function\(\s*components\.prompts\.welcome\.welcome\b", server
-+    )
-+    assert "from opentelemetry.instrumentation.asgi import OpenTelemetryMiddleware" not in server
++    assert_generated_runtime(output, project, build_env, expect_otel=True)
 +
 +    (project / "golf.json").write_text(
 +        json.dumps(
@@ -567,5 +873,4 @@ index 0000000..39490c8
 +    disabled_server_path = disabled_output / "server.py"
 +    disabled_server = disabled_server_path.read_text()
 +    compile(disabled_server, str(disabled_server_path), "exec")
-+    assert "OpenTelemetryMiddleware" not in disabled_server
-+    assert not re.search(r"\binstrument_(tool|resource|prompt)\s*\(", disabled_server)
++    assert_generated_runtime(disabled_output, project, build_env, expect_otel=False)

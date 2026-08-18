@@ -1,4 +1,0 @@
-./jsonl.go
-./store.go
-./jsonl_bench_test.go
-./jsonl_test.go

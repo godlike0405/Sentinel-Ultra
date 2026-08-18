@@ -1,7 +1,7 @@
 schema_version = "1.3"
 
 [metadata]
-hardening_cycles = "3"
+hardening_cycles = "4"
 agent_hardened = "true"
 author_name = "anonymous"
 author_email = "anonymous@snorkel.ai"

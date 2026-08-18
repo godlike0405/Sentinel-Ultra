@@ -6,7 +6,7 @@ RUN sed -i \
         -e 's|http://deb.debian.org/debian|https://snapshot.debian.org/archive/debian/20260803T000000Z|g' \
         /etc/apt/sources.list.d/debian.sources \
     && apt-get -o Acquire::Check-Valid-Until=false update \
-    && apt-get install -y --no-install-recommends python3 nodejs tmux asciinema \
+    && apt-get install -y --no-install-recommends python3 nodejs node-typescript tmux asciinema \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -19,6 +19,7 @@ RUN cargo fetch --locked \
     && command -v patch \
     && command -v python3 \
     && command -v node \
+    && command -v tsc \
     && command -v tmux \
     && command -v asciinema
 

@@ -15,7 +15,7 @@ source_pr_url = "https://github.com/AliyunContainerService/pouch/pull/2411"
 base_commit_sha = "b19cbf62901fc176b6b6036e7e97131d5e339327"
 model_difficulty = "hard"
 tags = ["oci-runtime-spec", "containers", "capabilities", "cgroups", "dev-shm", "go"]
-difficulty_explanation = "Requires deriving a Pouch-owned OCI security profile from several vendored runtime conventions, preserving privileged and unprivileged behavior, and removing an otherwise effect-free containerd dependency. Solvers must also trace mutable ownership across constructor, process, hook, mount, and Linux finalization; keep capability views and container snapshots independent under concurrency; and make multi-stage publication failure-atomic across validation, retry, and prior-success state transitions."
+difficulty_explanation = "Requires deriving a Pouch-owned OCI security profile from several vendored runtime conventions, preserving privileged and unprivileged behavior, and removing an otherwise effect-free containerd dependency. Solvers must also trace mutable ownership across constructor, process, hook, mount, and Linux finalization, including values shared through pointers and spare slice capacity rather than only through obvious slice and map aliases; keep capability views and container snapshots independent under concurrency; and make multi-stage publication failure-atomic across process, mount, hook, and platform validation. The transaction extends to the container itself: setup stages that resolve container state while building a profile must not record it until publication succeeds, yet must still record it on success, so a faithful port of the upstream change alone leaves observable failure-path side effects behind."
 # --- legacy aliases (kept for backward-compatible internal consumers) ---
 difficulty = "hard"
 task_type = "implementation"
@@ -31,7 +31,7 @@ pr_merged_at = "2018-12-20T12:51:46Z"
 timeout_sec = 1200.0
 
 [agent]
-timeout_sec = 1800.0
+timeout_sec = 3600.0
 
 [environment]
 os = "linux"

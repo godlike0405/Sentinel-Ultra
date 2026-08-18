@@ -1,9 +1,0 @@
-./debug_options.go
-./exitcode.go
-./offsetdata.go
-./perfmap.go
-./perfmap_disabled.go
-./pool.go
-./ptr.go
-./queue.go
-./resetmap.go

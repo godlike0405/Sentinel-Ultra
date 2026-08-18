@@ -36,7 +36,7 @@
       "v2_adjacent_enum_contract",
       "v2_untagged_enum_is_identity_contract",
       "v2_recursive_and_generic_contract",
-      "v2_trusting_output_across_graph_contract"
+      "v2_caller_expression_contract"
     ],
     "pass_to_pass": [
       "datatype::named::tests::file_path_to_module_path_supports_unix_and_windows_separators"

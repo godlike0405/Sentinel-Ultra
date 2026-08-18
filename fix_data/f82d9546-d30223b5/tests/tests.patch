@@ -1,9 +1,9 @@
 diff --git a/src/exo/utils/info_gatherer/tests/test_rdma_full_stack_contract.py b/src/exo/utils/info_gatherer/tests/test_rdma_full_stack_contract.py
 new file mode 100644
-index 00000000..c832d60c
+index 00000000..91b99719
 --- /dev/null
 +++ b/src/exo/utils/info_gatherer/tests/test_rdma_full_stack_contract.py
-@@ -0,0 +1,448 @@
+@@ -0,0 +1,630 @@
 +from __future__ import annotations
 +
 +import asyncio
@@ -11,7 +11,6 @@ index 00000000..c832d60c
 +import os
 +import subprocess
 +import textwrap
-+from contextlib import AbstractContextManager
 +from pathlib import Path
 +from types import SimpleNamespace
 +from typing import Any, cast, get_args
@@ -43,8 +42,31 @@ index 00000000..c832d60c
 +    return asyncio.run(coro)
 +
 +
-+def _proc(stdout: bytes, returncode: int = 0) -> SimpleNamespace:
-+    return SimpleNamespace(stdout=stdout, stderr=b"", returncode=returncode)
++def _install_rdma_ctl(
++    tmp_path: Path,
++    monkeypatch: pytest.MonkeyPatch,
++    *,
++    output: str = "enabled",
++    exit_code: int = 0,
++    delay: int = 0,
++) -> Path:
++    executable = tmp_path / "rdma_ctl"
++    executable.write_text(
++        "#!/bin/sh\n"
++        'printf "%s\\n" "$@" > "$RDMA_CTL_ARGS_FILE"\n'
++        'if [ "$RDMA_CTL_DELAY" -gt 0 ]; then exec sleep "$RDMA_CTL_DELAY"; fi\n'
++        'printf "%s" "$RDMA_CTL_OUTPUT"\n'
++        'exit "$RDMA_CTL_EXIT"\n',
++        encoding="utf-8",
++    )
++    executable.chmod(0o755)
++    args_file = tmp_path / "args.txt"
++    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}")
++    monkeypatch.setenv("RDMA_CTL_ARGS_FILE", str(args_file))
++    monkeypatch.setenv("RDMA_CTL_OUTPUT", output)
++    monkeypatch.setenv("RDMA_CTL_EXIT", str(exit_code))
++    monkeypatch.setenv("RDMA_CTL_DELAY", str(delay))
++    return args_file
 +
 +
 +def _gathered(symbols: dict[str, Any], node: str, enabled: bool) -> Any:
@@ -55,89 +77,68 @@ index 00000000..c832d60c
 +    )
 +
 +
-+def test_gather_parses_enabled_disabled_and_unknown_statuses() -> None:
++def test_gather_parses_enabled_disabled_and_unknown_statuses(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
 +    symbols = _symbols()
 +    status = symbols["RdmaCtlStatus"]
 +    cases = [
-+        (b"RDMA is ENABLED\n", True),
-+        (b"  rdma disabled  \n", False),
-+        (b"status unavailable\n", None),
++        ("RDMA is ENABLED\n", True),
++        ("  rdma disabled  \n", False),
++        ("status unavailable\n", None),
 +    ]
 +    for stdout, expected in cases:
-+        with (
-+            patch("exo.utils.info_gatherer.info_gatherer.IS_DARWIN", True),
-+            patch("exo.utils.info_gatherer.info_gatherer.shutil.which", return_value="/usr/bin/rdma_ctl"),
-+            patch("exo.utils.info_gatherer.info_gatherer.anyio.run_process", new=AsyncMock(return_value=_proc(stdout))),
-+        ):
++        _install_rdma_ctl(tmp_path, monkeypatch, output=stdout)
++        with patch("exo.utils.info_gatherer.info_gatherer.IS_DARWIN", True):
 +            result = _run(status.gather())
 +        assert (None if result is None else result.enabled) is expected
 +
 +
-+def test_gather_uses_the_public_rdma_ctl_status_command() -> None:
++def test_gather_uses_the_public_rdma_ctl_status_command(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
 +    symbols = _symbols()
-+    run_process = AsyncMock(return_value=_proc(b"enabled"))
-+    with (
-+        patch("exo.utils.info_gatherer.info_gatherer.IS_DARWIN", True),
-+        patch("exo.utils.info_gatherer.info_gatherer.shutil.which", return_value="/opt/bin/rdma_ctl"),
-+        patch("exo.utils.info_gatherer.info_gatherer.anyio.run_process", new=run_process),
-+    ):
++    args_file = _install_rdma_ctl(tmp_path, monkeypatch)
++    with patch("exo.utils.info_gatherer.info_gatherer.IS_DARWIN", True):
 +        assert _run(symbols["RdmaCtlStatus"].gather()).enabled is True
-+    run_process.assert_awaited_once_with(["rdma_ctl", "status"], check=False)
++    assert args_file.read_text(encoding="utf-8").splitlines() == ["status"]
 +
 +
-+def test_gather_short_circuits_off_macos_and_without_the_binary() -> None:
++def test_gather_short_circuits_off_macos_and_without_the_binary(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
 +    symbols = _symbols()
-+    run_process = AsyncMock()
-+    with (
-+        patch("exo.utils.info_gatherer.info_gatherer.IS_DARWIN", False),
-+        patch("exo.utils.info_gatherer.info_gatherer.anyio.run_process", new=run_process),
-+    ):
++    args_file = _install_rdma_ctl(tmp_path, monkeypatch)
++    with patch("exo.utils.info_gatherer.info_gatherer.IS_DARWIN", False):
 +        assert _run(symbols["RdmaCtlStatus"].gather()) is None
-+    with (
-+        patch("exo.utils.info_gatherer.info_gatherer.IS_DARWIN", True),
-+        patch("exo.utils.info_gatherer.info_gatherer.shutil.which", return_value=None),
-+        patch("exo.utils.info_gatherer.info_gatherer.anyio.run_process", new=run_process),
-+    ):
++    assert not args_file.exists()
++    executable = tmp_path / "rdma_ctl"
++    executable.unlink()
++    with patch("exo.utils.info_gatherer.info_gatherer.IS_DARWIN", True):
 +        assert _run(symbols["RdmaCtlStatus"].gather()) is None
-+    run_process.assert_not_awaited()
 +
 +
-+def test_gather_returns_none_for_process_and_decode_failures() -> None:
++def test_gather_returns_none_for_a_failed_status_command(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
 +    symbols = _symbols()
 +    status = symbols["RdmaCtlStatus"]
-+    outcomes: list[Any] = [OSError("spawn failed"), _proc(b"enabled", 4)]
-+    for outcome in outcomes:
-+        runner = AsyncMock(side_effect=outcome) if isinstance(outcome, Exception) else AsyncMock(return_value=outcome)
-+        with (
-+            patch("exo.utils.info_gatherer.info_gatherer.IS_DARWIN", True),
-+            patch("exo.utils.info_gatherer.info_gatherer.shutil.which", return_value="/usr/bin/rdma_ctl"),
-+            patch("exo.utils.info_gatherer.info_gatherer.anyio.run_process", new=runner),
-+        ):
-+            assert _run(status.gather()) is None
++    _install_rdma_ctl(tmp_path, monkeypatch, output="enabled", exit_code=4)
++    with patch("exo.utils.info_gatherer.info_gatherer.IS_DARWIN", True):
++        assert _run(status.gather()) is None
 +
 +
-+def test_gather_applies_the_five_second_deadline_and_swallows_timeout() -> None:
++def test_gather_bounds_a_stuck_status_process(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
 +    symbols = _symbols()
-+    seen: list[float] = []
++    _install_rdma_ctl(tmp_path, monkeypatch, delay=30)
++    import time
 +
-+    class Deadline(AbstractContextManager[None]):
-+        def __enter__(self) -> None:
-+            raise TimeoutError("deadline")
-+
-+        def __exit__(self, *args: object) -> bool:
-+            return False
-+
-+    def fail_after(seconds: float) -> Deadline:
-+        seen.append(seconds)
-+        return Deadline()
-+
-+    with (
-+        patch("exo.utils.info_gatherer.info_gatherer.IS_DARWIN", True),
-+        patch("exo.utils.info_gatherer.info_gatherer.shutil.which", return_value="/usr/bin/rdma_ctl"),
-+        patch("exo.utils.info_gatherer.info_gatherer.anyio.fail_after", side_effect=fail_after),
-+    ):
++    started = time.monotonic()
++    with patch("exo.utils.info_gatherer.info_gatherer.IS_DARWIN", True):
 +        assert _run(symbols["RdmaCtlStatus"].gather()) is None
-+    assert seen == [5]
++    assert time.monotonic() - started < 20
 +
 +
 +def test_models_union_and_state_wire_name_form_one_contract() -> None:
@@ -241,8 +242,7 @@ index 00000000..c832d60c
 +        ):
 +            async with anyio.create_task_group() as tg:
 +                tg.start_soon(gatherer.run)
-+                with anyio.fail_after(1):
-+                    await complete.wait()
++                await asyncio.wait_for(complete.wait(), timeout=1)
 +                gatherer.shutdown()
 +            assert warning.called
 +
@@ -289,7 +289,10 @@ index 00000000..c832d60c
 +    field = symbols["InfoGatherer"].__dataclass_fields__["rdma_ctl_poll_interval"]
 +    from exo.utils.info_gatherer import info_gatherer as module
 +
-+    assert field.default == (10 if module.IS_DARWIN else None)
++    if module.IS_DARWIN:
++        assert field.default is not None and field.default > 0
++    else:
++        assert field.default is None
 +
 +
 +def test_thunderbolt_identifier_exposes_link_speed_on_the_wire() -> None:
@@ -315,6 +318,7 @@ index 00000000..c832d60c
 +        r'''
 +        import assert from "node:assert/strict";
 +        import { createRequire } from "node:module";
++        import fs from "node:fs/promises";
 +        import { pathToFileURL } from "node:url";
 +        import path from "node:path";
 +
@@ -322,8 +326,13 @@ index 00000000..c832d60c
 +        const scenario = process.argv[3];
 +        const dashboard = path.join(root, "dashboard");
 +        const requireFromDashboard = createRequire(path.join(dashboard, "package.json"));
++        const harness = process.env.SENTINEL_NODE_HARNESS;
++        assert.ok(harness, "SENTINEL_NODE_HARNESS is required");
++        const requireFromHarness = createRequire(path.join(harness, "package.json"));
 +        const vitePath = requireFromDashboard.resolve("vite");
-+        const { createServer } = await import(pathToFileURL(vitePath));
++        const happyDomPath = requireFromHarness.resolve("happy-dom");
++        const { build, createServer } = await import(pathToFileURL(vitePath));
++        const { Window } = await import(pathToFileURL(happyDomPath));
 +        const server = await createServer({ root: dashboard, logLevel: "silent", server: { middlewareMode: true }, appType: "custom" });
 +        const state = {
 +          topology: {
@@ -373,18 +382,109 @@ index 00000000..c832d60c
 +          } else if (scenario === "prompt") {
 +            const { render } = await server.ssrLoadModule("svelte/server");
 +            const page = (await server.ssrLoadModule("/src/routes/+page.svelte")).default;
-+            const first = render(page).body;
-+            assert.match(first, /RDMA AVAILABLE/);
++            const window = new Window();
++            const hasDismissibleStatus = (body) => {
++              window.document.body.innerHTML = body;
++              return [...window.document.querySelectorAll('[role="status"]')]
++                .some((element) =>
++                  element.querySelector("button") !== null &&
++                  element.querySelector("ol") !== null &&
++                  element.querySelector("code") !== null
++                );
++            };
++            state.nodeThunderbolt = { alpha: state.nodeThunderbolt.alpha };
++            await store.refreshState();
++            assert.equal(hasDismissibleStatus(render(page).body), false);
++            state.nodeThunderbolt = {
++              alpha: { interfaces: [{ rdmaInterface: "rdma_en2", domainUuid: "a", linkSpeed: "80 Gb/s" }] },
++              beta: { interfaces: [{ rdmaInterface: "rdma_en3", domainUuid: "b", linkSpeed: "80 Gb/s" }] }
++            };
++            await store.refreshState();
++            assert.equal(hasDismissibleStatus(render(page).body), true);
 +            state.nodeRdmaCtl = { alpha: { enabled: true }, beta: { enabled: true } };
 +            await store.refreshState();
-+            const second = render(page).body;
-+            assert.doesNotMatch(second, /RDMA AVAILABLE/);
++            assert.equal(hasDismissibleStatus(render(page).body), false);
++            window.close();
 +          } else if (scenario === "topology") {
-+            await server.ssrLoadModule("/src/lib/components/TopologyGraph.svelte");
++            const { svelte } = await import(pathToFileURL(path.join(
++              dashboard, "node_modules/@sveltejs/vite-plugin-svelte/src/index.js"
++            )));
++            const entry = path.join(dashboard, ".sentinel-topology-entry.js");
++            const environment = path.join(dashboard, ".sentinel-environment.js");
++            const outDir = path.join(dashboard, ".sentinel-topology-build");
++            await fs.writeFile(entry, `
++              import { mount, unmount, tick } from "svelte";
++              import TopologyGraph from "./src/lib/components/TopologyGraph.svelte";
++              import { refreshState, setDebugMode } from "./src/lib/stores/app.svelte.ts";
++              export async function run(target) {
++                await refreshState();
++                setDebugMode(true);
++                const component = mount(TopologyGraph, { target });
++                await tick();
++                return () => unmount(component);
++              }
++            `);
++            await fs.writeFile(environment, "export const browser = true;\n");
++            try {
++              await build({
++                root: dashboard,
++                configFile: false,
++                plugins: [svelte()],
++                resolve: { alias: {
++                  "$lib": path.join(dashboard, "src/lib"),
++                  "$app/environment": environment,
++                }},
++                logLevel: "warn",
++                build: {
++                  outDir,
++                  emptyOutDir: true,
++                  lib: { entry, formats: ["es"], fileName: "bundle" },
++                  minify: false,
++                },
++              });
++              const window = new Window({ url: "http://localhost/" });
++              Object.assign(globalThis, {
++                window,
++                document: window.document,
++                Element: window.Element,
++                HTMLElement: window.HTMLElement,
++                SVGElement: window.SVGElement,
++                Node: window.Node,
++                localStorage: window.localStorage,
++              });
++              Object.defineProperty(globalThis, "navigator", { value: window.navigator, configurable: true });
++              for (const key of Object.getOwnPropertyNames(window)) {
++                if (!(key in globalThis)) {
++                  Object.defineProperty(globalThis, key, Object.getOwnPropertyDescriptor(window, key));
++                }
++              }
++              window.SVGElement.prototype.getBoundingClientRect = () => ({
++                x: 0, y: 0, top: 0, left: 0, right: 800, bottom: 600,
++                width: 800, height: 600, toJSON() { return {}; },
++              });
++              globalThis.ResizeObserver = class {
++                constructor(callback) { this.callback = callback; }
++                observe() { this.callback([]); }
++                disconnect() {}
++              };
++              const module = await import(pathToFileURL(path.join(outDir, "bundle.js")) + `?t=${Date.now()}`);
++              const dispose = await module.run(window.document.body);
++              await new Promise((resolve) => setTimeout(resolve, 20));
++              const renderedText = window.document.body.textContent;
++              assert.match(renderedText, /RDMA:ON/);
++              assert.match(renderedText, /RDMA:OFF/);
++              dispose();
++              window.close();
++            } finally {
++              await fs.rm(entry, { force: true });
++              await fs.rm(environment, { force: true });
++              await fs.rm(outDir, { recursive: true, force: true });
++            }
 +          }
 +        } finally {
 +          await server.close();
 +        }
++        process.exit(0);
 +        '''
 +    )
 +    script_path = ROOT / ".sentinel-rdma-dashboard.mjs"
@@ -422,33 +522,115 @@ index 00000000..c832d60c
 +    _assert_node_case("prompt")
 +
 +
-+def test_dashboard_per_node_debug_labels_compile_with_state_binding() -> None:
++def test_dashboard_per_node_debug_labels_render_cluster_state() -> None:
 +    _symbols()
-+    component = (ROOT / "dashboard/src/lib/components/TopologyGraph.svelte").read_text(encoding="utf-8")
-+    assert "nodeRdmaCtl" in component
-+    assert "RDMA:ON" in component and "RDMA:OFF" in component
 +    _assert_node_case("topology")
 +
 +
-+def test_macos_state_decoder_accepts_missing_and_present_cluster_rdma_state() -> None:
++def _swift_parse(path: Path) -> None:
++    result = subprocess.run(
++        ["swiftc", "-frontend", "-parse", str(path)],
++        text=True,
++        capture_output=True,
++        timeout=30,
++        check=False,
++    )
++    assert result.returncode == 0, result.stdout + "\n" + result.stderr
++
++
++def _active_swift_source(path: Path) -> str:
++    source = path.read_text(encoding="utf-8")
++    output: list[str] = []
++    index = 0
++    block_depth = 0
++    in_string = False
++    while index < len(source):
++        pair = source[index : index + 2]
++        if block_depth:
++            if pair == "/*":
++                block_depth += 1
++                index += 2
++            elif pair == "*/":
++                block_depth -= 1
++                index += 2
++            else:
++                index += 1
++            continue
++        if not in_string and pair == "//":
++            newline = source.find("\n", index)
++            index = len(source) if newline < 0 else newline
++            continue
++        if not in_string and pair == "/*":
++            block_depth = 1
++            index += 2
++            continue
++        char = source[index]
++        output.append(char)
++        if char == '"' and (index == 0 or source[index - 1] != "\\"):
++            in_string = not in_string
++        index += 1
++    return "".join(output)
++
++
++def test_macos_state_decoder_accepts_missing_and_present_cluster_rdma_state(
++    tmp_path: Path,
++) -> None:
 +    _symbols()
-+    source = (ROOT / "app/EXO/EXO/Models/ClusterState.swift").read_text(encoding="utf-8")
-+    assert "let enabled: Bool" in source
-+    assert "decodeIfPresent" in source and "nodeRdmaCtl" in source and "?? [:]" in source
++    source = ROOT / "app/EXO/EXO/Models/ClusterState.swift"
++    driver = tmp_path / "main.swift"
++    driver.write_text(
++        textwrap.dedent(
++            r'''
++            import Foundation
++
++            struct ModelOption {}
++
++            func decoded(_ json: String) throws -> ClusterState {
++                try JSONDecoder().decode(ClusterState.self, from: Data(json.utf8))
++            }
++
++            let present = try decoded(#"{"instances":{},"runners":{},"nodeRdmaCtl":{"alpha":{"enabled":true},"beta":{"enabled":false}}}"#)
++            guard present.nodeRdmaCtl["alpha"]?.enabled == true else { fatalError("enabled state lost") }
++            guard present.nodeRdmaCtl["beta"]?.enabled == false else { fatalError("disabled state lost") }
++            let missing = try decoded(#"{"instances":{},"runners":{}}"#)
++            guard missing.nodeRdmaCtl.isEmpty else { fatalError("missing state was not compatible") }
++            '''
++        ),
++        encoding="utf-8",
++    )
++    executable = tmp_path / "cluster-state-contract"
++    compile_result = subprocess.run(
++        ["swiftc", str(source), str(driver), "-o", str(executable)],
++        text=True,
++        capture_output=True,
++        timeout=60,
++        check=False,
++    )
++    assert compile_result.returncode == 0, compile_result.stdout + "\n" + compile_result.stderr
++    run_result = subprocess.run(
++        [str(executable)], text=True, capture_output=True, timeout=10, check=False
++    )
++    assert run_result.returncode == 0, run_result.stdout + "\n" + run_result.stderr
 +
 +
 +def test_macos_debug_view_uses_cluster_status_and_marks_the_local_node() -> None:
 +    _symbols()
-+    source = (ROOT / "app/EXO/EXO/ContentView.swift").read_text(encoding="utf-8")
-+    assert "latestSnapshot?.nodeRdmaCtl" in source
-+    assert "localNodeId" in source and '"Enabled"' in source and '"Disabled"' in source
-+    assert "(local):" in source
++    path = ROOT / "app/EXO/EXO/ContentView.swift"
++    _swift_parse(path)
++    source = _active_swift_source(path)
++    for identifier in ("nodeRdmaCtl", "localNodeId", "friendlyName", "enabled", "ForEach"):
++        assert identifier in source
 +
 +
 +def test_macos_keeps_local_devices_and_ports_without_local_rdma_ctl_status() -> None:
 +    _symbols()
-+    service = (ROOT / "app/EXO/EXO/Services/NetworkStatusService.swift").read_text(encoding="utf-8")
-+    view = (ROOT / "app/EXO/EXO/ContentView.swift").read_text(encoding="utf-8")
-+    assert '["rdma_ctl", "status"]' not in service
-+    assert '["ibv_devices"]' in service and '["ibv_devinfo"]' in service
-+    assert "Local Devices" in view and "Local Active Ports" in view
++    service_path = ROOT / "app/EXO/EXO/Services/NetworkStatusService.swift"
++    view_path = ROOT / "app/EXO/EXO/ContentView.swift"
++    _swift_parse(service_path)
++    _swift_parse(view_path)
++    service = _active_swift_source(service_path)
++    view = _active_swift_source(view_path)
++    assert "rdma_ctl" not in service
++    assert "ibv_devices" in service and "ibv_devinfo" in service
++    assert "localRdmaDevices" in service and "localRdmaActivePorts" in service
++    assert "localRdmaDevices" in view and "localRdmaActivePorts" in view

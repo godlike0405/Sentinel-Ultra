@@ -1,4 +1,0 @@
-patching file internal/app/sentinel_stop_all_test.go
-patching file internal/runtime/commands/sentinel_stop_all_test.go
-patching file internal/tools/sentinel_stop_all_test.go
-patching file internal/tui/sentinel_stop_all_test.go

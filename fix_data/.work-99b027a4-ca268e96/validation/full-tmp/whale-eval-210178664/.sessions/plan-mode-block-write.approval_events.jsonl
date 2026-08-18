@@ -1,1 +1,0 @@
-{"ts":1787015235782,"session":"plan-mode-block-write","assistant_message_id":"m-2","tool_call_id":"write","tool":"write","event":"approval_mode_blocked","source":"agent","reason":"tool unavailable in plan mode","code":"plan_mode_blocked","phase":"denied"}

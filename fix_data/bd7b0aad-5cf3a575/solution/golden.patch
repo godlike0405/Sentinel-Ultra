@@ -135,7 +135,7 @@ index c1ccb76..91e802b 100644
 +    "OTelContextCapturingMiddleware",
  ]
 diff --git a/src/golf/telemetry/instrumentation.py b/src/golf/telemetry/instrumentation.py
-index 4f8c8d6..d5ea17d 100644
+index 4f8c8d6..6ef017c 100644
 --- a/src/golf/telemetry/instrumentation.py
 +++ b/src/golf/telemetry/instrumentation.py
 @@ -12,7 +12,7 @@ from typing import Any, TypeVar
@@ -156,7 +156,7 @@ index 4f8c8d6..d5ea17d 100644
  
  T = TypeVar("T")
  
-@@ -29,14 +31,49 @@ _tracer: trace.Tracer | None = None
+@@ -29,25 +31,85 @@ _tracer: trace.Tracer | None = None
  _provider: TracerProvider | None = None
  _detailed_tracing_enabled: bool = False
  
@@ -194,22 +194,66 @@ index 4f8c8d6..d5ea17d 100644
 +
  
  def _safe_serialize(data: Any, max_length: int = 1000) -> str | None:
-     """Safely serialize data to string with length limit."""
+-    """Safely serialize data to string with length limit."""
++    """Serialize trace data as bounded, valid JSON without affecting requests."""
      try:
 -        if isinstance(data, str):
 -            serialized = data
-+        # First, extract serializable content from MCP result types
-+        serializable_data = _extract_serializable_content(data)
-+
-+        if isinstance(serializable_data, str):
-+            serialized = serializable_data
-         else:
+-        else:
 -            serialized = json.dumps(data, default=str, ensure_ascii=False)
-+            serialized = json.dumps(serializable_data, default=str, ensure_ascii=False)
++        serializable_data = _extract_serializable_content(data)
++    except Exception:
++        serializable_data = data
  
-         if len(serialized) > max_length:
-             return serialized[:max_length] + "..." + f" (truncated from {len(serialized)} chars)"
-@@ -146,6 +183,11 @@ def init_telemetry(service_name: str = "golf-mcp-server") -> TracerProvider | No
+-        if len(serialized) > max_length:
+-            return serialized[:max_length] + "..." + f" (truncated from {len(serialized)} chars)"
+-        return serialized
+-    except (TypeError, ValueError):
+-        # Fallback for non-serializable objects
++    try:
++        serialized = json.dumps(serializable_data, default=str, ensure_ascii=False)
++    except Exception:
+         try:
+-            return str(data)[:max_length] + "..." if len(str(data)) > max_length else str(data)
++            serialized = json.dumps(str(serializable_data), ensure_ascii=False)
+         except Exception:
+             return None
+ 
++    if len(serialized) <= max_length:
++        return serialized
++
++    preview = serialized
++    while preview:
++        bounded = json.dumps(
++            {"truncated": True, "preview": preview},
++            ensure_ascii=False,
++            separators=(",", ":"),
++        )
++        if len(bounded) <= max_length:
++            return bounded
++        preview = preview[: max(0, len(preview) - max(1, len(bounded) - max_length))]
++
++    bounded = json.dumps({"truncated": True}, separators=(",", ":"))
++    return bounded if len(bounded) <= max_length else None
++
++
++def _record_tool_metrics(tool_name: str, outcome: str, duration: float) -> None:
++    """Record optional metrics without changing the observed tool outcome."""
++    try:
++        from golf.metrics import get_metrics_collector
++
++        metrics_collector = get_metrics_collector()
++        if metrics_collector is None:
++            return
++        metrics_collector.increment_tool_execution(tool_name, outcome)
++        metrics_collector.record_tool_duration(tool_name, duration)
++    except Exception:
++        return
++
+ 
+ def set_detailed_tracing(enabled: bool) -> None:
+     """Enable or disable detailed tracing with input/output capture."""
+@@ -146,6 +208,11 @@ def init_telemetry(service_name: str = "golf-mcp-server") -> TracerProvider | No
      return provider
  
  
@@ -221,7 +265,7 @@ index 4f8c8d6..d5ea17d 100644
  def get_tracer() -> trace.Tracer:
      """Get or create the global tracer instance."""
      global _tracer, _provider
-@@ -1181,6 +1223,231 @@ class BoundedSessionTracker:
+@@ -1181,6 +1248,217 @@ class BoundedSessionTracker:
          return len(self.sessions)
  
  
@@ -244,7 +288,7 @@ index 4f8c8d6..d5ea17d 100644
 +
 +        tracer = get_tracer()
 +        tool_name = context.message.name if hasattr(context.message, "name") else "unknown"
-+        start_time = time.time()
++        start_time = time.monotonic()
 +
 +        span_name = f"mcp.tool.{tool_name}.execute"
 +        with tracer.start_as_current_span(span_name) as span:
@@ -282,31 +326,17 @@ index 4f8c8d6..d5ea17d 100644
 +                        if output_str:
 +                            span.set_attribute("mcp.tool.output", output_str)
 +
-+                # Record metrics
-+                try:
-+                    from golf.metrics import get_metrics_collector
-+
-+                    metrics_collector = get_metrics_collector()
-+                    metrics_collector.increment_tool_execution(tool_name, "success")
-+                    metrics_collector.record_tool_duration(tool_name, time.time() - start_time)
-+                except ImportError:
-+                    pass
++                _record_tool_metrics(tool_name, "success", time.monotonic() - start_time)
 +
 +                return result
-+            except Exception as e:
++            except (asyncio.CancelledError, Exception) as e:
 +                span.record_exception(e)
 +                span.set_status(Status(StatusCode.ERROR, str(e)))
 +                span.add_event(
 +                    "tool.execution.error",
 +                    {"tool.name": tool_name, "error.type": type(e).__name__, "error.message": str(e)},
 +                )
-+                try:
-+                    from golf.metrics import get_metrics_collector
-+
-+                    metrics_collector = get_metrics_collector()
-+                    metrics_collector.increment_tool_execution(tool_name, "error")
-+                except ImportError:
-+                    pass
++                _record_tool_metrics(tool_name, "error", time.monotonic() - start_time)
 +                raise
 +
 +    async def on_read_resource(
@@ -335,7 +365,7 @@ index 4f8c8d6..d5ea17d 100644
 +                span.set_status(Status(StatusCode.OK))
 +                span.add_event("resource.read.completed", {"resource.uri": str(resource_uri)})
 +                return result
-+            except Exception as e:
++            except (asyncio.CancelledError, Exception) as e:
 +                span.record_exception(e)
 +                span.set_status(Status(StatusCode.ERROR, str(e)))
 +                raise
@@ -366,7 +396,7 @@ index 4f8c8d6..d5ea17d 100644
 +                span.set_status(Status(StatusCode.OK))
 +                span.add_event("prompt.generation.completed", {"prompt.name": prompt_name})
 +                return result
-+            except Exception as e:
++            except (asyncio.CancelledError, Exception) as e:
 +                span.record_exception(e)
 +                span.set_status(Status(StatusCode.ERROR, str(e)))
 +                raise
@@ -403,7 +433,7 @@ index 4f8c8d6..d5ea17d 100644
 +                        result = await call_next(context)
 +                        span.set_status(Status(StatusCode.OK))
 +                        return result
-+                    except Exception as e:
++                    except (asyncio.CancelledError, Exception) as e:
 +                        span.record_exception(e)
 +                        span.set_status(Status(StatusCode.ERROR, str(e)))
 +                        raise
@@ -420,7 +450,7 @@ index 4f8c8d6..d5ea17d 100644
 +                    result = await call_next(context)
 +                    span.set_status(Status(StatusCode.OK))
 +                    return result
-+                except Exception as e:
++                except (asyncio.CancelledError, Exception) as e:
 +                    span.record_exception(e)
 +                    span.set_status(Status(StatusCode.ERROR, str(e)))
 +                    raise

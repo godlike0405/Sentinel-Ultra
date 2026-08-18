@@ -28,7 +28,13 @@
       "tests/core/test_otel_instrumentation.py::test_http_context_is_captured_for_mcp_then_restored",
       "tests/core/test_otel_instrumentation.py::test_http_context_is_restored_when_downstream_fails",
       "tests/core/test_otel_instrumentation.py::test_non_http_asgi_scope_passes_through_without_http_parent",
-      "tests/core/test_otel_instrumentation.py::test_public_build_uses_one_mcp_boundary_and_original_components"
+            "tests/core/test_otel_instrumentation.py::test_public_build_uses_one_mcp_boundary_and_original_components",
+            "tests/core/test_otel_instrumentation.py::test_payload_capture_is_bounded_valid_json_and_observational",
+            "tests/core/test_otel_instrumentation.py::test_metrics_failures_never_change_tool_outcomes",
+            "tests/core/test_otel_instrumentation.py::test_tool_failure_and_cancellation_record_complete_metrics",
+            "tests/core/test_otel_instrumentation.py::test_non_tool_cancellations_mark_error_and_reraise",
+            "tests/core/test_otel_instrumentation.py::test_concurrent_http_requests_keep_distinct_parents",
+            "tests/core/test_otel_instrumentation.py::test_nested_http_capture_restores_outer_parent_after_cancellation"
     ],
     "pass_to_pass": [
       "tests/core/test_telemetry.py::TestTelemetryConfiguration::test_telemetry_disabled_by_env",

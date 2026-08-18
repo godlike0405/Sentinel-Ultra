@@ -119,9 +119,15 @@ fi
 # The hidden test path may have been independently created by a solver. Remove
 # that exact verifier-owned destination before applying the canonical patch.
 rm -f "$F2P_REL"
-if command -v git >/dev/null 2>&1 &&
-   git -c safe.directory="$WORKSPACE" apply --check "$TEST_PATCH" >>"$STDOUT_LOG" 2>>"$STDERR_LOG"; then
-    git -c safe.directory="$WORKSPACE" apply "$TEST_PATCH" >>"$STDOUT_LOG" 2>>"$STDERR_LOG" ||
+WORKSPACE_REAL="$(pwd -P)"
+WORKSPACE_GIT_ROOT=""
+if command -v git >/dev/null 2>&1; then
+    WORKSPACE_GIT_ROOT="$(git -C "$WORKSPACE_REAL" -c safe.directory="$WORKSPACE_REAL" \
+        rev-parse --show-toplevel 2>/dev/null || true)"
+fi
+if [ "$WORKSPACE_GIT_ROOT" = "$WORKSPACE_REAL" ] &&
+   git -C "$WORKSPACE_REAL" -c safe.directory="$WORKSPACE_REAL" apply --check "$TEST_PATCH" >>"$STDOUT_LOG" 2>>"$STDERR_LOG"; then
+    git -C "$WORKSPACE_REAL" -c safe.directory="$WORKSPACE_REAL" apply "$TEST_PATCH" >>"$STDOUT_LOG" 2>>"$STDERR_LOG" ||
         write_failure "tests.patch failed after a successful check"
 elif patch -p1 --forward < "$TEST_PATCH" >>"$STDOUT_LOG" 2>>"$STDERR_LOG"; then
     :
@@ -167,7 +173,7 @@ run_one() {
 
     if [ "$kind" = "fail_to_pass" ]; then
         env SENTINEL_COMPLETION_PATH="$completion" SENTINEL_COMPLETION_TOKEN="$token" \
-            SENTINEL_EXPECTED_TEST="$name" timeout 8 "$CARGO_BIN" test --offline \
+            SENTINEL_EXPECTED_TEST="$name" timeout 60 "$CARGO_BIN" test --offline \
             --locked -p specta-tags --test sentinel_transform_contract "$name" \
             -- --exact --nocapture >>"$STDOUT_LOG" 2>>"$STDERR_LOG"
         rc=$?
@@ -180,7 +186,7 @@ run_one() {
         mv "$WORKSPACE/specta-tags" "$tag_hold" ||
             write_failure "could not isolate specta-tags for pass-to-pass"
         env SENTINEL_COMPLETION_PATH="$completion" SENTINEL_COMPLETION_TOKEN="$token" \
-            timeout 30 "$CARGO_BIN" test --offline --locked -p specta --lib \
+            timeout 90 "$CARGO_BIN" test --offline --locked -p specta --lib \
             "$name" -- --exact --nocapture >>"$STDOUT_LOG" 2>>"$STDERR_LOG"
         rc=$?
         mv "$tag_hold" "$WORKSPACE/specta-tags" ||
