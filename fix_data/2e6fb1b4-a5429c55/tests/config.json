@@ -12,7 +12,7 @@
       "test/e2e/sentinel.playwright.config.ts"
     ],
     "env": {},
-    "timeout_sec": 240
+    "timeout_sec": 600
   },
   "grading": {
     "fail_to_pass": [

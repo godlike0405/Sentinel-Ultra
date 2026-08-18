@@ -26,7 +26,9 @@ RUN n=0; until go mod download; do \
       if [ "$n" -ge 3 ]; then exit 1; fi; \
       echo "Go dependency install failed (attempt $n/3), retrying" >&2; \
       sleep $((n * 10)); \
-    done
+    done \
+    && go build -buildvcs=false -o /tmp/crit-build-warm ./cmd/crit \
+    && find /tmp/crit-build-warm -maxdepth 0 -type f -delete
 
 # Preload the exact lockfile-selected frontend packages. Agents can regenerate
 # the vendored browser bundles without network access, while pristine copies

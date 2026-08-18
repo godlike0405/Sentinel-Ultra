@@ -144,6 +144,30 @@ export SENTINEL_MARKDOWN_EXPECTED="$MARKDOWN_REF"
 export SENTINEL_MERMAID_EXPECTED="$MERMAID_REF"
 export SENTINEL_PLAYWRIGHT_CLI="$TRUSTED_E2E/@playwright/test/cli.js"
 
+# Build the candidate server once before Playwright starts either fixture.
+# Leaving this to webServer makes both browser groups pay the cold Go compile
+# under Playwright's shorter startup deadline. Keep compiler scratch space on
+# the verifier artifact volume rather than assuming /tmp has enough capacity.
+E2E_TMP="$LOG_DIR/e2e-tmp"
+E2E_BIN="$LOG_DIR/crit-e2e"
+if [ -e "$E2E_TMP" ]; then
+  find "$E2E_TMP" -depth -delete || infra_fail "could not reset browser temporary storage"
+fi
+mkdir -p "$E2E_TMP" || infra_fail "could not create browser temporary storage"
+if [ -e "$E2E_BIN" ]; then
+  find "$E2E_BIN" -maxdepth 0 -type f -delete || infra_fail "could not reset browser server binary"
+fi
+export TMPDIR="$E2E_TMP"
+export GOTMPDIR="$E2E_TMP"
+export CRIT_BIN="$E2E_BIN"
+if ! (cd "$WORKSPACE" && timeout 180 go build -buildvcs=false -o "$E2E_BIN" ./cmd/crit) >>"$STDOUT_LOG" 2>>"$STDERR_LOG"; then
+  # A submission that cannot build must receive ordinary failed browser
+  # results, not be mislabeled as verifier infrastructure failure.
+  if [ -e "$E2E_BIN" ]; then
+    find "$E2E_BIN" -maxdepth 0 -type f -delete 2>/dev/null || true
+  fi
+fi
+
 python3 - "$CONFIG" "$WORKSPACE/$NODE_REL" "$WORKSPACE/$P2P_REL" \
   "$WORKSPACE/$E2E_SPEC_REL" "$WORKSPACE/$E2E_CONFIG_REL" \
   "$OUTPUT" "$REPORT" "$REWARD" "$STDOUT_LOG" "$STDERR_LOG" <<'PY'
