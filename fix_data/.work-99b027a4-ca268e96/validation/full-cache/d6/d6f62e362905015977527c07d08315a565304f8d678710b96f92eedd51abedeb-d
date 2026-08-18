@@ -1,0 +1,11 @@
+./cpuid.go
+./cpuid_amd64.go
+./crypto.go
+./mmap_linux.go
+./mmap_unix.go
+./mprotect_syscall.go
+./path.go
+./platform.go
+./time.go
+./time_cgo.go
+./cpuid_amd64.s

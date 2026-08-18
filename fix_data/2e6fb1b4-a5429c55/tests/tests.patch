@@ -1,0 +1,374 @@
+diff --git a/web/__tests__/sentinel-story-navigation.test.js b/web/__tests__/sentinel-story-navigation.test.js
+new file mode 100644
+index 0000000..62a6e21
+--- /dev/null
++++ b/web/__tests__/sentinel-story-navigation.test.js
+@@ -0,0 +1,368 @@
++'use strict';
++
++const { test } = require('node:test');
++const assert = require('node:assert/strict');
++const fs = require('node:fs');
++const path = require('node:path');
++const crypto = require('node:crypto');
++
++const workspace = process.env.SENTINEL_WORKSPACE || path.join(__dirname, '..', '..');
++const appPath = path.join(workspace, 'web', 'app.js');
++const appJs = fs.readFileSync(appPath, 'utf8');
++
++function contract(name, fn) {
++  if (process.env.SENTINEL_CASE && process.env.SENTINEL_CASE !== name) return;
++  test(name, async () => {
++    await fn();
++    const completion = process.env.SENTINEL_COMPLETION_FILE;
++    const token = process.env.SENTINEL_COMPLETION_TOKEN;
++    if (completion && token) fs.writeFileSync(completion, token, { encoding: 'utf8', mode: 0o600 });
++  });
++}
++
++function extractFunction(name) {
++  const start = appJs.indexOf(`function ${name}(`);
++  assert.notEqual(start, -1, `${name} must exist`);
++  const bodyStart = appJs.indexOf('{', start);
++  let depth = 0;
++  for (let i = bodyStart; i < appJs.length; i++) {
++    if (appJs[i] === '{') depth++;
++    if (appJs[i] === '}') {
++      depth--;
++      if (depth === 0) return appJs.slice(start, i + 1);
++    }
++  }
++  assert.fail(`could not extract ${name}`);
++}
++
++function extractMethod(name) {
++  const marker = `${name}: function (`;
++  const markerStart = appJs.indexOf(marker);
++  assert.notEqual(markerStart, -1, `${name} method must exist`);
++  const start = appJs.indexOf('function', markerStart);
++  const bodyStart = appJs.indexOf('{', start);
++  let depth = 0;
++  for (let i = bodyStart; i < appJs.length; i++) {
++    if (appJs[i] === '{') depth++;
++    if (appJs[i] === '}') {
++      depth--;
++      if (depth === 0) return appJs.slice(start, i + 1);
++    }
++  }
++  assert.fail(`could not extract ${name} method`);
++}
++
++function line(Type, OldNum, NewNum) {
++  return { Type, OldNum, NewNum };
++}
++
++function fileDigest(file) {
++  return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
++}
++
++function navigationCore() {
++  const source = [
++    extractFunction('storyRawHunks'),
++    extractFunction('storyRawHunksWithTrailingContext'),
++    extractFunction('buildContextLines'),
++    extractFunction('expandHunksForComments'),
++    'function buildHunkHeader() { return "@@"; }',
++    extractFunction('autoExpandSmallGaps'),
++    extractFunction('storyRawHunkForLine'),
++    extractFunction('storyDisplayAnchorForLine'),
++    'return { expandHunksForComments, autoExpandSmallGaps, storyRawHunkForLine, storyDisplayAnchorForLine };',
++  ].join('\n');
++  return new Function(source)();
++}
++
++function chapterNavigation() {
++  const source = [
++    'let storyState = null;',
++    'let storyView = "overview";',
++    'let files = [];',
++    'let shown = null;',
++    'function storyPageId(page) { return page.id; }',
++    'function hunkKey(filePath, oldStart) { return filePath + ":" + oldStart; }',
++    'function getFileByPath(filePath) { return files.find(function(file) { return file.path === filePath; }) || null; }',
++    'function storyOwnedStartsInHunk() { return []; }',
++    'function showStory(id) { shown = id; storyView = id; }',
++    extractFunction('storyRawHunks'),
++    extractFunction('storyRawHunkForLine'),
++    extractFunction('storyPageForFile'),
++    extractFunction('storyPageForLine'),
++    extractFunction('storyActivatePageForFile'),
++    extractFunction('storyActivatePageForLine'),
++    'return {',
++    '  setState: function(value) { storyState = value; },',
++    '  setFiles: function(value) { files = value; },',
++    '  setView: function(value) { storyView = value; shown = null; },',
++    '  shown: function() { return shown; },',
++    '  storyPageForFile, storyPageForLine, storyActivatePageForFile, storyActivatePageForLine',
++    '};',
++  ].join('\n');
++  return new Function(source)();
++}
++
++contract('line comment anchors preserve side and scope', () => {
++  const renderer = require(path.join(workspace, 'web', 'crit-renderer.js'));
++  const anchor = renderer.anchorFromComment({
++    file_path: 'a.go', start_line: 1, end_line: 5, side: 'old', scope: 'line',
++  });
++  assert.deepEqual(anchor, {
++    type: 'line', filePath: 'a.go', startLine: 1, endLine: 5, side: 'old', scope: 'line',
++  });
++});
++
++contract('file comment anchors preserve file scope without a side', () => {
++  const renderer = require(path.join(workspace, 'web', 'crit-renderer.js'));
++  const anchor = renderer.anchorFromComment({
++    file_path: 'a.go', start_line: 0, end_line: 0, scope: 'file',
++  });
++  assert.equal(anchor.type, 'line');
++  assert.equal(anchor.filePath, 'a.go');
++  assert.equal(anchor.scope, 'file');
++  assert.equal(anchor.side, undefined);
++});
++
++contract('new-side lookup ignores an old-side collision', () => {
++  const { storyRawHunkForLine } = navigationCore();
++  const earlier = { OldStart: 7, Lines: [line('del', 17, 0), line('context', 22, 12)] };
++  const later = { OldStart: 24, Lines: [line('context', 24, 14), line('add', 0, 17)] };
++  assert.equal(storyRawHunkForLine([earlier, later], 17, 'new').rawHunk.OldStart, 24);
++  assert.equal(storyRawHunkForLine([earlier], 17, 'new'), null);
++});
++
++contract('old-side lookup ignores a new-side collision', () => {
++  const { storyRawHunkForLine } = navigationCore();
++  const earlier = { OldStart: 7, Lines: [line('del', 17, 0)] };
++  const later = { OldStart: 24, Lines: [line('add', 0, 17)] };
++  assert.equal(storyRawHunkForLine([earlier, later], 17, 'old').rawHunk.OldStart, 7);
++  assert.equal(storyRawHunkForLine([later], 17, 'old'), null);
++});
++
++contract('legacy lookup remains new-first and covers insertions and deletions', () => {
++  const { storyRawHunkForLine } = navigationCore();
++  const deleted = { OldStart: 7, Lines: [line('del', 17, 0), line('del', 31, 0)] };
++  const added = { OldStart: 24, Lines: [line('add', 0, 17), line('add', 0, 22)] };
++  assert.equal(storyRawHunkForLine([deleted, added], 17).rawHunk.OldStart, 24);
++  assert.equal(storyRawHunkForLine([deleted], 31, 'old').rawHunk.OldStart, 7);
++  assert.equal(storyRawHunkForLine([added], 22, '').rawHunk.OldStart, 24);
++  assert.equal(storyRawHunkForLine([added], 999, null), null);
++});
++
++contract('automatic gap merging retains both raw owners and preceding context ownership', () => {
++  const { autoExpandSmallGaps, storyRawHunkForLine } = navigationCore();
++  const first = {
++    OldStart: 10, OldCount: 2, NewStart: 10, NewCount: 2,
++    Lines: [line('context', 10, 10), line('del', 11, 0)],
++  };
++  const second = {
++    OldStart: 15, OldCount: 2, NewStart: 15, NewCount: 2,
++    Lines: [line('context', 15, 15), line('add', 0, 16)],
++  };
++  const file = { content: Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join('\n'), diffHunks: [first, second] };
++  autoExpandSmallGaps(file);
++  assert.equal(file.diffHunks.length, 1);
++  assert.equal(storyRawHunkForLine(file.diffHunks, 13, 'new').rawHunk.OldStart, 10);
++  assert.equal(storyRawHunkForLine(file.diffHunks, 16, 'new').rawHunk.OldStart, 15);
++  assert.equal(storyRawHunkForLine(file.diffHunks, 11, 'old').rawHunk.OldStart, 10);
++});
++
++contract('comment gap merging retains later ownership and assigns synthesized context backward', () => {
++  const { expandHunksForComments, storyRawHunkForLine } = navigationCore();
++  const first = {
++    OldStart: 10, OldCount: 2, NewStart: 10, NewCount: 2, Header: '@@',
++    Lines: [line('context', 10, 10), line('context', 11, 11)],
++  };
++  const second = {
++    OldStart: 20, OldCount: 2, NewStart: 20, NewCount: 2, Header: '@@',
++    Lines: [line('context', 20, 20), line('add', 0, 21)],
++  };
++  const file = {
++    content: Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join('\n'),
++    comments: [{ scope: 'line', side: 'new', end_line: 15 }], diffHunks: [first, second],
++  };
++  expandHunksForComments(file);
++  assert.equal(file.diffHunks.length, 1);
++  assert.equal(storyRawHunkForLine(file.diffHunks, 15, 'new').rawHunk.OldStart, 10);
++  assert.equal(storyRawHunkForLine(file.diffHunks, 21, 'new').rawHunk.OldStart, 20);
++});
++
++contract('unified display mapping translates old context but retains deletions', () => {
++  const { storyDisplayAnchorForLine } = navigationCore();
++  const hunk = {
++    OldStart: 20,
++    Lines: [line('context', 24, 14), line('del', 25, 0), line('add', 0, 15), line('context', 26, 16)],
++  };
++  assert.deepEqual(storyDisplayAnchorForLine([hunk], 24, 'old', 'unified'), { line: 14, side: '' });
++  assert.deepEqual(storyDisplayAnchorForLine([hunk], 25, 'old', 'unified'), { line: 25, side: 'old' });
++  assert.deepEqual(storyDisplayAnchorForLine([hunk], 15, 'new', 'unified'), { line: 15, side: '' });
++});
++
++contract('split and legacy display mapping use the matched coordinate space', () => {
++  const { storyDisplayAnchorForLine } = navigationCore();
++  const hunk = {
++    OldStart: 20,
++    Lines: [line('context', 24, 14), line('del', 25, 0), line('add', 0, 15), line('context', 26, 16)],
++  };
++  assert.deepEqual(storyDisplayAnchorForLine([hunk], 24, 'old', 'split'), { line: 24, side: 'old' });
++  assert.deepEqual(storyDisplayAnchorForLine([hunk], 16, 'new', 'split'), { line: 16, side: '' });
++  assert.deepEqual(storyDisplayAnchorForLine([hunk], 25, undefined, 'unified'), { line: 25, side: 'old' });
++  assert.equal(storyDisplayAnchorForLine([hunk], 999, 'new', 'unified'), null);
++});
++
++contract('file navigation selects the first owning chapter and reports misses', () => {
++  const nav = chapterNavigation();
++  nav.setState({ pages: [{ id: 'chapter-1' }, { id: 'chapter-2' }], fileChapters: new Map([['src/a.go', new Set([1])]]), hunkOwner: new Map() });
++  nav.setView('overview');
++  assert.equal(nav.storyPageForFile('src/a.go'), 'chapter-2');
++  assert.equal(nav.storyActivatePageForFile('src/a.go'), true);
++  assert.equal(nav.shown(), 'chapter-2');
++  assert.equal(nav.storyActivatePageForFile('missing.go'), false);
++});
++
++contract('line navigation uses raw ownership and explicit misses do not fall back to a file', () => {
++  const nav = chapterNavigation();
++  const hunk = { OldStart: 24, Lines: [line('add', 0, 17)] };
++  nav.setFiles([{ path: 'src/a.go', diffHunks: [hunk] }]);
++  nav.setState({
++    pages: [{ id: 'chapter-1' }, { id: 'chapter-2' }],
++    fileChapters: new Map([['src/a.go', new Set([0])]]),
++    hunkOwner: new Map([['src/a.go:24', 1]]),
++  });
++  assert.equal(nav.storyPageForLine('src/a.go', 17, 'new'), 'chapter-2');
++  assert.equal(nav.storyPageForLine('src/a.go', 999, 'new'), null);
++  assert.equal(nav.storyPageForLine('src/a.go', 999), 'chapter-1');
++  nav.setView('overview');
++  assert.equal(nav.storyActivatePageForLine('src/a.go', 17, 'new'), true);
++  assert.equal(nav.shown(), 'chapter-2');
++});
++
++function commentNavigationHarness(comments) {
++  let lineArgs = null;
++  let fileArgs = null;
++  const source = [
++    'let lineArgs = null;',
++    'let fileArgs = null;',
++    'function storyActive() { return true; }',
++    `function getFileByPath() { return { comments: ${JSON.stringify(comments)} }; }`,
++    'function storyActivatePageForLine() { lineArgs = Array.from(arguments); return false; }',
++    'function storyActivatePageForFile() { fileArgs = Array.from(arguments); return false; }',
++    'function flashCommentCard() {}',
++    'const document = { getElementById: function() { return { querySelector: function() { return null; } }; } };',
++    'const CSS = { escape: function(value) { return value; } };',
++    'function requestAnimationFrame(fn) { fn(); }',
++    extractFunction('scrollToComment'),
++    'scrollToComment("c1", "a.go");',
++    'return { lineArgs, fileArgs };',
++  ].join('\n');
++  return new Function(source)();
++}
++
++contract('comment-card navigation forwards the comment side', () => {
++  const observed = commentNavigationHarness([{ id: 'c1', scope: 'line', side: 'old', end_line: 17 }]);
++  assert.deepEqual(observed.lineArgs, ['a.go', 17, 'old']);
++  assert.equal(observed.fileArgs, null);
++});
++
++contract('file-scoped comment cards navigate by file ownership', () => {
++  const observed = commentNavigationHarness([{ id: 'c1', scope: 'file', end_line: 0 }]);
++  assert.deepEqual(observed.fileArgs, ['a.go']);
++  assert.equal(observed.lineArgs, null);
++});
++
++contract('renderer routing activates by side and targets the translated DOM row', async () => {
++  const methodSource = extractMethod('scrollToAnchor');
++  let activateArgs = null;
++  let fileActivations = 0;
++  let selector = null;
++  const pane = { querySelector(value) { selector = value; return { scrollIntoView() {} }; } };
++  const factory = new Function(
++    'storyActive', 'storyActivatePageForLine', 'storyActivatePageForFile', 'getFileByPath',
++    'storyDisplayAnchorForLine', 'diffMode', 'document', 'CSS', 'requestAnimationFrame',
++    `return (${methodSource});`,
++  );
++  const route = factory(
++    () => true,
++    (...args) => { activateArgs = args; return false; },
++    () => { fileActivations++; return false; },
++    () => ({ diffHunks: [{}] }),
++    () => ({ line: 14, side: '' }),
++    'unified',
++    { getElementById: () => pane },
++    { escape: (value) => value },
++    (fn) => fn(),
++  );
++  await route({ type: 'line', filePath: 'a.go', endLine: 24, side: 'old', scope: 'line' });
++  assert.deepEqual(activateArgs, ['a.go', 24, 'old']);
++  assert.match(selector, /data-diff-line-num="14"/);
++  assert.match(selector, /data-diff-side=""/);
++  await route({ type: 'line', filePath: 'a.go', endLine: 0, scope: 'file' });
++  assert.equal(fileActivations, 1);
++});
++
++contract('scope reload invalidates Story clones before replacement file data loads', async () => {
++  const source = [
++    'let reloadInFlight = null;',
++    'let reloadInFlightKey = null;',
++    'let storyExpandedFileCache = new Map([["stale", {}]]);',
++    'let cacheWasEmptyAtLoad = false;',
++    'let diffCommit = "";',
++    'let session = null;',
++    'let reviewComments = [];',
++    'let files = [];',
++    'let hiddenUnresolved = 0;',
++    'let storyCleared = false;',
++    'let currentCompareTarget = "";',
++    'const activeReplyForms = { clear: function() {} };',
++    'const document = { getElementById: function() { return { innerHTML: "", textContent: "" }; } };',
++    'function currentSessionFetchScope() { return "all"; }',
++    'function currentFileDataScope() { return "all"; }',
++    'function enc(value) { return value; }',
++    'async function fetchWhenReady() { return { files: [{}], review_comments: [] }; }',
++    'function storyHasContent() { return false; }',
++    'async function hydrateStoryIfMissing(value) { return value; }',
++    'async function hydrateFullSessionForStoryIfNeeded(value) { return value; }',
++    'async function loadAllFileData() { cacheWasEmptyAtLoad = storyExpandedFileCache.size === 0; return []; }',
++    'function fileSortComparator() { return 0; }',
++    'function restoreViewedState() {}',
++    'function renderFileTree() {}',
++    'function renderAllFiles() {}',
++    'function buildToc() {}',
++    'function updateCommentCount() {}',
++    'function updateViewedCount() {}',
++    'function applyStoryPresence() {}',
++    'function compareTargetChipLabel(value) { return value; }',
++    extractFunction('reloadForScope'),
++    'return reloadForScope().then(function() { return cacheWasEmptyAtLoad; });',
++  ].join('\n');
++  assert.equal(await new Function(source)(), true);
++});
++
++contract('npm and Bun lockfiles agree on embedded runtime versions', () => {
++  const npmLock = JSON.parse(fs.readFileSync(path.join(workspace, 'package-lock.json'), 'utf8'));
++  const bunLock = fs.readFileSync(path.join(workspace, 'bun.lock'), 'utf8');
++  for (const dependency of ['markdown-it', 'mermaid']) {
++    const version = npmLock.packages[`node_modules/${dependency}`].version;
++    assert.ok(bunLock.includes(`"${dependency}": ["${dependency}@${version}"`));
++    assert.ok(bunLock.includes(`"${dependency}": "^${version}"`));
++  }
++});
++
++contract('embedded markdown runtime matches the repository-pinned dependency', () => {
++  const expected = process.env.SENTINEL_MARKDOWN_EXPECTED;
++  assert.ok(expected, 'verifier must provide the pinned markdown runtime');
++  assert.equal(
++    fileDigest(path.join(workspace, 'web', 'markdown-it.min.js')),
++    fileDigest(expected),
++  );
++});
++
++contract('embedded diagram runtime matches the repository-pinned dependency', () => {
++  const expected = process.env.SENTINEL_MERMAID_EXPECTED;
++  assert.ok(expected, 'verifier must provide the pinned diagram runtime');
++  assert.equal(
++    fileDigest(path.join(workspace, 'web', 'mermaid.min.js')),
++    fileDigest(expected),
++  );
++});

@@ -1,9 +1,9 @@
 diff --git a/daemon/mgr/spec_default_integration_test.go b/daemon/mgr/spec_default_integration_test.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..22a41acb33f39d8a44a2cab8880bbaafccac00d3
+index 0000000000000000000000000000000000000000..fe8748ca9aec207a2202630eda1782bf65fd9769
 --- /dev/null
 +++ b/daemon/mgr/spec_default_integration_test.go
-@@ -0,0 +1,598 @@
+@@ -0,0 +1,984 @@
 +package mgr
 +
 +import (
@@ -18,6 +18,8 @@ index 0000000000000000000000000000000000000000..22a41acb33f39d8a44a2cab8880bbaaf
 +
 +	"github.com/alibaba/pouch/apis/types"
 +
++	"github.com/containerd/containerd/containers"
++	containerdoci "github.com/containerd/containerd/oci"
 +	specs "github.com/opencontainers/runtime-spec/specs-go"
 +)
 +
@@ -107,8 +109,46 @@ index 0000000000000000000000000000000000000000..22a41acb33f39d8a44a2cab8880bbaaf
 +	}
 +}
 +
++// containerdProfileProbeMarker is the panic message installed by the verifier
++// in place of containerd's OCI profile generator while this ownership test
++// runs. Any code path that still asks containerd to generate the starting
++// specification trips it, regardless of which fields are overwritten later.
++const containerdProfileProbeMarker = "verifier-owned containerd profile generator was called"
++
++func containerdProfileGeneratorIsProbed() (probed bool) {
++	defer func() {
++		if recovered := recover(); recovered != nil {
++			probed = strings.Contains(fmt.Sprint(recovered), containerdProfileProbeMarker)
++		}
++	}()
++	// Without the verifier probe this call returns a spec or an error and never
++	// panics, so a passing result below can only come from a probed generator.
++	_, _ = containerdoci.GenerateSpec(context.Background(), nil, &containers.Container{ID: "profile-probe"})
++	return false
++}
++
 +func TestCreateSpecDoesNotUseContainerdProfileDefaults(t *testing.T) {
-+	createSpecForProfileTest(t, containerForProfileTest("profile-ownership", &types.HostConfig{}))
++	// Fail closed: the assertion below is only meaningful while the dependency
++	// boundary is instrumented, so refuse to pass vacuously if it is not.
++	if !containerdProfileGeneratorIsProbed() {
++		t.Fatal("containerd profile generator is not instrumented; ownership cannot be verified")
++	}
++
++	c := containerForProfileTest("profile-ownership", &types.HostConfig{})
++	wrapper := &SpecWrapper{}
++	err, panicValue := tryCreateSpecForProfileTest(c, wrapper)
++	if panicValue != nil {
++		if strings.Contains(fmt.Sprint(panicValue), containerdProfileProbeMarker) {
++			t.Fatal("ordinary container creation still asked containerd to generate the starting specification")
++		}
++		t.Fatalf("createSpec panicked: %v", panicValue)
++	}
++	if err != nil {
++		t.Fatalf("createSpec returned error: %v", err)
++	}
++	if wrapper.s == nil || wrapper.s.Process == nil || wrapper.s.Linux == nil {
++		t.Fatalf("Pouch-owned profile was not published: %+v", wrapper.s)
++	}
 +}
 +
 +func containsStringForProfileTest(values []string, wanted string) bool {
@@ -600,5 +640,351 @@ index 0000000000000000000000000000000000000000..22a41acb33f39d8a44a2cab8880bbaaf
 +	}
 +	if got := sizeOptionsForProfileTest(mountForProfileTest(t, second.Mounts, "/dev/shm").Options); !reflect.DeepEqual(got, []string{"size=65536k"}) {
 +		t.Errorf("second container inherited the first container's size: %v", got)
++	}
++}
++
++func hostConfigWithMountsForProfileTest(c *Container, mounts ...*types.MountPoint) {
++	c.Mounts = mounts
++}
++
++func TestFailedSpecBuildLeavesContainerUntouched(t *testing.T) {
++	tests := []struct {
++		name  string
++		setup func(*Container, *SpecWrapper)
++	}{
++		{
++			name: "mount stage failure after a network file mount",
++			setup: func(c *Container, _ *SpecWrapper) {
++				hostConfigWithMountsForProfileTest(c,
++					&types.MountPoint{Source: "/custom/hosts", Destination: "/etc/hosts", RW: true},
++					&types.MountPoint{Source: "/one", Destination: "/duplicate", RW: true},
++					&types.MountPoint{Source: "/two", Destination: "/duplicate", RW: true},
++				)
++			},
++		},
++		{
++			name: "hook stage failure after a network file mount",
++			setup: func(c *Container, wrapper *SpecWrapper) {
++				hostConfigWithMountsForProfileTest(c,
++					&types.MountPoint{Source: "/custom/resolv.conf", Destination: "/etc/resolv.conf", RW: true},
++				)
++				wrapper.prioArr = []int{20, 10}
++				wrapper.argsArr = [][]string{{"/hook/only-one"}}
++			},
++		},
++		{
++			name: "device stage failure after a network file mount",
++			setup: func(c *Container, _ *SpecWrapper) {
++				hostConfigWithMountsForProfileTest(c,
++					&types.MountPoint{Source: "/custom/hostname", Destination: "/etc/hostname", RW: true},
++				)
++				c.HostConfig.Devices = []*types.DeviceMapping{{
++					PathOnHost: "/dev/null", PathInContainer: "/dev/null", CgroupPermissions: "xyz",
++				}}
++			},
++		},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			c := containerForProfileTest("container-untouched", &types.HostConfig{})
++			c.HostnamePath = "/var/lib/pouch/hostname"
++			c.HostsPath = "/var/lib/pouch/hosts"
++			c.ResolvConfPath = "/var/lib/pouch/resolv.conf"
++			wrapper := &SpecWrapper{}
++			test.setup(c, wrapper)
++			before, err := json.Marshal(c)
++			if err != nil {
++				t.Fatal(err)
++			}
++			buildErr, panicValue := tryCreateSpecForProfileTest(c, wrapper)
++			if panicValue != nil {
++				t.Fatalf("createSpec panicked for invalid input: %v", panicValue)
++			}
++			if buildErr == nil {
++				t.Fatal("createSpec accepted invalid input")
++			}
++			if wrapper.s != nil {
++				t.Error("failed build published a specification")
++			}
++			after, err := json.Marshal(c)
++			if err != nil {
++				t.Fatal(err)
++			}
++			if !reflect.DeepEqual(after, before) {
++				t.Errorf("failed build changed the container:\nbefore %s\nafter  %s", before, after)
++			}
++		})
++	}
++}
++
++func TestSuccessfulSpecBuildRecordsNetworkFiles(t *testing.T) {
++	c := containerForProfileTest("network-files", &types.HostConfig{})
++	c.HostnamePath = "/var/lib/pouch/hostname"
++	c.HostsPath = "/var/lib/pouch/hosts"
++	c.ResolvConfPath = "/var/lib/pouch/resolv.conf"
++	hostConfigWithMountsForProfileTest(c,
++		&types.MountPoint{Source: "/custom/hosts", Destination: "/etc/hosts", RW: true},
++		&types.MountPoint{Source: "/custom/resolv.conf", Destination: "/etc/resolv.conf", RW: false},
++		&types.MountPoint{Source: "/one", Destination: "/duplicate", RW: true},
++		&types.MountPoint{Source: "/two", Destination: "/duplicate", RW: true},
++	)
++	wrapper := &SpecWrapper{}
++	if err, panicValue := tryCreateSpecForProfileTest(c, wrapper); err == nil || panicValue != nil {
++		t.Fatalf("invalid first attempt returned err=%v panic=%v", err, panicValue)
++	}
++	if c.HostsPath != "/var/lib/pouch/hosts" || c.ResolvConfPath != "/var/lib/pouch/resolv.conf" || c.HostnamePath != "/var/lib/pouch/hostname" {
++		t.Fatalf("failed attempt recorded network files on the container: %q %q %q", c.HostnamePath, c.HostsPath, c.ResolvConfPath)
++	}
++
++	c.Mounts = c.Mounts[:2]
++	if err, panicValue := tryCreateSpecForProfileTest(c, wrapper); err != nil || panicValue != nil {
++		t.Fatalf("corrected attempt returned err=%v panic=%v", err, panicValue)
++	}
++	if wrapper.s == nil {
++		t.Fatal("corrected attempt did not publish a specification")
++	}
++	if c.HostsPath != "/custom/hosts" || c.ResolvConfPath != "/custom/resolv.conf" {
++		t.Errorf("successful build did not record custom network files: hosts=%q resolv=%q", c.HostsPath, c.ResolvConfPath)
++	}
++	if c.HostnamePath != "/var/lib/pouch/hostname" {
++		t.Errorf("successful build changed an unrelated network file path to %q", c.HostnamePath)
++	}
++	for _, destination := range []string{"/etc/hosts", "/etc/resolv.conf"} {
++		if count := mountCountForProfileTest(wrapper.s.Mounts, destination); count != 0 {
++			t.Errorf("%s user mount was duplicated into the mount set with network files disabled: %d", destination, count)
++		}
++	}
++}
++
++func TestFinalSpecOwnsResourceDeviceSettings(t *testing.T) {
++	swappiness := int64(30)
++	c := containerForProfileTest("resource-snapshot", &types.HostConfig{Resources: types.Resources{
++		BlkioWeight:       400,
++		BlkioWeightDevice: []*types.WeightDevice{{Path: "/dev/null", Weight: 300}},
++		MemorySwappiness:  &swappiness,
++	}})
++	s := createSpecForProfileTest(t, c)
++	blockIO := s.Linux.Resources.BlockIO
++	if blockIO == nil || len(blockIO.WeightDevice) != 1 || blockIO.WeightDevice[0].Weight == nil || *blockIO.WeightDevice[0].Weight != 300 {
++		t.Fatalf("block IO weight devices = %+v", blockIO)
++	}
++	if blockIO.Weight == nil || *blockIO.Weight != 400 {
++		t.Fatalf("block IO weight = %+v", blockIO.Weight)
++	}
++	if s.Linux.Resources.Memory == nil || s.Linux.Resources.Memory.Swappiness == nil || *s.Linux.Resources.Memory.Swappiness != 30 {
++		t.Fatalf("memory swappiness = %+v", s.Linux.Resources.Memory)
++	}
++
++	*blockIO.WeightDevice[0].Weight = 999
++	*blockIO.Weight = 998
++	*s.Linux.Resources.Memory.Swappiness = 997
++	if got := c.HostConfig.Resources.BlkioWeightDevice[0].Weight; got != 300 {
++		t.Errorf("editing the final weight device changed the container weight to %d", got)
++	}
++	if got := c.HostConfig.Resources.BlkioWeight; got != 400 {
++		t.Errorf("editing the final block IO weight changed the container weight to %d", got)
++	}
++	if got := *c.HostConfig.Resources.MemorySwappiness; got != 30 {
++		t.Errorf("editing the final swappiness changed the container value to %d", got)
++	}
++
++	c.HostConfig.Resources.BlkioWeightDevice[0].Weight = 100
++	swappiness = 10
++	if got := *blockIO.WeightDevice[0].Weight; got != 999 {
++		t.Errorf("editing the container weight device changed the final value to %d", got)
++	}
++	if got := *s.Linux.Resources.Memory.Swappiness; got != 997 {
++		t.Errorf("editing the container swappiness changed the final value to %d", got)
++	}
++}
++
++func TestFinalSpecOwnsEnvironment(t *testing.T) {
++	env := make([]string, 1, 8)
++	env[0] = "SENTINEL_ONE=1"
++	c := containerForProfileTest("environment-snapshot", &types.HostConfig{})
++	c.Config.Env = env
++	c.Config.Tty = true
++	c.Config.Rich = true
++	s := createSpecForProfileTest(t, c)
++	if !containsStringForProfileTest(s.Process.Env, "SENTINEL_ONE=1") || !containsStringForProfileTest(s.Process.Env, "TERM=xterm") ||
++		len(s.Process.Env) < 3 {
++		t.Fatalf("final environment = %v", s.Process.Env)
++	}
++	if got := len(c.Config.Env); got != 1 {
++		t.Fatalf("container environment length changed to %d: %v", got, c.Config.Env)
++	}
++	// Growth of the final environment must not spill into the container's
++	// backing storage beyond the values it actually holds.
++	if leaked := env[:cap(env)][1]; leaked != "" {
++		t.Errorf("final environment growth wrote %q into the container's spare environment storage", leaked)
++	}
++	s.Process.Env[0] = "SENTINEL_ONE=changed-in-spec"
++	if c.Config.Env[0] != "SENTINEL_ONE=1" {
++		t.Errorf("editing the final environment changed the container environment to %v", c.Config.Env)
++	}
++	c.Config.Env[0] = "SENTINEL_ONE=changed-in-config"
++	if s.Process.Env[0] != "SENTINEL_ONE=changed-in-spec" {
++		t.Errorf("editing the container environment changed the final environment to %v", s.Process.Env)
++	}
++}
++
++func TestFailedPlatformStageIsAtomic(t *testing.T) {
++	tests := []struct {
++		name  string
++		setup func(*Container)
++	}{
++		{
++			name: "device validation",
++			setup: func(c *Container) {
++				c.HostConfig.Devices = []*types.DeviceMapping{{
++					PathOnHost: "/dev/null", PathInContainer: "/dev/null", CgroupPermissions: "xyz",
++				}}
++			},
++		},
++		{
++			name: "block IO device validation",
++			setup: func(c *Container) {
++				c.HostConfig.Resources.BlkioWeightDevice = []*types.WeightDevice{{
++					Path: "/nonexistent/sentinel/device", Weight: 100,
++				}}
++			},
++		},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			previous := &specs.Spec{
++				Hostname:    "previous-success",
++				Annotations: map[string]string{"generation": "previous"},
++			}
++			wrapper := &SpecWrapper{s: previous, prioArr: []int{5}, argsArr: [][]string{{"/hook/plugin", "--flag"}}}
++			c := containerForProfileTest("platform-failure", &types.HostConfig{})
++			test.setup(c)
++			before, err := json.Marshal(previous)
++			if err != nil {
++				t.Fatal(err)
++			}
++			buildErr, panicValue := tryCreateSpecForProfileTest(c, wrapper)
++			if panicValue != nil {
++				t.Fatalf("createSpec panicked for invalid input: %v", panicValue)
++			}
++			if buildErr == nil {
++				t.Fatal("createSpec accepted invalid input")
++			}
++			if wrapper.s != previous {
++				t.Fatal("failed build replaced the previously published specification")
++			}
++			after, err := json.Marshal(previous)
++			if err != nil {
++				t.Fatal(err)
++			}
++			if !reflect.DeepEqual(after, before) {
++				t.Errorf("failed build mutated the previous specification:\nbefore %s\nafter  %s", before, after)
++			}
++			if !reflect.DeepEqual(wrapper.prioArr, []int{5}) || !reflect.DeepEqual(wrapper.argsArr, [][]string{{"/hook/plugin", "--flag"}}) {
++				t.Errorf("failed build disturbed the plugin hook input: %v %v", wrapper.prioArr, wrapper.argsArr)
++			}
++		})
++	}
++}
++
++func TestRepublishDoesNotMutateEarlierSpec(t *testing.T) {
++	first := int64(1048576)
++	c := containerForProfileTest("republish", &types.HostConfig{ShmSize: &first, CapAdd: []string{"SYS_TIME"}})
++	wrapper := &SpecWrapper{}
++	if err := createSpec(context.Background(), c, wrapper); err != nil {
++		t.Fatalf("first build returned error: %v", err)
++	}
++	earlier := wrapper.s
++	before, err := json.Marshal(earlier)
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	second := int64(2097152)
++	c.HostConfig.ShmSize = &second
++	c.HostConfig.CapAdd = nil
++	c.HostConfig.CapDrop = []string{"NET_RAW"}
++	c.HostConfig.Sysctls = map[string]string{"sentinel.generation": "2"}
++	if err := createSpec(context.Background(), c, wrapper); err != nil {
++		t.Fatalf("second build returned error: %v", err)
++	}
++	if wrapper.s == earlier {
++		t.Fatal("second build republished the earlier specification object")
++	}
++	after, err := json.Marshal(earlier)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !reflect.DeepEqual(after, before) {
++		t.Errorf("second build mutated the earlier specification:\nbefore %s\nafter  %s", before, after)
++	}
++	if got := sizeOptionsForProfileTest(mountForProfileTest(t, wrapper.s.Mounts, "/dev/shm").Options); !reflect.DeepEqual(got, []string{"size=2097152"}) {
++		t.Errorf("second build shared-memory options = %v", got)
++	}
++	if containsStringForProfileTest(wrapper.s.Process.Capabilities.Effective, "CAP_NET_RAW") ||
++		containsStringForProfileTest(wrapper.s.Process.Capabilities.Effective, "CAP_SYS_TIME") {
++		t.Errorf("second build capabilities = %v", wrapper.s.Process.Capabilities.Effective)
++	}
++	if got := sizeOptionsForProfileTest(mountForProfileTest(t, earlier.Mounts, "/dev/shm").Options); !reflect.DeepEqual(got, []string{"size=1048576"}) {
++		t.Errorf("earlier build shared-memory options = %v", got)
++	}
++}
++
++func TestConcurrentFailuresDoNotDisturbOtherBuilds(t *testing.T) {
++	const count = 16
++	results := make([]*specs.Spec, count)
++	errs := make([]error, count)
++	containers := make([]*Container, count)
++	var wait sync.WaitGroup
++	for index := 0; index < count; index++ {
++		requested := int64(index+1) * 1048576
++		c := containerForProfileTest(fmt.Sprintf("mixed-%d", index), &types.HostConfig{
++			ShmSize: &requested,
++			Sysctls: map[string]string{"sentinel.profile": fmt.Sprintf("%d", index)},
++		})
++		hostConfigWithMountsForProfileTest(c,
++			&types.MountPoint{Source: fmt.Sprintf("/custom/hosts-%d", index), Destination: "/etc/hosts", RW: true},
++		)
++		if index%2 == 1 {
++			c.HostConfig.CapAdd = []string{"NOT_A_CAPABILITY"}
++		}
++		containers[index] = c
++	}
++	for index := 0; index < count; index++ {
++		wait.Add(1)
++		go func(index int) {
++			defer wait.Done()
++			wrapper := &SpecWrapper{}
++			errs[index] = createSpec(context.Background(), containers[index], wrapper)
++			results[index] = wrapper.s
++		}(index)
++	}
++	wait.Wait()
++	for index := 0; index < count; index++ {
++		c := containers[index]
++		if index%2 == 1 {
++			if errs[index] == nil || results[index] != nil {
++				t.Errorf("invalid container %d: err=%v published=%v", index, errs[index], results[index] != nil)
++			}
++			if c.HostsPath != "" {
++				t.Errorf("failed container %d recorded network files: %q", index, c.HostsPath)
++			}
++			continue
++		}
++		if errs[index] != nil || results[index] == nil {
++			t.Errorf("valid container %d: err=%v published=%v", index, errs[index], results[index] != nil)
++			continue
++		}
++		s := results[index]
++		wantedSize := fmt.Sprintf("size=%d", int64(index+1)*1048576)
++		if got := sizeOptionsForProfileTest(mountForProfileTest(t, s.Mounts, "/dev/shm").Options); !reflect.DeepEqual(got, []string{wantedSize}) {
++			t.Errorf("container %d shared-memory options = %v", index, got)
++		}
++		if got := s.Linux.Sysctl["sentinel.profile"]; got != fmt.Sprintf("%d", index) {
++			t.Errorf("container %d sysctl marker = %q", index, got)
++		}
++		if want := fmt.Sprintf("/custom/hosts-%d", index); c.HostsPath != want {
++			t.Errorf("container %d hosts path = %q, want %q", index, c.HostsPath, want)
++		}
 +	}
 +}

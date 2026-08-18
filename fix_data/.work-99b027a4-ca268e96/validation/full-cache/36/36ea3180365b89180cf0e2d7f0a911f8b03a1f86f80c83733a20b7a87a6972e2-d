@@ -1,0 +1,13 @@
+./convert.go
+./doc.go
+./message.go
+./path.go
+./proposed_plan_parser.go
+./provider_tool_schema.go
+./session.go
+./tool.go
+./tool_envelope.go
+./tool_input_repair.go
+./tool_registry.go
+./tool_schema_transform.go
+./user_input.go

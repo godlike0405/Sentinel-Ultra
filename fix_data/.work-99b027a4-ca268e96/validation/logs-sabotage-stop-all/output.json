@@ -1,0 +1,84 @@
+{
+  "tests": [
+    {
+      "name": "github.com/usewhale/whale/internal/app::TestCollectRecentAssistantTexts",
+      "status": "PASS",
+      "source": "go-test-json"
+    },
+    {
+      "name": "github.com/usewhale/whale/internal/app::TestSentinelPSStopLifecycleContract",
+      "status": "FAIL",
+      "source": "go-test-json"
+    },
+    {
+      "name": "github.com/usewhale/whale/internal/app::TestSentinelPSTimeoutExclusionContract",
+      "status": "PASS",
+      "source": "go-test-json"
+    },
+    {
+      "name": "github.com/usewhale/whale/internal/app::TestSentinelStopEmptyContract",
+      "status": "PASS",
+      "source": "go-test-json"
+    },
+    {
+      "name": "github.com/usewhale/whale/internal/app::TestSentinelStopSingularCountContract",
+      "status": "FAIL",
+      "source": "go-test-json"
+    },
+    {
+      "name": "github.com/usewhale/whale/internal/runtime/commands::TestClassifySubmitAcceptsStatsCache",
+      "status": "PASS",
+      "source": "go-test-json"
+    },
+    {
+      "name": "github.com/usewhale/whale/internal/runtime/commands::TestSentinelStopCatalogContract",
+      "status": "PASS",
+      "source": "go-test-json"
+    },
+    {
+      "name": "github.com/usewhale/whale/internal/runtime/commands::TestSentinelStopClassificationContract",
+      "status": "PASS",
+      "source": "go-test-json"
+    },
+    {
+      "name": "github.com/usewhale/whale/internal/tools::TestSentinelCancelAllContract",
+      "status": "FAIL",
+      "source": "go-test-json"
+    },
+    {
+      "name": "github.com/usewhale/whale/internal/tools::TestSentinelRunningViewAndSingleCancelContract",
+      "status": "PASS",
+      "source": "go-test-json"
+    },
+    {
+      "name": "github.com/usewhale/whale/internal/tools::TestSentinelRunningViewExcludesTimedOutContract",
+      "status": "PASS",
+      "source": "go-test-json"
+    },
+    {
+      "name": "github.com/usewhale/whale/internal/tools::TestShellRunDescriptionUsesConfiguredForegroundWait",
+      "status": "PASS",
+      "source": "go-test-json"
+    },
+    {
+      "name": "github.com/usewhale/whale/internal/tui::TestSentinelBusyStopDispatchContract",
+      "status": "PASS",
+      "source": "go-test-json"
+    },
+    {
+      "name": "github.com/usewhale/whale/internal/tui::TestSentinelRunningShellSummaryContract",
+      "status": "PASS",
+      "source": "go-test-json"
+    },
+    {
+      "name": "github.com/usewhale/whale/internal/tui::TestSentinelStopSuggestionAutoRunContract",
+      "status": "PASS",
+      "source": "go-test-json"
+    },
+    {
+      "name": "github.com/usewhale/whale/internal/tui::TestSummarizeToolResultForChatPreservesShellANSI",
+      "status": "PASS",
+      "source": "go-test-json"
+    }
+  ]
+}

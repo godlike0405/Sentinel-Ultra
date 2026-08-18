@@ -1,0 +1,10 @@
+./args.go
+./clock.go
+./environ.go
+./fs.go
+./poll.go
+./proc.go
+./random.go
+./sched.go
+./sock.go
+./wasi.go

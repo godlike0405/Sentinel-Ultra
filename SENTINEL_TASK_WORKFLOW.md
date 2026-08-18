@@ -478,6 +478,13 @@ agent.
   identify any validation check that could not be executed.
 - Make both duplicate verdict responses identical.
 - Write answers so they can be pasted directly into the Snorkel form.
+- Give every required form field its own clearly labeled, self-contained,
+  copyable answer. Do not merge answers for separate fields.
+- Use natural, task-specific wording grounded in exact bundle evidence; avoid
+  generic rubric prose, robotic repetition, academic filler, and language that
+  simply mirrors the prompt.
+- Wrap longer answers into short readable paragraphs/lines so the complete text
+  is easy to read and copy.
 - List every changed file with its path, what changed, and why.
 - State whether PR scope was expanded; otherwise write `NA`.
 - Include requested time estimates and update cumulative revision time after

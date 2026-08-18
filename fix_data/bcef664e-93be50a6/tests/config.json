@@ -9,8 +9,8 @@
       "GOENV": "off",
       "GOFLAGS": ""
     },
-    "timeout_sec": 600,
-    "per_test_timeout_sec": 15,
+    "timeout_sec": 1200,
+    "per_test_timeout_sec": 60,
     "base_commit_sha": "b19cbf62901fc176b6b6036e7e97131d5e339327",
     "protected_test_files": [
       "ctrd/utils_test.go",
@@ -44,7 +44,14 @@
       "github.com/alibaba/pouch/daemon/mgr::TestPositiveSharedMemorySizeWins",
       "github.com/alibaba/pouch/daemon/mgr::TestZeroSharedMemorySizeKeepsDefault",
       "github.com/alibaba/pouch/daemon/mgr::TestUserSharedMemoryMountPreservesBindSemantics",
-      "github.com/alibaba/pouch/daemon/mgr::TestCreateSpecResultsRemainIndependent"
+      "github.com/alibaba/pouch/daemon/mgr::TestCreateSpecResultsRemainIndependent",
+      "github.com/alibaba/pouch/daemon/mgr::TestFailedSpecBuildLeavesContainerUntouched",
+      "github.com/alibaba/pouch/daemon/mgr::TestSuccessfulSpecBuildRecordsNetworkFiles",
+      "github.com/alibaba/pouch/daemon/mgr::TestFinalSpecOwnsResourceDeviceSettings",
+      "github.com/alibaba/pouch/daemon/mgr::TestFinalSpecOwnsEnvironment",
+      "github.com/alibaba/pouch/daemon/mgr::TestFailedPlatformStageIsAtomic",
+      "github.com/alibaba/pouch/daemon/mgr::TestRepublishDoesNotMutateEarlierSpec",
+      "github.com/alibaba/pouch/daemon/mgr::TestConcurrentFailuresDoNotDisturbOtherBuilds"
     ],
     "pass_to_pass": [
       "github.com/alibaba/pouch/daemon/mgr::TestRegressionOrdinaryCapabilities",

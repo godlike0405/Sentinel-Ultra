@@ -28,7 +28,7 @@ pr_created_at = "2018-11-02T06:30:44Z"
 pr_merged_at = "2018-12-20T12:51:46Z"
 
 [verifier]
-timeout_sec = 600.0
+timeout_sec = 1200.0
 
 [agent]
 timeout_sec = 1800.0

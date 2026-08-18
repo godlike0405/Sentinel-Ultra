@@ -11,8 +11,8 @@ REPORT="$LOG_DIR/report.json"
 OUTPUT="$LOG_DIR/output.json"
 REWARD="$LOG_DIR/reward.txt"
 
-EXPECTED_CONFIG_SHA256="7cf7e5468902d39d7df201718ec9986623eff465b26febfb9f92bc7ab5d97309"
-EXPECTED_PATCH_SHA256="58e5ac15c52cf1255b25960b4753236052bb9e2259d58e40f0c56554d432f09b"
+EXPECTED_CONFIG_SHA256="c147f5a76d0a741668bf6751ce64c364b9a296747d149d9ac19683c2170e5153"
+EXPECTED_PATCH_SHA256="17f3e38dea4520a92f2431bece5ee51e255d6a94ad0543d26ce6a8196b283141"
 EXPECTED_GRADER_SHA256="11a80825bd3d54bc3d5041d6f354ae6797922c4a9da1d92ef145599f41c02e18"
 
 mkdir -p "$LOG_DIR"
@@ -136,8 +136,8 @@ p2p = grading["pass_to_pass"]
 expected = [*f2p, *p2p]
 protected = execution["protected_test_ids"]
 
-if not 10 <= len(f2p) <= 20:
-    raise SystemExit("fail_to_pass count is outside 10..20")
+if not 10 <= len(f2p) <= 40:
+    raise SystemExit("fail_to_pass count is outside 10..40")
 if len(expected) != len(set(expected)):
     raise SystemExit("declared test IDs are duplicated")
 if not protected or any(test_id not in p2p for test_id in protected):
@@ -274,6 +274,9 @@ patch -p1 --batch --forward < "$PATCH" >>"$STDERR_LOG" 2>&1 ||
 # Install a verifier-owned dependency-boundary probe. Any implementation that
 # still asks containerd to generate the starting OCI profile will panic during
 # the ownership regression test; the Pouch-owned implementation never calls it.
+# The ownership test first proves the probe is armed (fail-closed) and then
+# reports a probe hit as an explicit ownership failure, so overwriting visible
+# spec fields after a containerd-generated start cannot pass.
 CONTAINERD_OCI_SPEC="$WORKSPACE/vendor/github.com/containerd/containerd/oci/spec.go"
 CONTAINERD_OCI_ORIGINAL="$VERIFIER_TMP/containerd-oci-spec-original.go"
 CONTAINERD_OCI_PROBE="$VERIFIER_TMP/containerd-oci-spec-probe.go"
@@ -315,6 +318,31 @@ probe_status=$?
 if [ "$probe_status" -ne 0 ]; then
   infrastructure_failure "could not install the containerd dependency probe"
 fi
+
+# The probe only replaces the upstream generator entry point. Remove any
+# solver-added file from the probed vendored package so a new exported wrapper
+# around the unexported containerd profile builder cannot route around it.
+CONTAINERD_OCI_DIR="$(dirname "$CONTAINERD_OCI_SPEC")"
+find "$CONTAINERD_OCI_DIR" -maxdepth 1 -type f \
+  ! -name client.go ! -name spec.go ! -name spec_opts.go \
+  ! -name spec_opts_unix.go ! -name spec_opts_windows.go \
+  ! -name spec_unix.go ! -name spec_windows.go -delete ||
+  infrastructure_failure "could not normalize the probed containerd package"
+
+# Pre-compile the graded packages once per vendored-dependency variant (probe
+# and original) under the overall verifier budget. The per-test timeout below
+# is sized for an incremental compile-and-run; without this warm-up the first
+# selected tests would spend their entire budget cold-building the vendor tree
+# in the verifier-owned empty GOCACHE, and the probe/original swap would force
+# a second large rebuild. Compile problems are deliberately non-fatal here so
+# a submission that does not build is graded FAILED by the per-test loop
+# rather than reported as a verifier infrastructure error.
+for warmup_variant in "$CONTAINERD_OCI_PROBE" "$CONTAINERD_OCI_ORIGINAL"; do
+  install -m 0644 "$warmup_variant" "$CONTAINERD_OCI_SPEC" ||
+    infrastructure_failure "could not stage the containerd dependency source for warm-up"
+  timeout 300 go test -count=1 -run '^$' ./ctrd ./daemon/mgr \
+    >>"$STDOUT_LOG" 2>>"$STDERR_LOG" || true
+done
 
 : > "$STATUSES"
 OVERALL_STATUS=0

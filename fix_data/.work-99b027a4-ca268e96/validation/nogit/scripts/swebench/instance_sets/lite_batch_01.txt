@@ -1,0 +1,7 @@
+# First 5 Lite instances for whale smoke benchmarking.
+# Chosen to cover several repos without repeating sympy__sympy-20590.
+pallets__flask-4045
+psf__requests-2148
+pylint-dev__pylint-6506
+astropy__astropy-14182
+sympy__sympy-11400

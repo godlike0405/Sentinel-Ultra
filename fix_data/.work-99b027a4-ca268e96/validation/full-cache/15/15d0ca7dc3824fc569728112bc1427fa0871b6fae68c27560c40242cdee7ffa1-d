@@ -1,0 +1,6 @@
+./catalog.go
+./classify.go
+./open.go
+./parser.go
+./review.go
+./classify_test.go

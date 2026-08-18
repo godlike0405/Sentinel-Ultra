@@ -1,0 +1,454 @@
+diff --git a/src/exo/utils/info_gatherer/tests/test_rdma_full_stack_contract.py b/src/exo/utils/info_gatherer/tests/test_rdma_full_stack_contract.py
+new file mode 100644
+index 00000000..c832d60c
+--- /dev/null
++++ b/src/exo/utils/info_gatherer/tests/test_rdma_full_stack_contract.py
+@@ -0,0 +1,448 @@
++from __future__ import annotations
++
++import asyncio
++import json
++import os
++import subprocess
++import textwrap
++from contextlib import AbstractContextManager
++from pathlib import Path
++from types import SimpleNamespace
++from typing import Any, cast, get_args
++from unittest.mock import AsyncMock, patch
++
++import anyio
++import pytest
++
++
++ROOT = Path(os.environ.get("SENTINEL_WORKSPACE", Path.cwd())).resolve()
++
++
++def _symbols() -> dict[str, Any]:
++    from exo.shared.apply import apply_node_gathered_info, apply_node_timed_out
++    from exo.shared.types.common import NodeId
++    from exo.shared.types.events import NodeGatheredInfo, NodeTimedOut
++    from exo.shared.types.profiling import NodeRdmaCtlStatus
++    from exo.shared.types.state import State
++    from exo.utils.info_gatherer.info_gatherer import (
++        GatheredInfo,
++        InfoGatherer,
++        RdmaCtlStatus,
++    )
++
++    return locals()
++
++
++def _run(coro: Any) -> Any:
++    return asyncio.run(coro)
++
++
++def _proc(stdout: bytes, returncode: int = 0) -> SimpleNamespace:
++    return SimpleNamespace(stdout=stdout, stderr=b"", returncode=returncode)
++
++
++def _gathered(symbols: dict[str, Any], node: str, enabled: bool) -> Any:
++    return symbols["NodeGatheredInfo"](
++        node_id=symbols["NodeId"](node),
++        when="2026-02-10T12:00:00+00:00",
++        info=symbols["RdmaCtlStatus"](enabled=enabled),
++    )
++
++
++def test_gather_parses_enabled_disabled_and_unknown_statuses() -> None:
++    symbols = _symbols()
++    status = symbols["RdmaCtlStatus"]
++    cases = [
++        (b"RDMA is ENABLED\n", True),
++        (b"  rdma disabled  \n", False),
++        (b"status unavailable\n", None),
++    ]
++    for stdout, expected in cases:
++        with (
++            patch("exo.utils.info_gatherer.info_gatherer.IS_DARWIN", True),
++            patch("exo.utils.info_gatherer.info_gatherer.shutil.which", return_value="/usr/bin/rdma_ctl"),
++            patch("exo.utils.info_gatherer.info_gatherer.anyio.run_process", new=AsyncMock(return_value=_proc(stdout))),
++        ):
++            result = _run(status.gather())
++        assert (None if result is None else result.enabled) is expected
++
++
++def test_gather_uses_the_public_rdma_ctl_status_command() -> None:
++    symbols = _symbols()
++    run_process = AsyncMock(return_value=_proc(b"enabled"))
++    with (
++        patch("exo.utils.info_gatherer.info_gatherer.IS_DARWIN", True),
++        patch("exo.utils.info_gatherer.info_gatherer.shutil.which", return_value="/opt/bin/rdma_ctl"),
++        patch("exo.utils.info_gatherer.info_gatherer.anyio.run_process", new=run_process),
++    ):
++        assert _run(symbols["RdmaCtlStatus"].gather()).enabled is True
++    run_process.assert_awaited_once_with(["rdma_ctl", "status"], check=False)
++
++
++def test_gather_short_circuits_off_macos_and_without_the_binary() -> None:
++    symbols = _symbols()
++    run_process = AsyncMock()
++    with (
++        patch("exo.utils.info_gatherer.info_gatherer.IS_DARWIN", False),
++        patch("exo.utils.info_gatherer.info_gatherer.anyio.run_process", new=run_process),
++    ):
++        assert _run(symbols["RdmaCtlStatus"].gather()) is None
++    with (
++        patch("exo.utils.info_gatherer.info_gatherer.IS_DARWIN", True),
++        patch("exo.utils.info_gatherer.info_gatherer.shutil.which", return_value=None),
++        patch("exo.utils.info_gatherer.info_gatherer.anyio.run_process", new=run_process),
++    ):
++        assert _run(symbols["RdmaCtlStatus"].gather()) is None
++    run_process.assert_not_awaited()
++
++
++def test_gather_returns_none_for_process_and_decode_failures() -> None:
++    symbols = _symbols()
++    status = symbols["RdmaCtlStatus"]
++    outcomes: list[Any] = [OSError("spawn failed"), _proc(b"enabled", 4)]
++    for outcome in outcomes:
++        runner = AsyncMock(side_effect=outcome) if isinstance(outcome, Exception) else AsyncMock(return_value=outcome)
++        with (
++            patch("exo.utils.info_gatherer.info_gatherer.IS_DARWIN", True),
++            patch("exo.utils.info_gatherer.info_gatherer.shutil.which", return_value="/usr/bin/rdma_ctl"),
++            patch("exo.utils.info_gatherer.info_gatherer.anyio.run_process", new=runner),
++        ):
++            assert _run(status.gather()) is None
++
++
++def test_gather_applies_the_five_second_deadline_and_swallows_timeout() -> None:
++    symbols = _symbols()
++    seen: list[float] = []
++
++    class Deadline(AbstractContextManager[None]):
++        def __enter__(self) -> None:
++            raise TimeoutError("deadline")
++
++        def __exit__(self, *args: object) -> bool:
++            return False
++
++    def fail_after(seconds: float) -> Deadline:
++        seen.append(seconds)
++        return Deadline()
++
++    with (
++        patch("exo.utils.info_gatherer.info_gatherer.IS_DARWIN", True),
++        patch("exo.utils.info_gatherer.info_gatherer.shutil.which", return_value="/usr/bin/rdma_ctl"),
++        patch("exo.utils.info_gatherer.info_gatherer.anyio.fail_after", side_effect=fail_after),
++    ):
++        assert _run(symbols["RdmaCtlStatus"].gather()) is None
++    assert seen == [5]
++
++
++def test_models_union_and_state_wire_name_form_one_contract() -> None:
++    symbols = _symbols()
++    event = symbols["RdmaCtlStatus"](enabled=True)
++    stored = symbols["NodeRdmaCtlStatus"](enabled=False)
++    assert event.enabled is True and stored.enabled is False
++    assert symbols["RdmaCtlStatus"] in get_args(symbols["GatheredInfo"])
++    state = symbols["State"]()
++    assert state.node_rdma_ctl == {}
++    assert json.loads(state.model_dump_json(by_alias=True))["nodeRdmaCtl"] == {}
++
++
++def test_state_round_trip_preserves_per_node_rdma_values() -> None:
++    symbols = _symbols()
++    state = symbols["State"](
++        node_rdma_ctl={
++            symbols["NodeId"]("alpha"): symbols["NodeRdmaCtlStatus"](enabled=True),
++            symbols["NodeId"]("beta"): symbols["NodeRdmaCtlStatus"](enabled=False),
++        }
++    )
++    wire = state.model_dump_json(by_alias=True)
++    restored = symbols["State"].model_validate_json(wire)
++    assert restored.node_rdma_ctl == state.node_rdma_ctl
++    assert restored.model_dump_json(by_alias=True) == wire
++    payload = json.loads(wire)
++    assert payload["nodeRdmaCtl"] == {"alpha": {"enabled": True}, "beta": {"enabled": False}}
++
++
++def test_apply_is_idempotent_by_overwrite_and_preserves_other_nodes() -> None:
++    symbols = _symbols()
++    apply_info = symbols["apply_node_gathered_info"]
++    state = symbols["State"]()
++    state = apply_info(_gathered(symbols, "alpha", True), state)
++    state = apply_info(_gathered(symbols, "beta", True), state)
++    state = apply_info(_gathered(symbols, "alpha", False), state)
++    assert state.node_rdma_ctl[symbols["NodeId"]("alpha")].enabled is False
++    assert state.node_rdma_ctl[symbols["NodeId"]("beta")].enabled is True
++
++
++def test_node_timeout_removes_only_the_departed_rdma_status() -> None:
++    symbols = _symbols()
++    state = symbols["State"](
++        node_rdma_ctl={
++            symbols["NodeId"]("alpha"): symbols["NodeRdmaCtlStatus"](enabled=True),
++            symbols["NodeId"]("beta"): symbols["NodeRdmaCtlStatus"](enabled=False),
++        }
++    )
++    result = symbols["apply_node_timed_out"](
++        symbols["NodeTimedOut"](node_id=symbols["NodeId"]("alpha")), state
++    )
++    assert result.node_rdma_ctl == {
++        symbols["NodeId"]("beta"): symbols["NodeRdmaCtlStatus"](enabled=False)
++    }
++
++
++def test_macos_run_polls_repeatedly_and_publishes_non_none_statuses() -> None:
++    symbols = _symbols()
++    sent: list[Any] = []
++    complete = anyio.Event()
++
++    class Sender:
++        async def send(self, value: Any) -> None:
++            sent.append(value)
++            if sum(isinstance(item, symbols["RdmaCtlStatus"]) for item in sent) >= 2:
++                complete.set()
++
++    sequence = iter(
++        [
++            RuntimeError("temporary failure"),
++            symbols["RdmaCtlStatus"](enabled=True),
++            None,
++            symbols["RdmaCtlStatus"](enabled=False),
++        ]
++    )
++
++    async def gather() -> Any:
++        value = next(sequence)
++        if isinstance(value, Exception):
++            raise value
++        return value
++
++    async def scenario() -> None:
++        gatherer = symbols["InfoGatherer"](
++            cast(Any, Sender()),
++            interface_watcher_interval=None,
++            misc_poll_interval=None,
++            system_profiler_interval=None,
++            memory_poll_rate=None,
++            macmon_interval=None,
++            thunderbolt_bridge_poll_interval=None,
++            rdma_ctl_poll_interval=0,
++        )
++        with (
++            patch("exo.utils.info_gatherer.info_gatherer.IS_DARWIN", True),
++            patch.object(symbols["RdmaCtlStatus"], "gather", new=gather),
++            patch("exo.utils.info_gatherer.info_gatherer.NodeConfig.gather", new=AsyncMock(return_value=None)),
++            patch("exo.utils.info_gatherer.info_gatherer.StaticNodeInformation.gather", new=AsyncMock(return_value=SimpleNamespace())),
++            patch("exo.utils.info_gatherer.info_gatherer.shutil.which", return_value=None),
++            patch("exo.utils.info_gatherer.info_gatherer.logger.warning") as warning,
++        ):
++            async with anyio.create_task_group() as tg:
++                tg.start_soon(gatherer.run)
++                with anyio.fail_after(1):
++                    await complete.wait()
++                gatherer.shutdown()
++            assert warning.called
++
++    anyio.run(scenario)
++    values = [item.enabled for item in sent if isinstance(item, symbols["RdmaCtlStatus"])]
++    assert values == [True, False]
++
++
++def test_non_macos_run_does_not_poll_rdma() -> None:
++    symbols = _symbols()
++    gather = AsyncMock(return_value=symbols["RdmaCtlStatus"](enabled=True))
++
++    class Sender:
++        async def send(self, value: Any) -> None:
++            return None
++
++    async def scenario() -> None:
++        gatherer = symbols["InfoGatherer"](
++            cast(Any, Sender()),
++            interface_watcher_interval=None,
++            misc_poll_interval=None,
++            system_profiler_interval=None,
++            memory_poll_rate=None,
++            macmon_interval=None,
++            thunderbolt_bridge_poll_interval=None,
++            rdma_ctl_poll_interval=0,
++        )
++        with (
++            patch("exo.utils.info_gatherer.info_gatherer.IS_DARWIN", False),
++            patch.object(symbols["RdmaCtlStatus"], "gather", new=gather),
++            patch("exo.utils.info_gatherer.info_gatherer.NodeConfig.gather", new=AsyncMock(return_value=None)),
++            patch("exo.utils.info_gatherer.info_gatherer.StaticNodeInformation.gather", new=AsyncMock(return_value=SimpleNamespace())),
++        ):
++            with anyio.move_on_after(0.02):
++                await gatherer.run()
++            gatherer.shutdown()
++
++    anyio.run(scenario)
++    gather.assert_not_awaited()
++
++
++def test_poll_interval_default_tracks_the_local_platform() -> None:
++    symbols = _symbols()
++    field = symbols["InfoGatherer"].__dataclass_fields__["rdma_ctl_poll_interval"]
++    from exo.utils.info_gatherer import info_gatherer as module
++
++    assert field.default == (10 if module.IS_DARWIN else None)
++
++
++def test_thunderbolt_identifier_exposes_link_speed_on_the_wire() -> None:
++    _symbols()
++    from exo.shared.types.thunderbolt import ThunderboltConnectivityData
++
++    raw = {
++        "domain_uuid_key": "domain-a",
++        "receptacle_1_tag": {
++            "receptacle_id_key": "1",
++            "current_speed_key": "80 Gb/s",
++        },
++    }
++    ident = ThunderboltConnectivityData.model_validate(raw).ident({"Thunderbolt 1": "en7"})
++    assert ident is not None
++    assert ident.rdma_interface == "rdma_en7"
++    assert ident.link_speed == "80 Gb/s"
++    assert ident.model_dump(by_alias=True)["linkSpeed"] == "80 Gb/s"
++
++
++def _node_case(case: str) -> subprocess.CompletedProcess[str]:
++    script = textwrap.dedent(
++        r'''
++        import assert from "node:assert/strict";
++        import { createRequire } from "node:module";
++        import { pathToFileURL } from "node:url";
++        import path from "node:path";
++
++        const root = process.argv[2];
++        const scenario = process.argv[3];
++        const dashboard = path.join(root, "dashboard");
++        const requireFromDashboard = createRequire(path.join(dashboard, "package.json"));
++        const vitePath = requireFromDashboard.resolve("vite");
++        const { createServer } = await import(pathToFileURL(vitePath));
++        const server = await createServer({ root: dashboard, logLevel: "silent", server: { middlewareMode: true }, appType: "custom" });
++        const state = {
++          topology: {
++            nodes: ["alpha", "beta"],
++            connections: {
++              alpha: { beta: [{ sourceRdmaIface: "rdma_en2", sinkRdmaIface: "rdma_en3" }] },
++              beta: { alpha: [{ sourceRdmaIface: "rdma_en3", sinkRdmaIface: "rdma_en2" }] }
++            }
++          },
++          nodeIdentities: {
++            alpha: { friendlyName: "Alpha", modelId: "Mac", chipId: "M4" },
++            beta: { friendlyName: "Beta", modelId: "Mac", chipId: "M4" }
++          },
++          nodeMemory: {
++            alpha: { ramTotal: { inBytes: 68719476736 }, ramAvailable: { inBytes: 34359738368 } },
++            beta: { ramTotal: { inBytes: 68719476736 }, ramAvailable: { inBytes: 34359738368 } }
++          },
++          nodeSystem: {}, nodeNetwork: {}, instances: {}, runners: {}, downloads: {},
++          nodeThunderbolt: {
++            alpha: { interfaces: [{ rdmaInterface: "rdma_en2", domainUuid: "a", linkSpeed: "80 Gb/s" }] },
++            beta: { interfaces: [{ rdmaInterface: "rdma_en3", domainUuid: "b", linkSpeed: "80 Gb/s" }] }
++          },
++          nodeRdmaCtl: { alpha: { enabled: true }, beta: { enabled: false } },
++          nodeThunderboltBridge: {}, thunderboltBridgeCycles: []
++        };
++        globalThis.fetch = async () => ({ ok: true, json: async () => state });
++        globalThis.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
++        try {
++          const store = await server.ssrLoadModule("/src/lib/stores/app.svelte.ts");
++          await store.refreshState();
++          if (scenario === "store") {
++            assert.deepEqual(store.nodeRdmaCtl(), state.nodeRdmaCtl);
++            assert.deepEqual(store.nodeThunderbolt(), state.nodeThunderbolt);
++            const edges = store.topologyData().edges;
++            assert.equal(edges[0].sourceRdmaIface, "rdma_en2");
++            assert.equal(edges[0].sinkRdmaIface, "rdma_en3");
++          } else if (scenario === "model-card") {
++            store.setDebugMode(true);
++            const { render } = await server.ssrLoadModule("svelte/server");
++            const component = (await server.ssrLoadModule("/src/lib/components/ModelCard.svelte")).default;
++            const body = render(component, { props: {
++              model: { id: "example/model" }, nodes: store.topologyData().nodes,
++              runtime: "MlxIbv", apiPreview: { error: null, memory_delta_by_node: { alpha: 1024, beta: 1024 } }
++            }}).body;
++            assert.match(body, /rdma_en2/);
++            assert.match(body, /rdma_en3/);
++          } else if (scenario === "prompt") {
++            const { render } = await server.ssrLoadModule("svelte/server");
++            const page = (await server.ssrLoadModule("/src/routes/+page.svelte")).default;
++            const first = render(page).body;
++            assert.match(first, /RDMA AVAILABLE/);
++            state.nodeRdmaCtl = { alpha: { enabled: true }, beta: { enabled: true } };
++            await store.refreshState();
++            const second = render(page).body;
++            assert.doesNotMatch(second, /RDMA AVAILABLE/);
++          } else if (scenario === "topology") {
++            await server.ssrLoadModule("/src/lib/components/TopologyGraph.svelte");
++          }
++        } finally {
++          await server.close();
++        }
++        '''
++    )
++    script_path = ROOT / ".sentinel-rdma-dashboard.mjs"
++    script_path.write_text(script, encoding="utf-8")
++    try:
++        return subprocess.run(
++            ["node", str(script_path), str(ROOT), case],
++            cwd=ROOT / "dashboard",
++            text=True,
++            capture_output=True,
++            timeout=90,
++            check=False,
++        )
++    finally:
++        script_path.unlink(missing_ok=True)
++
++
++def _assert_node_case(case: str) -> None:
++    result = _node_case(case)
++    assert result.returncode == 0, result.stdout + "\n" + result.stderr
++
++
++def test_dashboard_store_preserves_rdma_state_and_topology_interfaces() -> None:
++    _symbols()
++    _assert_node_case("store")
++
++
++def test_model_card_renders_directional_rdma_interface_labels() -> None:
++    _symbols()
++    _assert_node_case("model-card")
++
++
++def test_dashboard_prompt_tracks_cluster_rdma_state() -> None:
++    _symbols()
++    _assert_node_case("prompt")
++
++
++def test_dashboard_per_node_debug_labels_compile_with_state_binding() -> None:
++    _symbols()
++    component = (ROOT / "dashboard/src/lib/components/TopologyGraph.svelte").read_text(encoding="utf-8")
++    assert "nodeRdmaCtl" in component
++    assert "RDMA:ON" in component and "RDMA:OFF" in component
++    _assert_node_case("topology")
++
++
++def test_macos_state_decoder_accepts_missing_and_present_cluster_rdma_state() -> None:
++    _symbols()
++    source = (ROOT / "app/EXO/EXO/Models/ClusterState.swift").read_text(encoding="utf-8")
++    assert "let enabled: Bool" in source
++    assert "decodeIfPresent" in source and "nodeRdmaCtl" in source and "?? [:]" in source
++
++
++def test_macos_debug_view_uses_cluster_status_and_marks_the_local_node() -> None:
++    _symbols()
++    source = (ROOT / "app/EXO/EXO/ContentView.swift").read_text(encoding="utf-8")
++    assert "latestSnapshot?.nodeRdmaCtl" in source
++    assert "localNodeId" in source and '"Enabled"' in source and '"Disabled"' in source
++    assert "(local):" in source
++
++
++def test_macos_keeps_local_devices_and_ports_without_local_rdma_ctl_status() -> None:
++    _symbols()
++    service = (ROOT / "app/EXO/EXO/Services/NetworkStatusService.swift").read_text(encoding="utf-8")
++    view = (ROOT / "app/EXO/EXO/ContentView.swift").read_text(encoding="utf-8")
++    assert '["rdma_ctl", "status"]' not in service
++    assert '["ibv_devices"]' in service and '["ibv_devinfo"]' in service
++    assert "Local Devices" in view and "Local Active Ports" in view

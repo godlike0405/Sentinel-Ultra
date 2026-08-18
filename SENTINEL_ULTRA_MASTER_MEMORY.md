@@ -317,6 +317,12 @@ specific helper such as `Arrays.fill`.
   and time fields.
 - Use `NA` only when genuinely inapplicable. Distinguish executed checks from
   static inspection and update cumulative revision time after every revision.
+- Provide a separate labeled, self-contained copyable answer for every required
+  field. Never combine multiple form fields into one answer block.
+- Write naturally and specifically, citing current-task evidence instead of
+  generic rubric language or repetitive AI-like phrasing.
+- Wrap long answers into short readable paragraphs or lines so the full text is
+  easy to review and copy.
 
 ## 16. Reviewer integrity
 

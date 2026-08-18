@@ -1,5 +1,5 @@
 diff --git a/ctrd/utils.go b/ctrd/utils.go
-index 955ed7df61614f4cd72f82814cc6e3dc9f85fbb6..60d0535d6e512adeed6e6b063c1232f69f9e5f70 100644
+index 955ed7df61614f4cd72f82814cc6e3dc9f85fbb6..60d0535d6e512adeed6e6b063c1232f69f9e5f70 100755
 --- a/ctrd/utils.go
 +++ b/ctrd/utils.go
 @@ -1,7 +1,6 @@
@@ -34,7 +34,7 @@ index 955ed7df61614f4cd72f82814cc6e3dc9f85fbb6..60d0535d6e512adeed6e6b063c1232f6
  	var (
  		// TODO
 diff --git a/daemon/mgr/spec.go b/daemon/mgr/spec.go
-index ae62b0760797035e8a05d34f65878a9a0db24b79..7637793c14867275812154aca826043965c2937e 100644
+index ae62b0760797035e8a05d34f65878a9a0db24b79..9d1b31dd87c40150b87901835e746514734d23f0 100755
 --- a/daemon/mgr/spec.go
 +++ b/daemon/mgr/spec.go
 @@ -3,10 +3,9 @@ package mgr
@@ -49,7 +49,18 @@ index ae62b0760797035e8a05d34f65878a9a0db24b79..7637793c14867275812154aca8260439
  )
  
  // SpecWrapper wraps the container's specs and add manager operations.
-@@ -28,17 +27,11 @@ type SpecWrapper struct {
+@@ -18,6 +17,10 @@ type SpecWrapper struct {
+ 	netMgr  NetworkMgr
+ 	prioArr []int
+ 	argsArr [][]string
++
++	// networkFiles are the container network file paths resolved by the mount
++	// stage; they are committed to the container together with the spec.
++	networkFiles networkFilePaths
+ }
+ 
+ // All the functions related to the spec is lock-free for container instance,
+@@ -28,17 +31,11 @@ type SpecWrapper struct {
  func createSpec(ctx context.Context, c *Container, specWrapper *SpecWrapper) error {
  	c.Lock()
  	defer c.Unlock()
@@ -71,7 +82,16 @@ index ae62b0760797035e8a05d34f65878a9a0db24b79..7637793c14867275812154aca8260439
  
  	s.Hostname = c.Config.Hostname.String()
  	s.Root = &specs.Root{
-@@ -62,11 +55,19 @@ func createSpec(ctx context.Context, c *Container, specWrapper *SpecWrapper) err
+@@ -52,7 +49,7 @@ func createSpec(ctx context.Context, c *Container, specWrapper *SpecWrapper) err
+ 	}
+ 
+ 	// create Spec.Mounts spec
+-	if err := setupMounts(ctx, c, s); err != nil {
++	if err := setupMounts(ctx, c, &working); err != nil {
+ 		return err
+ 	}
+ 
+@@ -62,11 +59,22 @@ func createSpec(ctx context.Context, c *Container, specWrapper *SpecWrapper) err
  	}
  
  	// create Spec.Hooks spec
@@ -88,13 +108,16 @@ index ae62b0760797035e8a05d34f65878a9a0db24b79..7637793c14867275812154aca8260439
 +	}
 +
 +	// Publish only a completely finalized specification. Callers may reuse a
-+	// wrapper after a failed attempt, so an error must not expose partial state
-+	// or replace the last successful snapshot.
++	// wrapper after a failed attempt, so an error must not expose partial state,
++	// replace the last successful snapshot, or leave any trace on the container.
++	c.HostnamePath = working.networkFiles.hostname
++	c.HostsPath = working.networkFiles.hosts
++	c.ResolvConfPath = working.networkFiles.resolvConf
 +	specWrapper.s = working.s
 +	return nil
  }
 diff --git a/daemon/mgr/spec_hook.go b/daemon/mgr/spec_hook.go
-index d535d9adac97588b6fa01c6d0ffd7b9e220f9b89..3b1b621aa60fb341c93df1bd0d47cafa85891e4b 100644
+index d535d9adac97588b6fa01c6d0ffd7b9e220f9b89..3b1b621aa60fb341c93df1bd0d47cafa85891e4b 100755
 --- a/daemon/mgr/spec_hook.go
 +++ b/daemon/mgr/spec_hook.go
 @@ -23,6 +23,14 @@ func setupHook(ctx context.Context, c *Container, specWrapper *SpecWrapper) erro
@@ -125,7 +148,7 @@ index d535d9adac97588b6fa01c6d0ffd7b9e220f9b89..3b1b621aa60fb341c93df1bd0d47cafa
  	return allHooks
  }
 diff --git a/daemon/mgr/spec_linux.go b/daemon/mgr/spec_linux.go
-index 0a6514a22d239c81f7686c73365877d70c616476..5f670aae14a9cf425780d1694712cef2825076e9 100644
+index 0a6514a22d239c81f7686c73365877d70c616476..94c50b7ecc9d079c09853e1dbbe5eb8170d3b906 100755
 --- a/daemon/mgr/spec_linux.go
 +++ b/daemon/mgr/spec_linux.go
 @@ -52,7 +52,12 @@ func populatePlatform(ctx context.Context, c *Container, specWrapper *SpecWrappe
@@ -142,8 +165,19 @@ index 0a6514a22d239c81f7686c73365877d70c616476..5f670aae14a9cf425780d1694712cef2
  
  	if c.HostConfig.IntelRdtL3Cbm != "" {
  		s.Linux.IntelRdt = &specs.LinuxIntelRdt{
+@@ -165,8 +170,9 @@ func getWeightDevice(devs []*types.WeightDevice) ([]specs.LinuxWeightDevice, err
+ 			return nil, err
+ 		}
+ 
++		weight := dev.Weight
+ 		d := specs.LinuxWeightDevice{
+-			Weight: &dev.Weight,
++			Weight: &weight,
+ 		}
+ 		d.Major = int64(stat.Rdev >> 8)
+ 		d.Minor = int64(stat.Rdev & 255)
 diff --git a/daemon/mgr/spec_mount.go b/daemon/mgr/spec_mount.go
-index 5b404ce36244f880b01953a37553cd63bdbf205e..77ac4c841e81c59b2a84ace59604da73428bb2c7 100644
+index 5b404ce36244f880b01953a37553cd63bdbf205e..844e0a99a2fb02f86dc3ff1be9344d9f965434b0 100755
 --- a/daemon/mgr/spec_mount.go
 +++ b/daemon/mgr/spec_mount.go
 @@ -7,6 +7,7 @@ import (
@@ -154,7 +188,32 @@ index 5b404ce36244f880b01953a37553cd63bdbf205e..77ac4c841e81c59b2a84ace59604da73
  
  	"github.com/alibaba/pouch/apis/types"
  
-@@ -54,18 +55,16 @@ func setupMounts(ctx context.Context, c *Container, s *specs.Spec) error {
+@@ -39,8 +40,23 @@ func clearReadonly(m *specs.Mount) {
+ 	m.Options = opts
+ }
+ 
++// networkFilePaths holds the container network file paths resolved while the
++// mount set is built. They are recorded on the container only when the
++// specification is published, so a failed build leaves the container untouched.
++type networkFilePaths struct {
++	hostname   string
++	hosts      string
++	resolvConf string
++}
++
+ // setupMounts create mount spec.
+-func setupMounts(ctx context.Context, c *Container, s *specs.Spec) error {
++func setupMounts(ctx context.Context, c *Container, specWrapper *SpecWrapper) error {
++	s := specWrapper.s
++	files := networkFilePaths{
++		hostname:   c.HostnamePath,
++		hosts:      c.HostsPath,
++		resolvConf: c.ResolvConfPath,
++	}
+ 	var mounts []specs.Mount
+ 	// Override the default mounts which are duplicate with user defined ones.
+ 	for _, sm := range s.Mounts {
+@@ -54,25 +70,24 @@ func setupMounts(ctx context.Context, c *Container, s *specs.Spec) error {
  		if dup {
  			continue
  		}
@@ -179,8 +238,17 @@ index 5b404ce36244f880b01953a37553cd63bdbf205e..77ac4c841e81c59b2a84ace59604da73
 -	})
  
  	if c.HostConfig == nil {
++		specWrapper.networkFiles = files
  		return nil
-@@ -109,10 +108,6 @@ func setupMounts(ctx context.Context, c *Container, s *specs.Spec) error {
+ 	}
+ 	// user defined mount
+ 	for _, mp := range c.Mounts {
+-		if trySetupNetworkMount(mp, c) {
++		if trySetupNetworkMount(mp, &files) {
+ 			// ignore the network mount, we will handle it later.
+ 			continue
+ 		}
+@@ -109,10 +124,6 @@ func setupMounts(ctx context.Context, c *Container, s *specs.Spec) error {
  
  		// TODO: support copy data.
  
@@ -191,8 +259,67 @@ index 5b404ce36244f880b01953a37553cd63bdbf205e..77ac4c841e81c59b2a84ace59604da73
  		mounts = append(mounts, specs.Mount{
  			Source:      mp.Source,
  			Destination: mp.Destination,
+@@ -123,10 +134,11 @@ func setupMounts(ctx context.Context, c *Container, s *specs.Spec) error {
+ 
+ 	// if disable hostfiles, we will not mount the hosts files into container.
+ 	if !c.Config.DisableNetworkFiles {
+-		mounts = append(mounts, generateNetworkMounts(c)...)
++		mounts = append(mounts, generateNetworkMounts(files)...)
+ 	}
+ 
+ 	s.Mounts = sortMounts(mounts)
++	specWrapper.networkFiles = files
+ 
+ 	if c.HostConfig.Privileged {
+ 		for i := range s.Mounts {
+@@ -145,7 +157,7 @@ func setupMounts(ctx context.Context, c *Container, s *specs.Spec) error {
+ }
+ 
+ // generateNetworkMounts will generate network mounts.
+-func generateNetworkMounts(c *Container) []specs.Mount {
++func generateNetworkMounts(files networkFilePaths) []specs.Mount {
+ 	mounts := make([]specs.Mount, 0)
+ 
+ 	fileBinds := []struct {
+@@ -153,9 +165,9 @@ func generateNetworkMounts(c *Container) []specs.Mount {
+ 		Source string
+ 		Dest   string
+ 	}{
+-		{"HostnamePath", c.HostnamePath, "/etc/hostname"},
+-		{"HostsPath", c.HostsPath, "/etc/hosts"},
+-		{"ResolvConfPath", c.ResolvConfPath, "/etc/resolv.conf"},
++		{"HostnamePath", files.hostname, "/etc/hostname"},
++		{"HostsPath", files.hosts, "/etc/hosts"},
++		{"ResolvConfPath", files.resolvConf, "/etc/resolv.conf"},
+ 	}
+ 
+ 	for _, bind := range fileBinds {
+@@ -178,19 +190,19 @@ func generateNetworkMounts(c *Container) []specs.Mount {
+ }
+ 
+ // trySetupNetworkMount will try to set network mount.
+-func trySetupNetworkMount(mount *types.MountPoint, c *Container) bool {
++func trySetupNetworkMount(mount *types.MountPoint, files *networkFilePaths) bool {
+ 	if mount.Destination == "/etc/hostname" {
+-		c.HostnamePath = mount.Source
++		files.hostname = mount.Source
+ 		return true
+ 	}
+ 
+ 	if mount.Destination == "/etc/hosts" {
+-		c.HostsPath = mount.Source
++		files.hosts = mount.Source
+ 		return true
+ 	}
+ 
+ 	if mount.Destination == "/etc/resolv.conf" {
+-		c.ResolvConfPath = mount.Source
++		files.resolvConf = mount.Source
+ 		return true
+ 	}
+ 
 diff --git a/daemon/mgr/spec_process.go b/daemon/mgr/spec_process.go
-index e2308f6345f87c2cd8f7f8975ecf55c5056be76b..c4ea16cb00dcb01b123e4ec190a045b4b12dc2bf 100644
+index e2308f6345f87c2cd8f7f8975ecf55c5056be76b..c4ea16cb00dcb01b123e4ec190a045b4b12dc2bf 100755
 --- a/daemon/mgr/spec_process.go
 +++ b/daemon/mgr/spec_process.go
 @@ -24,7 +24,7 @@ func setupProcess(ctx context.Context, c *Container, s *specs.Spec) error {
@@ -421,4 +548,3 @@ index 0000000000000000000000000000000000000000..f551709f990b323e0efb921d37814ef2
 +	return s
 +
 +}
-

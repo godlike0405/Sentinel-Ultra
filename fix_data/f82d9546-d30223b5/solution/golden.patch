@@ -1,0 +1,852 @@
+diff --git a/app/EXO/EXO/ContentView.swift b/app/EXO/EXO/ContentView.swift
+index d00bbf5c..688fba5b 100644
+--- a/app/EXO/EXO/ContentView.swift
++++ b/app/EXO/EXO/ContentView.swift
+@@ -563,21 +563,45 @@ struct ContentView: View {
+     }
+ 
+     private var rdmaStatusView: some View {
+-        let rdma = networkStatusService.status.rdmaStatus
++        let rdmaStatuses = stateService.latestSnapshot?.nodeRdmaCtl ?? [:]
++        let localNodeId = stateService.localNodeId
++        let nodeProfiles = stateService.latestSnapshot?.nodeProfiles ?? [:]
++        let localDevices = networkStatusService.status.localRdmaDevices
++        let localPorts = networkStatusService.status.localRdmaActivePorts
++
+         return VStack(alignment: .leading, spacing: 1) {
+-            Text("RDMA: \(rdmaStatusText(rdma))")
+-                .font(.caption2)
+-                .foregroundColor(rdmaStatusColor(rdma))
+-            if !rdma.devices.isEmpty {
+-                Text("  Devices: \(rdma.devices.joined(separator: ", "))")
++            if rdmaStatuses.isEmpty {
++                Text("Cluster RDMA: No data")
++                    .font(.caption2)
++                    .foregroundColor(.secondary)
++            } else {
++                Text("Cluster RDMA Status:")
++                    .font(.caption2)
++                    .foregroundColor(.secondary)
++                ForEach(Array(rdmaStatuses.keys.sorted()), id: \.self) { nodeId in
++                    if let status = rdmaStatuses[nodeId] {
++                        let nodeName =
++                            nodeProfiles[nodeId]?.friendlyName ?? String(nodeId.prefix(8))
++                        let isLocal = nodeId == localNodeId
++                        let prefix = isLocal ? "  \(nodeName) (local):" : "  \(nodeName):"
++                        let statusText = status.enabled ? "Enabled" : "Disabled"
++                        let color: Color = status.enabled ? .green : .orange
++                        Text("\(prefix) \(statusText)")
++                            .font(.caption2)
++                            .foregroundColor(color)
++                    }
++                }
++            }
++            if !localDevices.isEmpty {
++                Text("  Local Devices: \(localDevices.joined(separator: ", "))")
+                     .font(.caption2)
+                     .foregroundColor(.secondary)
+             }
+-            if !rdma.activePorts.isEmpty {
+-                Text("  Active Ports:")
++            if !localPorts.isEmpty {
++                Text("  Local Active Ports:")
+                     .font(.caption2)
+                     .foregroundColor(.secondary)
+-                ForEach(rdma.activePorts, id: \.device) { port in
++                ForEach(localPorts, id: \.device) { port in
+                     Text("    \(port.device) port \(port.port): \(port.state)")
+                         .font(.caption2)
+                         .foregroundColor(.green)
+@@ -586,28 +610,6 @@ struct ContentView: View {
+         }
+     }
+ 
+-    private func rdmaStatusText(_ rdma: RDMAStatus) -> String {
+-        switch rdma.rdmaCtlEnabled {
+-        case .some(true):
+-            return "Enabled"
+-        case .some(false):
+-            return "Disabled"
+-        case nil:
+-            return rdma.devices.isEmpty ? "Not Available" : "Available"
+-        }
+-    }
+-
+-    private func rdmaStatusColor(_ rdma: RDMAStatus) -> Color {
+-        switch rdma.rdmaCtlEnabled {
+-        case .some(true):
+-            return .green
+-        case .some(false):
+-            return .orange
+-        case nil:
+-            return rdma.devices.isEmpty ? .secondary : .green
+-        }
+-    }
+-
+     private var sendBugReportButton: some View {
+         VStack(alignment: .leading, spacing: 4) {
+             Button {
+diff --git a/app/EXO/EXO/Models/ClusterState.swift b/app/EXO/EXO/Models/ClusterState.swift
+index ee4c3816..1272eedd 100644
+--- a/app/EXO/EXO/Models/ClusterState.swift
++++ b/app/EXO/EXO/Models/ClusterState.swift
+@@ -15,6 +15,7 @@ struct ClusterState: Decodable {
+     let nodeMemory: [String: MemoryInfo]
+     let nodeSystem: [String: SystemInfo]
+     let nodeThunderboltBridge: [String: ThunderboltBridgeStatus]
++    let nodeRdmaCtl: [String: NodeRdmaCtlStatus]
+ 
+     /// Computed property for backwards compatibility - merges granular state into NodeProfile
+     var nodeProfiles: [String: NodeProfile] {
+@@ -65,6 +66,10 @@ struct ClusterState: Decodable {
+             try container.decodeIfPresent(
+                 [String: ThunderboltBridgeStatus].self, forKey: .nodeThunderboltBridge
+             ) ?? [:]
++        self.nodeRdmaCtl =
++            try container.decodeIfPresent(
++                [String: NodeRdmaCtlStatus].self, forKey: .nodeRdmaCtl
++            ) ?? [:]
+     }
+ 
+     private enum CodingKeys: String, CodingKey {
+@@ -78,6 +83,7 @@ struct ClusterState: Decodable {
+         case nodeMemory
+         case nodeSystem
+         case nodeThunderboltBridge
++        case nodeRdmaCtl
+     }
+ }
+ 
+@@ -159,6 +165,10 @@ struct ThunderboltBridgeStatus: Decodable {
+     let serviceName: String?
+ }
+ 
++struct NodeRdmaCtlStatus: Decodable {
++    let enabled: Bool
++}
++
+ struct MemoryInfo: Decodable {
+     let ramTotal: MemoryValue?
+     let ramAvailable: MemoryValue?
+diff --git a/app/EXO/EXO/Services/NetworkStatusService.swift b/app/EXO/EXO/Services/NetworkStatusService.swift
+index 5d80ea39..e6c21924 100644
+--- a/app/EXO/EXO/Services/NetworkStatusService.swift
++++ b/app/EXO/EXO/Services/NetworkStatusService.swift
+@@ -35,28 +35,18 @@ struct NetworkStatus: Equatable {
+     let thunderboltBridgeState: ThunderboltState?
+     let bridgeInactive: Bool?
+     let interfaceStatuses: [InterfaceIpStatus]
+-    let rdmaStatus: RDMAStatus
++    let localRdmaDevices: [String]
++    let localRdmaActivePorts: [RDMAPort]
+ 
+     static let empty = NetworkStatus(
+         thunderboltBridgeState: nil,
+         bridgeInactive: nil,
+         interfaceStatuses: [],
+-        rdmaStatus: .empty
++        localRdmaDevices: [],
++        localRdmaActivePorts: []
+     )
+ }
+ 
+-struct RDMAStatus: Equatable {
+-    let rdmaCtlEnabled: Bool?
+-    let devices: [String]
+-    let activePorts: [RDMAPort]
+-
+-    var isAvailable: Bool {
+-        rdmaCtlEnabled == true || !devices.isEmpty
+-    }
+-
+-    static let empty = RDMAStatus(rdmaCtlEnabled: nil, devices: [], activePorts: [])
+-}
+-
+ struct RDMAPort: Equatable {
+     let device: String
+     let port: String
+@@ -80,31 +70,11 @@ private struct NetworkStatusFetcher {
+             thunderboltBridgeState: readThunderboltBridgeState(),
+             bridgeInactive: readBridgeInactive(),
+             interfaceStatuses: readInterfaceStatuses(),
+-            rdmaStatus: readRDMAStatus()
++            localRdmaDevices: readRDMADevices(),
++            localRdmaActivePorts: readRDMAActivePorts()
+         )
+     }
+ 
+-    private func readRDMAStatus() -> RDMAStatus {
+-        let rdmaCtlEnabled = readRDMACtlEnabled()
+-        let devices = readRDMADevices()
+-        let activePorts = readRDMAActivePorts()
+-        return RDMAStatus(
+-            rdmaCtlEnabled: rdmaCtlEnabled, devices: devices, activePorts: activePorts)
+-    }
+-
+-    private func readRDMACtlEnabled() -> Bool? {
+-        let result = runCommand(["rdma_ctl", "status"])
+-        guard result.exitCode == 0 else { return nil }
+-        let output = result.output.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+-        if output.contains("enabled") {
+-            return true
+-        }
+-        if output.contains("disabled") {
+-            return false
+-        }
+-        return nil
+-    }
+-
+     private func readRDMADevices() -> [String] {
+         let result = runCommand(["ibv_devices"])
+         guard result.exitCode == 0 else { return [] }
+diff --git a/dashboard/src/lib/components/ModelCard.svelte b/dashboard/src/lib/components/ModelCard.svelte
+index 6fef645f..9046d2a6 100644
+--- a/dashboard/src/lib/components/ModelCard.svelte
++++ b/dashboard/src/lib/components/ModelCard.svelte
+@@ -422,9 +422,16 @@
+     const bToACandidates: Array<{ ip: string; iface: string | null }> = [];
+ 
+     for (const edge of topology.edges) {
+-      const ip = edge.sendBackIp || "?";
+-      const iface =
+-        edge.sendBackInterface || getInterfaceForIp(edge.source, ip);
++      let ip: string;
++      let iface: string | null;
++
++      if (edge.sourceRdmaIface || edge.sinkRdmaIface) {
++        ip = "RDMA";
++        iface = `${edge.sourceRdmaIface || "?"} \u2192 ${edge.sinkRdmaIface || "?"}`;
++      } else {
++        ip = edge.sendBackIp || "?";
++        iface = edge.sendBackInterface || getInterfaceForIp(edge.source, ip);
++      }
+ 
+       if (edge.source === nodeId1 && edge.target === nodeId2) {
+         aToBCandidates.push({ ip, iface });
+diff --git a/dashboard/src/lib/components/TopologyGraph.svelte b/dashboard/src/lib/components/TopologyGraph.svelte
+index c0acc39d..2e77050d 100644
+--- a/dashboard/src/lib/components/TopologyGraph.svelte
++++ b/dashboard/src/lib/components/TopologyGraph.svelte
+@@ -6,6 +6,7 @@
+     isTopologyMinimized,
+     debugMode,
+     nodeThunderboltBridge,
++    nodeRdmaCtl,
+     type NodeInfo,
+   } from "$lib/stores/app.svelte";
+ 
+@@ -31,6 +32,7 @@
+   const data = $derived(topologyData());
+   const debugEnabled = $derived(debugMode());
+   const tbBridgeData = $derived(nodeThunderboltBridge());
++  const rdmaCtlData = $derived(nodeRdmaCtl());
+ 
+   function getNodeLabel(nodeId: string): string {
+     const node = data?.nodes?.[nodeId];
+@@ -333,14 +335,27 @@
+       if (edge.source === a) entry.aToB = true;
+       else entry.bToA = true;
+ 
+-      const ip = edge.sendBackIp || "?";
+-      const ifaceInfo = getInterfaceLabel(edge.source, ip);
++      let ip: string;
++      let ifaceLabel: string;
++      let missingIface: boolean;
++
++      if (edge.sourceRdmaIface || edge.sinkRdmaIface) {
++        ip = "RDMA";
++        ifaceLabel = `${edge.sourceRdmaIface || "?"} \u2192 ${edge.sinkRdmaIface || "?"}`;
++        missingIface = false;
++      } else {
++        ip = edge.sendBackIp || "?";
++        const ifaceInfo = getInterfaceLabel(edge.source, ip);
++        ifaceLabel = ifaceInfo.label;
++        missingIface = ifaceInfo.missing;
++      }
++
+       entry.connections.push({
+         from: edge.source,
+         to: edge.target,
+         ip,
+-        ifaceLabel: ifaceInfo.label,
+-        missingIface: ifaceInfo.missing,
++        ifaceLabel,
++        missingIface,
+       });
+       pairMap.set(key, entry);
+     });
+@@ -1120,15 +1135,17 @@
+           .text(` (${ramUsagePercent.toFixed(0)}%)`);
+       }
+ 
+-      // Debug mode: Show TB bridge status
++      // Debug mode: Show TB bridge and RDMA status
+       if (debugEnabled) {
++        let debugLabelY =
++          nodeInfo.y +
++          iconBaseHeight / 2 +
++          (showFullLabels ? 32 : showCompactLabels ? 26 : 22);
++        const debugFontSize = showFullLabels ? 9 : 7;
++        const debugLineHeight = showFullLabels ? 11 : 9;
++
+         const tbStatus = tbBridgeData[nodeInfo.id];
+         if (tbStatus) {
+-          const tbY =
+-            nodeInfo.y +
+-            iconBaseHeight / 2 +
+-            (showFullLabels ? 32 : showCompactLabels ? 26 : 22);
+-          const tbFontSize = showFullLabels ? 9 : 7;
+           const tbColor = tbStatus.enabled
+             ? "rgba(234,179,8,0.9)"
+             : "rgba(100,100,100,0.7)";
+@@ -1136,12 +1153,30 @@
+           nodeG
+             .append("text")
+             .attr("x", nodeInfo.x)
+-            .attr("y", tbY)
++            .attr("y", debugLabelY)
+             .attr("text-anchor", "middle")
+             .attr("fill", tbColor)
+-            .attr("font-size", tbFontSize)
++            .attr("font-size", debugFontSize)
+             .attr("font-family", "SF Mono, Monaco, monospace")
+             .text(tbText);
++          debugLabelY += debugLineHeight;
++        }
++
++        const rdmaStatus = rdmaCtlData[nodeInfo.id];
++        if (rdmaStatus !== undefined) {
++          const rdmaColor = rdmaStatus.enabled
++            ? "rgba(74,222,128,0.9)"
++            : "rgba(100,100,100,0.7)";
++          const rdmaText = rdmaStatus.enabled ? "RDMA:ON" : "RDMA:OFF";
++          nodeG
++            .append("text")
++            .attr("x", nodeInfo.x)
++            .attr("y", debugLabelY)
++            .attr("text-anchor", "middle")
++            .attr("fill", rdmaColor)
++            .attr("font-size", debugFontSize)
++            .attr("font-family", "SF Mono, Monaco, monospace")
++            .text(rdmaText);
+         }
+       }
+     });
+diff --git a/dashboard/src/lib/stores/app.svelte.ts b/dashboard/src/lib/stores/app.svelte.ts
+index 341ea384..d12d96e4 100644
+--- a/dashboard/src/lib/stores/app.svelte.ts
++++ b/dashboard/src/lib/stores/app.svelte.ts
+@@ -56,6 +56,8 @@ export interface TopologyEdge {
+   target: string;
+   sendBackIp?: string;
+   sendBackInterface?: string;
++  sourceRdmaIface?: string;
++  sinkRdmaIface?: string;
+ }
+ 
+ export interface TopologyData {
+@@ -225,6 +227,19 @@ interface RawStateResponse {
+   nodeMemory?: Record<string, RawMemoryUsage>;
+   nodeSystem?: Record<string, RawSystemPerformanceProfile>;
+   nodeNetwork?: Record<string, RawNodeNetworkInfo>;
++  // Thunderbolt identifiers per node
++  nodeThunderbolt?: Record<
++    string,
++    {
++      interfaces: Array<{
++        rdmaInterface: string;
++        domainUuid: string;
++        linkSpeed: string;
++      }>;
++    }
++  >;
++  // RDMA ctl status per node
++  nodeRdmaCtl?: Record<string, { enabled: boolean }>;
+   // Thunderbolt bridge status per node
+   nodeThunderboltBridge?: Record<
+     string,
+@@ -437,6 +452,8 @@ function transformTopology(
+         if (!Array.isArray(edgeList)) continue;
+         for (const edge of edgeList) {
+           let sendBackIp: string | undefined;
++          let sourceRdmaIface: string | undefined;
++          let sinkRdmaIface: string | undefined;
+           if (edge && typeof edge === "object" && "sinkMultiaddr" in edge) {
+             const multiaddr = edge.sinkMultiaddr;
+             if (multiaddr) {
+@@ -444,10 +461,23 @@ function transformTopology(
+                 multiaddr.ip_address ||
+                 extractIpFromMultiaddr(multiaddr.address);
+             }
++          } else if (
++            edge &&
++            typeof edge === "object" &&
++            "sourceRdmaIface" in edge
++          ) {
++            sourceRdmaIface = edge.sourceRdmaIface;
++            sinkRdmaIface = edge.sinkRdmaIface;
+           }
+ 
+           if (nodes[source] && nodes[sink] && source !== sink) {
+-            edges.push({ source, target: sink, sendBackIp });
++            edges.push({
++              source,
++              target: sink,
++              sendBackIp,
++              sourceRdmaIface,
++              sinkRdmaIface,
++            });
+           }
+         }
+       }
+@@ -496,6 +526,19 @@ class AppStore {
+   previewNodeFilter = $state<Set<string>>(new Set());
+   lastUpdate = $state<number | null>(null);
+   thunderboltBridgeCycles = $state<string[][]>([]);
++  nodeThunderbolt = $state<
++    Record<
++      string,
++      {
++        interfaces: Array<{
++          rdmaInterface: string;
++          domainUuid: string;
++          linkSpeed: string;
++        }>;
++      }
++    >
++  >({});
++  nodeRdmaCtl = $state<Record<string, { enabled: boolean }>>({});
+   nodeThunderboltBridge = $state<
+     Record<
+       string,
+@@ -1206,6 +1249,10 @@ class AppStore {
+       if (data.downloads) {
+         this.downloads = data.downloads;
+       }
++      // Thunderbolt identifiers per node
++      this.nodeThunderbolt = data.nodeThunderbolt ?? {};
++      // RDMA ctl status per node
++      this.nodeRdmaCtl = data.nodeRdmaCtl ?? {};
+       // Thunderbolt bridge cycles
+       this.thunderboltBridgeCycles = data.thunderboltBridgeCycles ?? [];
+       // Thunderbolt bridge status per node
+@@ -3038,7 +3085,9 @@ export const setChatSidebarVisible = (visible: boolean) =>
+   appStore.setChatSidebarVisible(visible);
+ export const refreshState = () => appStore.fetchState();
+ 
+-// Thunderbolt bridge status
++// Thunderbolt & RDMA status
++export const nodeThunderbolt = () => appStore.nodeThunderbolt;
++export const nodeRdmaCtl = () => appStore.nodeRdmaCtl;
+ export const thunderboltBridgeCycles = () => appStore.thunderboltBridgeCycles;
+ export const nodeThunderboltBridge = () => appStore.nodeThunderboltBridge;
+ 
+diff --git a/dashboard/src/routes/+page.svelte b/dashboard/src/routes/+page.svelte
+index 39637661..920b0d79 100644
+--- a/dashboard/src/routes/+page.svelte
++++ b/dashboard/src/routes/+page.svelte
+@@ -42,6 +42,8 @@
+     toggleTopologyOnlyMode,
+     chatSidebarVisible,
+     toggleChatSidebarVisible,
++    nodeThunderbolt,
++    nodeRdmaCtl,
+     thunderboltBridgeCycles,
+     nodeThunderboltBridge,
+     type DownloadProgress,
+@@ -67,8 +69,26 @@
+   const sidebarVisible = $derived(chatSidebarVisible());
+   const tbBridgeCycles = $derived(thunderboltBridgeCycles());
+   const tbBridgeData = $derived(nodeThunderboltBridge());
++  const tbIdentifiers = $derived(nodeThunderbolt());
++  const rdmaCtlData = $derived(nodeRdmaCtl());
+   const nodeFilter = $derived(previewNodeFilter());
+ 
++  // Detect TB5 nodes where RDMA is not enabled
++  const tb5WithoutRdma = $derived.by(() => {
++    const rdmaCtl = rdmaCtlData;
++    if (!rdmaCtl) return false;
++    const ids = tbIdentifiers;
++    if (!ids) return false;
++    // Find nodes with TB5 hardware (any TB interface)
++    const tb5NodeIds = Object.entries(ids)
++      .filter(([_, node]) => node.interfaces.length > 0)
++      .map(([id]) => id);
++    if (tb5NodeIds.length < 2) return false;
++    // At least one TB5 node has RDMA disabled
++    return tb5NodeIds.some((id) => rdmaCtl[id]?.enabled !== true);
++  });
++  let tb5InfoDismissed = $state(false);
++
+   // Helper to get friendly node name from node ID
+   function getNodeName(nodeId: string): string {
+     const node = data?.nodes?.[nodeId];
+@@ -1843,6 +1863,53 @@
+             </div>
+           {/if}
+ 
++          <!-- TB5 RDMA Available Info -->
++          {#if tb5WithoutRdma && !tb5InfoDismissed}
++            <div
++              class="absolute left-4 flex items-center gap-2 px-3 py-2 rounded border border-blue-400/50 bg-blue-400/10 backdrop-blur-sm"
++              class:top-16={tbBridgeCycles.length > 0}
++              class:top-4={tbBridgeCycles.length === 0}
++              role="status"
++            >
++              <svg
++                class="w-5 h-5 text-blue-400 flex-shrink-0"
++                fill="none"
++                viewBox="0 0 24 24"
++                stroke="currentColor"
++                stroke-width="2"
++              >
++                <path
++                  stroke-linecap="round"
++                  stroke-linejoin="round"
++                  d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
++                />
++              </svg>
++              <span class="text-sm font-mono text-blue-200">
++                RDMA AVAILABLE
++              </span>
++              <button
++                type="button"
++                onclick={() => (tb5InfoDismissed = true)}
++                class="ml-1 text-blue-300/60 hover:text-blue-200 transition-colors cursor-pointer"
++                title="Dismiss"
++              >
++                <svg
++                  class="w-4 h-4"
++                  fill="none"
++                  viewBox="0 0 24 24"
++                  stroke="currentColor"
++                  stroke-width="2"
++                >
++                  <path
++                    stroke-linecap="round"
++                    stroke-linejoin="round"
++                    d="M6 18L18 6M6 6l12 12"
++                  />
++                </svg>
++              </button>
++            </div>
++          {/if}
++
+           <!-- Exit topology-only mode button -->
+           <button
+             type="button"
+@@ -1962,6 +2029,86 @@
+               </div>
+             {/if}
+ 
++            <!-- TB5 RDMA Available Info -->
++            {#if tb5WithoutRdma && !tb5InfoDismissed}
++              <div
++                class="absolute left-4 group"
++                class:top-16={tbBridgeCycles.length > 0}
++                class:top-4={tbBridgeCycles.length === 0}
++                role="status"
++              >
++                <div
++                  class="flex items-center gap-2 px-3 py-2 rounded border border-blue-400/50 bg-blue-400/10 backdrop-blur-sm"
++                >
++                  <svg
++                    class="w-5 h-5 text-blue-400 flex-shrink-0"
++                    fill="none"
++                    viewBox="0 0 24 24"
++                    stroke="currentColor"
++                    stroke-width="2"
++                  >
++                    <path
++                      stroke-linecap="round"
++                      stroke-linejoin="round"
++                      d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
++                    />
++                  </svg>
++                  <span class="text-sm font-mono text-blue-200">
++                    RDMA AVAILABLE
++                  </span>
++                  <button
++                    type="button"
++                    onclick={() => (tb5InfoDismissed = true)}
++                    class="ml-1 text-blue-300/60 hover:text-blue-200 transition-colors cursor-pointer"
++                    title="Dismiss"
++                  >
++                    <svg
++                      class="w-4 h-4"
++                      fill="none"
++                      viewBox="0 0 24 24"
++                      stroke="currentColor"
++                      stroke-width="2"
++                    >
++                      <path
++                        stroke-linecap="round"
++                        stroke-linejoin="round"
++                        d="M6 18L18 6M6 6l12 12"
++                      />
++                    </svg>
++                  </button>
++                </div>
++
++                <!-- Tooltip on hover -->
++                <div
++                  class="absolute top-full left-0 mt-2 w-80 p-3 rounded border border-blue-400/30 bg-exo-dark-gray/95 backdrop-blur-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 shadow-lg"
++                >
++                  <p class="text-xs text-white/80 mb-2">
++                    Thunderbolt 5 hardware detected on multiple nodes. Enable
++                    RDMA for significantly faster inter-node communication.
++                  </p>
++                  <p class="text-xs text-white/60 mb-1.5">
++                    <span class="text-blue-300">To enable:</span>
++                  </p>
++                  <ol
++                    class="text-xs text-white/60 list-decimal list-inside space-y-0.5 mb-1.5"
++                  >
++                    <li>Connect nodes with TB5 cables</li>
++                    <li>Boot to Recovery (hold power 10s → Options)</li>
++                    <li>
++                      Run
++                      <code class="text-blue-300 bg-blue-400/10 px-1 rounded"
++                        >rdma_ctl enable</code
++                      >
++                    </li>
++                    <li>Reboot</li>
++                  </ol>
++                  <p class="text-xs text-white/40">
++                    Requires macOS 26.2+, TB5 cables, and matching OS versions.
++                  </p>
++                </div>
++              </div>
++            {/if}
++
+             <!-- Node Filter Indicator (top-right corner) -->
+             {#if isFilterActive()}
+               <button
+@@ -2840,6 +2987,33 @@
+                     >
+                   </div>
+                 {/if}
++
++                <!-- TB5 RDMA Available (compact) -->
++                {#if tb5WithoutRdma && !tb5InfoDismissed}
++                  <div
++                    class="absolute left-2 flex items-center gap-1.5 px-2 py-1 rounded border border-blue-400/50 bg-blue-400/10 backdrop-blur-sm"
++                    class:top-10={tbBridgeCycles.length > 0}
++                    class:top-2={tbBridgeCycles.length === 0}
++                    title="Thunderbolt 5 detected — RDMA can be enabled for better performance"
++                  >
++                    <svg
++                      class="w-3.5 h-3.5 text-blue-400"
++                      fill="none"
++                      viewBox="0 0 24 24"
++                      stroke="currentColor"
++                      stroke-width="2"
++                    >
++                      <path
++                        stroke-linecap="round"
++                        stroke-linejoin="round"
++                        d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
++                      />
++                    </svg>
++                    <span class="text-[10px] font-mono text-blue-200"
++                      >RDMA AVAILABLE</span
++                    >
++                  </div>
++                {/if}
+               </div>
+             </button>
+ 
+diff --git a/src/exo/shared/apply.py b/src/exo/shared/apply.py
+index 8c2304fe..32801172 100644
+--- a/src/exo/shared/apply.py
++++ b/src/exo/shared/apply.py
+@@ -31,6 +31,7 @@ from exo.shared.types.events import (
+ from exo.shared.types.profiling import (
+     NodeIdentity,
+     NodeNetworkInfo,
++    NodeRdmaCtlStatus,
+     NodeThunderboltInfo,
+     ThunderboltBridgeStatus,
+ )
+@@ -48,6 +49,7 @@ from exo.utils.info_gatherer.info_gatherer import (
+     MiscData,
+     NodeConfig,
+     NodeNetworkInterfaces,
++    RdmaCtlStatus,
+     StaticNodeInformation,
+     ThunderboltBridgeInfo,
+ )
+@@ -239,6 +241,9 @@ def apply_node_timed_out(event: NodeTimedOut, state: State) -> State:
+         for key, value in state.node_thunderbolt_bridge.items()
+         if key != event.node_id
+     }
++    node_rdma_ctl = {
++        key: value for key, value in state.node_rdma_ctl.items() if key != event.node_id
++    }
+     # Only recompute cycles if the leaving node had TB bridge enabled
+     leaving_node_status = state.node_thunderbolt_bridge.get(event.node_id)
+     leaving_node_had_tb_enabled = (
+@@ -260,6 +265,7 @@ def apply_node_timed_out(event: NodeTimedOut, state: State) -> State:
+             "node_network": node_network,
+             "node_thunderbolt": node_thunderbolt,
+             "node_thunderbolt_bridge": node_thunderbolt_bridge,
++            "node_rdma_ctl": node_rdma_ctl,
+             "thunderbolt_bridge_cycles": thunderbolt_bridge_cycles,
+         }
+     )
+@@ -354,6 +360,11 @@ def apply_node_gathered_info(event: NodeGatheredInfo, state: State) -> State:
+                         new_tb_bridge, state.node_network
+                     )
+                 )
++        case RdmaCtlStatus():
++            update["node_rdma_ctl"] = {
++                **state.node_rdma_ctl,
++                event.node_id: NodeRdmaCtlStatus(enabled=info.enabled),
++            }
+ 
+     return state.model_copy(update=update)
+ 
+diff --git a/src/exo/shared/types/profiling.py b/src/exo/shared/types/profiling.py
+index ae78cd22..0b325ef5 100644
+--- a/src/exo/shared/types/profiling.py
++++ b/src/exo/shared/types/profiling.py
+@@ -77,6 +77,12 @@ class NodeThunderboltInfo(CamelCaseModel):
+     interfaces: Sequence[ThunderboltIdentifier] = []
+ 
+ 
++class NodeRdmaCtlStatus(CamelCaseModel):
++    """Whether RDMA is enabled on this node (via rdma_ctl)."""
++
++    enabled: bool
++
++
+ class ThunderboltBridgeStatus(CamelCaseModel):
+     """Whether the Thunderbolt Bridge network service is enabled on this node."""
+ 
+diff --git a/src/exo/shared/types/state.py b/src/exo/shared/types/state.py
+index 5bce60bb..38922e8e 100644
+--- a/src/exo/shared/types/state.py
++++ b/src/exo/shared/types/state.py
+@@ -11,6 +11,7 @@ from exo.shared.types.profiling import (
+     MemoryUsage,
+     NodeIdentity,
+     NodeNetworkInfo,
++    NodeRdmaCtlStatus,
+     NodeThunderboltInfo,
+     SystemPerformanceProfile,
+     ThunderboltBridgeStatus,
+@@ -53,6 +54,7 @@ class State(CamelCaseModel):
+     node_network: Mapping[NodeId, NodeNetworkInfo] = {}
+     node_thunderbolt: Mapping[NodeId, NodeThunderboltInfo] = {}
+     node_thunderbolt_bridge: Mapping[NodeId, ThunderboltBridgeStatus] = {}
++    node_rdma_ctl: Mapping[NodeId, NodeRdmaCtlStatus] = {}
+ 
+     # Detected cycles where all nodes have Thunderbolt bridge enabled (>2 nodes)
+     thunderbolt_bridge_cycles: Sequence[Sequence[NodeId]] = []
+diff --git a/src/exo/shared/types/thunderbolt.py b/src/exo/shared/types/thunderbolt.py
+index 0df1ec2a..809cf9fa 100644
+--- a/src/exo/shared/types/thunderbolt.py
++++ b/src/exo/shared/types/thunderbolt.py
+@@ -12,6 +12,7 @@ class ThunderboltConnection(CamelCaseModel):
+ class ThunderboltIdentifier(CamelCaseModel):
+     rdma_interface: str
+     domain_uuid: str
++    link_speed: str = ""
+ 
+ 
+ ## Intentionally minimal, only collecting data we care about - there's a lot more
+@@ -19,6 +20,7 @@ class ThunderboltIdentifier(CamelCaseModel):
+ 
+ class _ReceptacleTag(BaseModel, extra="ignore"):
+     receptacle_id_key: str | None = None
++    current_speed_key: str | None = None
+ 
+ 
+ class _ConnectivityItem(BaseModel, extra="ignore"):
+@@ -42,7 +44,9 @@ class ThunderboltConnectivityData(BaseModel, extra="ignore"):
+         # if tag not in ifaces: return None
+         iface = f"rdma_{ifaces[tag]}"
+         return ThunderboltIdentifier(
+-            rdma_interface=iface, domain_uuid=self.domain_uuid_key
++            rdma_interface=iface,
++            domain_uuid=self.domain_uuid_key,
++            link_speed=self.receptacle_1_tag.current_speed_key or "",
+         )
+ 
+     def conn(self) -> ThunderboltConnection | None:
+diff --git a/src/exo/utils/info_gatherer/info_gatherer.py b/src/exo/utils/info_gatherer/info_gatherer.py
+index 9fdfcdb3..53f1a392 100644
+--- a/src/exo/utils/info_gatherer/info_gatherer.py
++++ b/src/exo/utils/info_gatherer/info_gatherer.py
+@@ -196,6 +196,28 @@ class MacThunderboltConnections(TaggedModel):
+     conns: Sequence[ThunderboltConnection]
+ 
+ 
++class RdmaCtlStatus(TaggedModel):
++    enabled: bool
++
++    @classmethod
++    async def gather(cls) -> Self | None:
++        if not IS_DARWIN or shutil.which("rdma_ctl") is None:
++            return None
++        try:
++            with anyio.fail_after(5):
++                proc = await anyio.run_process(["rdma_ctl", "status"], check=False)
++        except (TimeoutError, OSError):
++            return None
++        if proc.returncode != 0:
++            return None
++        output = proc.stdout.decode("utf-8").lower().strip()
++        if "enabled" in output:
++            return cls(enabled=True)
++        if "disabled" in output:
++            return cls(enabled=False)
++        return None
++
++
+ class ThunderboltBridgeInfo(TaggedModel):
+     status: ThunderboltBridgeStatus
+ 
+@@ -310,6 +332,7 @@ GatheredInfo = (
+     | NodeNetworkInterfaces
+     | MacThunderboltIdentifiers
+     | MacThunderboltConnections
++    | RdmaCtlStatus
+     | ThunderboltBridgeInfo
+     | NodeConfig
+     | MiscData
+@@ -326,6 +349,7 @@ class InfoGatherer:
+     memory_poll_rate: float | None = None if IS_DARWIN else 1
+     macmon_interval: float | None = 1 if IS_DARWIN else None
+     thunderbolt_bridge_poll_interval: float | None = 10 if IS_DARWIN else None
++    rdma_ctl_poll_interval: float | None = 10 if IS_DARWIN else None
+     _tg: TaskGroup = field(init=False, default_factory=create_task_group)
+ 
+     async def run(self):
+@@ -335,6 +359,7 @@ class InfoGatherer:
+                     tg.start_soon(self._monitor_macmon, macmon_path)
+                 tg.start_soon(self._monitor_system_profiler_thunderbolt_data)
+                 tg.start_soon(self._monitor_thunderbolt_bridge_status)
++                tg.start_soon(self._monitor_rdma_ctl_status)
+             tg.start_soon(self._watch_system_info)
+             tg.start_soon(self._monitor_memory_usage)
+             tg.start_soon(self._monitor_misc)
+@@ -420,6 +445,18 @@ class InfoGatherer:
+                 logger.warning(f"Error gathering Thunderbolt Bridge status: {e}")
+             await anyio.sleep(self.thunderbolt_bridge_poll_interval)
+ 
++    async def _monitor_rdma_ctl_status(self):
++        if self.rdma_ctl_poll_interval is None:
++            return
++        while True:
++            try:
++                curr = await RdmaCtlStatus.gather()
++                if curr is not None:
++                    await self.info_sender.send(curr)
++            except Exception as e:
++                logger.warning(f"Error gathering RDMA ctl status: {e}")
++            await anyio.sleep(self.rdma_ctl_poll_interval)
++
+     async def _monitor_macmon(self, macmon_path: str):
+         if self.macmon_interval is None:
+             return

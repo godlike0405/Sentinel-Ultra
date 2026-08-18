@@ -1,0 +1,571 @@
+diff --git a/tests/core/test_otel_instrumentation.py b/tests/core/test_otel_instrumentation.py
+new file mode 100644
+index 0000000..39490c8
+--- /dev/null
++++ b/tests/core/test_otel_instrumentation.py
+@@ -0,0 +1,565 @@
++"""Behavioral coverage for MCP-level OpenTelemetry integration."""
++
++from __future__ import annotations
++
++import json
++import os
++import re
++import subprocess
++import sys
++from pathlib import Path
++from types import SimpleNamespace
++from typing import Any
++
++import pytest
++from opentelemetry.sdk.trace import TracerProvider
++from opentelemetry.sdk.trace.export import SimpleSpanProcessor
++from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
++from opentelemetry.trace import StatusCode
++
++import golf
++import golf.telemetry as telemetry
++from golf.telemetry import instrumentation
++
++
++_REQUIRED_EXPORTS = (
++    "get_provider",
++    "OpenTelemetryMiddleware",
++    "OTelContextCapturingMiddleware",
++)
++_MISSING_EXPORTS = [name for name in _REQUIRED_EXPORTS if not hasattr(telemetry, name)]
++
++
++@pytest.fixture(autouse=True)
++def require_mcp_telemetry_api() -> None:
++    """Fail each selected test clearly on a base tree lacking the feature."""
++    if _MISSING_EXPORTS:
++        pytest.fail("missing MCP telemetry API: " + ", ".join(_MISSING_EXPORTS))
++
++
++@pytest.fixture
++def tracing(monkeypatch: pytest.MonkeyPatch):
++    """Use a fresh in-memory provider while exercising the public middleware."""
++    provider = TracerProvider()
++    exporter = InMemorySpanExporter()
++    provider.add_span_processor(SimpleSpanProcessor(exporter))
++    tracer = provider.get_tracer("golf-verifier")
++
++    monkeypatch.setattr(instrumentation, "_provider", provider)
++    monkeypatch.setattr(instrumentation, "_tracer", tracer)
++    instrumentation.set_detailed_tracing(True)
++    yield tracer, exporter
++    instrumentation.set_detailed_tracing(False)
++
++
++def make_context(
++    *,
++    method: str = "tools/call",
++    name: str = "adder",
++    uri: str = "resource://weather",
++) -> SimpleNamespace:
++    message = SimpleNamespace(name=name, uri=uri, arguments={"a": 1, "b": 2})
++    request_context = SimpleNamespace(
++        request_id="req-7",
++        session_id="session-3",
++        client_id="client-2",
++        user_id="user-9",
++        tenant_id="tenant-4",
++    )
++    return SimpleNamespace(
++        message=message,
++        method=method,
++        type="request",
++        source="client",
++        fastmcp_context=request_context,
++    )
++
++
++def finished_span(exporter: InMemorySpanExporter, name: str):
++    matches = [span for span in exporter.get_finished_spans() if span.name == name]
++    assert len(matches) == 1, f"expected one {name!r} span, got {len(matches)}"
++    return matches[0]
++
++
++class MetricsRecorder:
++    def __init__(self) -> None:
++        self.executions: list[tuple[str, str]] = []
++        self.durations: list[tuple[str, float]] = []
++
++    def increment_tool_execution(self, name: str, outcome: str) -> None:
++        self.executions.append((name, outcome))
++
++    def record_tool_duration(self, name: str, duration: float) -> None:
++        self.durations.append((name, duration))
++
++
++def test_public_exports_and_provider_accessor(monkeypatch: pytest.MonkeyPatch) -> None:
++    for name in _REQUIRED_EXPORTS:
++        assert name in telemetry.__all__
++
++    sentinel = object()
++    monkeypatch.setattr(instrumentation, "_provider", sentinel)
++    assert telemetry.get_provider() is sentinel
++
++    monkeypatch.setattr(instrumentation, "_provider", None)
++    assert telemetry.get_provider() is None
++
++
++@pytest.mark.asyncio
++async def test_mcp_result_serialization_prefers_real_content(
++    tracing,
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    from fastmcp.tools.tool import ToolResult
++    from mcp.types import TextContent
++    import golf.metrics as metrics
++
++    _, exporter = tracing
++    recorder = MetricsRecorder()
++    monkeypatch.setattr(metrics, "get_metrics_collector", lambda: recorder)
++    middleware = telemetry.OpenTelemetryMiddleware()
++
++    cases = (
++        ("structured", ToolResult(structured_content={"answer": 42}), {"answer": 42}),
++        (
++            "blocks",
++            ToolResult(
++                content=[
++                    TextContent(type="text", text="first"),
++                    TextContent(type="text", text="second"),
++                ]
++            ),
++            ["first", "second"],
++        ),
++    )
++    for name, result, expected in cases:
++        async def call_next(context: Any, value: Any = result) -> Any:
++            return value
++
++        returned = await middleware.on_call_tool(make_context(name=name), call_next)
++        assert returned is result
++        span = finished_span(exporter, f"mcp.tool.{name}.execute")
++        output = span.attributes["mcp.tool.output"]
++        assert json.loads(output) == expected
++        assert "ToolResult" not in output and "TextContent" not in output
++
++
++@pytest.mark.asyncio
++async def test_disabled_telemetry_hooks_are_transparent(
++    tracing,
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    _, exporter = tracing
++    monkeypatch.setattr(instrumentation, "_provider", None)
++    middleware = telemetry.OpenTelemetryMiddleware()
++    calls: list[str] = []
++
++    async def call_next(context: Any) -> Any:
++        calls.append(context.method)
++        return context.message
++
++    contexts = [
++        make_context(method="tools/call"),
++        make_context(method="resources/read"),
++        make_context(method="prompts/get"),
++        make_context(method="ping"),
++    ]
++    hooks = (
++        middleware.on_call_tool,
++        middleware.on_read_resource,
++        middleware.on_get_prompt,
++        middleware.on_message,
++    )
++    for hook, context in zip(hooks, contexts, strict=True):
++        assert await hook(context, call_next) is context.message
++
++    assert calls == [context.method for context in contexts]
++    assert exporter.get_finished_spans() == ()
++
++
++@pytest.mark.asyncio
++async def test_tool_span_preserves_parent_payload_context_and_metrics(
++    tracing,
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    from fastmcp.tools.tool import ToolResult
++
++    tracer, exporter = tracing
++    recorder = MetricsRecorder()
++    import golf.metrics as metrics
++
++    monkeypatch.setattr(metrics, "get_metrics_collector", lambda: recorder)
++    middleware = telemetry.OpenTelemetryMiddleware()
++    result = ToolResult(structured_content={"answer": 3})
++
++    async def call_next(context: Any) -> Any:
++        return result
++
++    with tracer.start_as_current_span("http.request") as parent:
++        parent_id = parent.get_span_context().span_id
++        assert await middleware.on_call_tool(make_context(), call_next) is result
++
++    span = finished_span(exporter, "mcp.tool.adder.execute")
++    assert span.parent is not None and span.parent.span_id == parent_id
++    assert span.attributes["mcp.component.type"] == "tool"
++    assert span.attributes["mcp.tool.name"] == "adder"
++    assert span.attributes["mcp.method"] == "tools/call"
++    assert json.loads(span.attributes["mcp.tool.input"]) == {"a": 1, "b": 2}
++    assert json.loads(span.attributes["mcp.tool.output"]) == {"answer": 3}
++    assert span.attributes["mcp.tool.result.type"] == "ToolResult"
++    for key, value in {
++        "request_id": "req-7",
++        "session_id": "session-3",
++        "client_id": "client-2",
++        "user_id": "user-9",
++        "tenant_id": "tenant-4",
++    }.items():
++        assert span.attributes[f"mcp.context.{key}"] == value
++    assert recorder.executions == [("adder", "success")]
++    assert len(recorder.durations) == 1
++    assert recorder.durations[0][0] == "adder"
++    assert recorder.durations[0][1] >= 0
++
++
++@pytest.mark.asyncio
++async def test_resource_span_has_contract_attributes_and_parent(tracing) -> None:
++    tracer, exporter = tracing
++    middleware = telemetry.OpenTelemetryMiddleware()
++    marker = object()
++
++    async def call_next(context: Any) -> Any:
++        return marker
++
++    with tracer.start_as_current_span("mcp.request.resources.read") as parent:
++        parent_id = parent.get_span_context().span_id
++        returned = await middleware.on_read_resource(
++            make_context(method="resources/read"), call_next
++        )
++    assert returned is marker
++
++    span = finished_span(exporter, "mcp.resource.read")
++    assert span.parent is not None and span.parent.span_id == parent_id
++    assert span.attributes["mcp.component.type"] == "resource"
++    assert span.attributes["mcp.resource.uri"] == "resource://weather"
++    assert span.attributes["mcp.method"] == "resources/read"
++
++
++@pytest.mark.asyncio
++async def test_prompt_span_has_contract_attributes_and_parent(tracing) -> None:
++    tracer, exporter = tracing
++    middleware = telemetry.OpenTelemetryMiddleware()
++    marker = object()
++
++    async def call_next(context: Any) -> Any:
++        return marker
++
++    with tracer.start_as_current_span("mcp.request.prompts.get") as parent:
++        parent_id = parent.get_span_context().span_id
++        returned = await middleware.on_get_prompt(
++            make_context(method="prompts/get", name="welcome"), call_next
++        )
++    assert returned is marker
++
++    span = finished_span(exporter, "mcp.prompt.welcome.generate")
++    assert span.parent is not None and span.parent.span_id == parent_id
++    assert span.attributes["mcp.component.type"] == "prompt"
++    assert span.attributes["mcp.prompt.name"] == "welcome"
++    assert span.attributes["mcp.method"] == "prompts/get"
++
++
++@pytest.mark.asyncio
++async def test_message_span_has_contract_attributes_and_current_parent(tracing) -> None:
++    tracer, exporter = tracing
++    middleware = telemetry.OpenTelemetryMiddleware()
++
++    async def call_next(context: Any) -> str:
++        return "pong"
++
++    with tracer.start_as_current_span("transport") as parent:
++        parent_id = parent.get_span_context().span_id
++        result = await middleware.on_message(
++            make_context(method="notifications/tools/list_changed"), call_next
++        )
++    assert result == "pong"
++
++    span = finished_span(exporter, "mcp.request.notifications.tools.list_changed")
++    assert span.parent is not None and span.parent.span_id == parent_id
++    assert span.attributes["mcp.method"] == "notifications/tools/list_changed"
++    assert span.attributes["mcp.message.type"] == "request"
++    assert span.attributes["mcp.message.source"] == "client"
++
++    failure = RuntimeError("message exploded")
++
++    async def fail_next(context: Any) -> Any:
++        raise failure
++
++    with pytest.raises(RuntimeError) as caught:
++        await middleware.on_message(make_context(method="message/failure"), fail_next)
++    assert caught.value is failure
++    failed = finished_span(exporter, "mcp.request.message.failure")
++    assert failed.status.status_code is StatusCode.ERROR
++    assert any(event.name == "exception" for event in failed.events)
++
++
++@pytest.mark.asyncio
++async def test_tool_failure_marks_error_reraises_and_updates_metrics(
++    tracing,
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    _, exporter = tracing
++    recorder = MetricsRecorder()
++    import golf.metrics as metrics
++
++    monkeypatch.setattr(metrics, "get_metrics_collector", lambda: recorder)
++    middleware = telemetry.OpenTelemetryMiddleware()
++    failure = RuntimeError("tool exploded")
++
++    async def call_next(context: Any) -> Any:
++        raise failure
++
++    with pytest.raises(RuntimeError) as caught:
++        await middleware.on_call_tool(make_context(), call_next)
++    assert caught.value is failure
++
++    span = finished_span(exporter, "mcp.tool.adder.execute")
++    assert span.status.status_code is StatusCode.ERROR
++    assert any(event.name == "exception" for event in span.events)
++    assert recorder.executions == [("adder", "error")]
++
++
++@pytest.mark.asyncio
++async def test_resource_failure_marks_error_and_reraises(tracing) -> None:
++    _, exporter = tracing
++    middleware = telemetry.OpenTelemetryMiddleware()
++    failure = LookupError("resource unavailable")
++
++    async def call_next(context: Any) -> Any:
++        raise failure
++
++    with pytest.raises(LookupError) as caught:
++        await middleware.on_read_resource(make_context(method="resources/read"), call_next)
++    assert caught.value is failure
++    span = finished_span(exporter, "mcp.resource.read")
++    assert span.status.status_code is StatusCode.ERROR
++    assert any(event.name == "exception" for event in span.events)
++
++
++@pytest.mark.asyncio
++async def test_prompt_failure_marks_error_and_reraises(tracing) -> None:
++    _, exporter = tracing
++    middleware = telemetry.OpenTelemetryMiddleware()
++    failure = ValueError("prompt unavailable")
++
++    async def call_next(context: Any) -> Any:
++        raise failure
++
++    with pytest.raises(ValueError) as caught:
++        await middleware.on_get_prompt(
++            make_context(method="prompts/get", name="welcome"), call_next
++        )
++    assert caught.value is failure
++    span = finished_span(exporter, "mcp.prompt.welcome.generate")
++    assert span.status.status_code is StatusCode.ERROR
++    assert any(event.name == "exception" for event in span.events)
++
++
++@pytest.mark.asyncio
++async def test_http_context_is_captured_for_mcp_then_restored(tracing) -> None:
++    tracer, exporter = tracing
++    middleware = telemetry.OpenTelemetryMiddleware()
++    calls = 0
++
++    async def call_next(context: Any) -> str:
++        return "ok"
++
++    async def app(scope: Any, receive: Any, send: Any) -> None:
++        nonlocal calls
++        calls += 1
++        await middleware.on_message(make_context(method="tools/call"), call_next)
++
++    asgi = telemetry.OTelContextCapturingMiddleware(app)
++    with tracer.start_as_current_span("http.request") as http_span:
++        http_id = http_span.get_span_context().span_id
++        await asgi({"type": "http"}, object(), object())
++
++    await middleware.on_message(make_context(method="ping"), call_next)
++    assert calls == 1
++
++    captured = finished_span(exporter, "mcp.request.tools.call")
++    assert captured.parent is not None and captured.parent.span_id == http_id
++    after = finished_span(exporter, "mcp.request.ping")
++    assert after.parent is None
++
++
++@pytest.mark.asyncio
++async def test_http_context_is_restored_when_downstream_fails(tracing) -> None:
++    _, exporter = tracing
++    middleware = telemetry.OpenTelemetryMiddleware()
++
++    async def failing_app(scope: Any, receive: Any, send: Any) -> None:
++        raise RuntimeError("downstream failure")
++
++    asgi = telemetry.OTelContextCapturingMiddleware(failing_app)
++    with pytest.raises(RuntimeError, match="downstream failure"):
++        await asgi({"type": "http"}, object(), object())
++
++    async def call_next(context: Any) -> str:
++        return "ok"
++
++    await middleware.on_message(make_context(method="after/failure"), call_next)
++    after = finished_span(exporter, "mcp.request.after.failure")
++    assert after.parent is None
++
++
++@pytest.mark.asyncio
++async def test_non_http_asgi_scope_passes_through_without_http_parent(tracing) -> None:
++    _, exporter = tracing
++    middleware = telemetry.OpenTelemetryMiddleware()
++    seen: list[tuple[Any, Any, Any]] = []
++
++    async def call_next(context: Any) -> str:
++        return "ok"
++
++    async def app(scope: Any, receive: Any, send: Any) -> None:
++        seen.append((scope, receive, send))
++        await middleware.on_message(make_context(method="websocket/message"), call_next)
++
++    asgi = telemetry.OTelContextCapturingMiddleware(app)
++    scope = {"type": "websocket"}
++    receive, send = object(), object()
++    await asgi(scope, receive, send)
++    assert seen == [(scope, receive, send)]
++    span = finished_span(exporter, "mcp.request.websocket.message")
++    assert span.parent is None
++
++
++def write_project(project: Path) -> None:
++    (project / "tools").mkdir(parents=True)
++    (project / "resources").mkdir()
++    (project / "prompts").mkdir()
++    (project / "golf.json").write_text(
++        json.dumps(
++            {
++                "name": "otel-build-contract",
++                "transport": "stdio",
++                "opentelemetry_enabled": True,
++                "detailed_tracing": True,
++            }
++        )
++    )
++    (project / "tools" / "adder.py").write_text(
++        '"""Adder tool."""\n\n'
++        'def adder(a: int, b: int) -> int:\n    """Add values."""\n    return a + b\n\n'
++        'export = adder\n'
++    )
++    (project / "resources" / "status.py").write_text(
++        '"""Status resource."""\n\nresource_uri = "status://current"\n\n'
++        'def read_status() -> str:\n    """Read status."""\n    return "ok"\n\n'
++        'export = read_status\n'
++    )
++    (project / "prompts" / "welcome.py").write_text(
++        '"""Welcome prompt."""\n\n'
++        'def welcome(name: str) -> list:\n    """Welcome a user."""\n'
++        '    return [{"role": "user", "content": f"Hello {name}"}]\n\n'
++        'export = welcome\n'
++    )
++    (project / "middleware.py").write_text(
++        "from fastmcp.server.middleware import Middleware\n"
++        "class CustomMiddleware(Middleware):\n"
++        "    async def on_message(self, context, call_next):\n"
++        "        return await call_next(context)\n"
++    )
++
++
++def test_public_build_uses_one_mcp_boundary_and_original_components(tmp_path: Path) -> None:
++    project = tmp_path / "project"
++    output = tmp_path / "dist"
++    write_project(project)
++
++    build_env = {
++        **os.environ,
++        "PYTHONPATH": os.pathsep.join(
++            filter(
++                None,
++                (
++                    str(Path(golf.__file__).resolve().parents[1]),
++                    os.environ.get("PYTHONPATH"),
++                ),
++            )
++        ),
++    }
++    completed = subprocess.run(
++        [
++            sys.executable,
++            "-m",
++            "golf.commands.build",
++            "--project-path",
++            str(project),
++            "--output-dir",
++            str(output),
++        ],
++        cwd=project,
++        env=build_env,
++        text=True,
++        capture_output=True,
++        timeout=90,
++        check=False,
++    )
++    assert completed.returncode == 0, completed.stdout + completed.stderr
++
++    server_path = output / "server.py"
++    server = server_path.read_text()
++    compile(server, str(server_path), "exec")
++
++    otel_registration = "mcp.add_middleware(OpenTelemetryMiddleware())"
++    custom_registration = "mcp.add_middleware(CustomMiddleware())"
++    assert server.count(otel_registration) == 1
++    assert otel_registration in server and custom_registration in server
++    assert server.index(otel_registration) < server.index(custom_registration)
++    assert "_wrapped_func" not in server
++    assert not re.search(r"\binstrument_(tool|resource|prompt)\s*\(", server)
++    assert re.search(
++        r"Tool\.from_function\(\s*components\.tools\.adder\.adder\b", server
++    )
++    assert re.search(
++        r"Resource\.from_function\(\s*components\.resources\.status\.read_status\b",
++        server,
++    )
++    assert re.search(
++        r"Prompt\.from_function\(\s*components\.prompts\.welcome\.welcome\b", server
++    )
++    assert "from opentelemetry.instrumentation.asgi import OpenTelemetryMiddleware" not in server
++
++    (project / "golf.json").write_text(
++        json.dumps(
++            {
++                "name": "otel-build-contract",
++                "transport": "stdio",
++                "opentelemetry_enabled": False,
++            }
++        )
++    )
++    disabled_output = tmp_path / "disabled-dist"
++    disabled = subprocess.run(
++        [
++            sys.executable,
++            "-m",
++            "golf.commands.build",
++            "--project-path",
++            str(project),
++            "--output-dir",
++            str(disabled_output),
++        ],
++        cwd=project,
++        env=build_env,
++        text=True,
++        capture_output=True,
++        timeout=90,
++        check=False,
++    )
++    assert disabled.returncode == 0, disabled.stdout + disabled.stderr
++    disabled_server_path = disabled_output / "server.py"
++    disabled_server = disabled_server_path.read_text()
++    compile(disabled_server, str(disabled_server_path), "exec")
++    assert "OpenTelemetryMiddleware" not in disabled_server
++    assert not re.search(r"\binstrument_(tool|resource|prompt)\s*\(", disabled_server)

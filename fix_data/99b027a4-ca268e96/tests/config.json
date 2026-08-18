@@ -1,0 +1,62 @@
+{
+  "schema_version": "compact-swebench-harborized-v1",
+  "execution": {
+    "commands": [
+      "go test -count=1 -json ./internal/app -run '^(TestSentinelStopEmptyContract|TestSentinelPSStopLifecycleContract|TestSentinelPSTimeoutExclusionContract|TestSentinelStopSingularCountContract|TestCollectRecentAssistantTexts)$'",
+      "go test -count=1 -json ./internal/runtime/commands -run '^(TestSentinelStopClassificationContract|TestSentinelStopCatalogContract|TestClassifySubmitAcceptsStatsCache)$'",
+      "go test -count=1 -json ./internal/tools -run '^(TestSentinelRunningViewAndSingleCancelContract|TestSentinelCancelAllContract|TestSentinelRunningViewExcludesTimedOutContract|TestShellRunDescriptionUsesConfiguredForegroundWait)$'",
+      "go test -count=1 -json ./internal/tui -run '^(TestSentinelBusyStopDispatchContract|TestSentinelStopSuggestionAutoRunContract|TestSentinelRunningShellSummaryContract|TestSummarizeToolResultForChatPreservesShellANSI)$'"
+    ],
+    "selected_test_files_to_run": [
+      "internal/app/sentinel_stop_all_test.go",
+      "internal/runtime/commands/sentinel_stop_all_test.go",
+      "internal/tools/sentinel_stop_all_test.go",
+      "internal/tui/sentinel_stop_all_test.go",
+      "internal/app/commands_copy_test.go",
+      "internal/runtime/commands/classify_test.go",
+      "internal/tools/catalog_shell_test.go",
+      "internal/tui/tool_result_summary_test.go"
+    ],
+    "env": {
+      "GOTOOLCHAIN": "local",
+      "GOPROXY": "off",
+      "GOSUMDB": "off"
+    },
+    "timeout_sec": 600
+  },
+  "grading": {
+    "fail_to_pass": [
+      "github.com/usewhale/whale/internal/app::TestSentinelStopEmptyContract",
+      "github.com/usewhale/whale/internal/app::TestSentinelPSStopLifecycleContract",
+      "github.com/usewhale/whale/internal/app::TestSentinelPSTimeoutExclusionContract",
+      "github.com/usewhale/whale/internal/app::TestSentinelStopSingularCountContract",
+      "github.com/usewhale/whale/internal/runtime/commands::TestSentinelStopClassificationContract",
+      "github.com/usewhale/whale/internal/runtime/commands::TestSentinelStopCatalogContract",
+      "github.com/usewhale/whale/internal/tools::TestSentinelRunningViewAndSingleCancelContract",
+      "github.com/usewhale/whale/internal/tools::TestSentinelCancelAllContract",
+      "github.com/usewhale/whale/internal/tools::TestSentinelRunningViewExcludesTimedOutContract",
+      "github.com/usewhale/whale/internal/tui::TestSentinelBusyStopDispatchContract",
+      "github.com/usewhale/whale/internal/tui::TestSentinelStopSuggestionAutoRunContract",
+      "github.com/usewhale/whale/internal/tui::TestSentinelRunningShellSummaryContract"
+    ],
+    "pass_to_pass": [
+      "github.com/usewhale/whale/internal/app::TestCollectRecentAssistantTexts",
+      "github.com/usewhale/whale/internal/runtime/commands::TestClassifySubmitAcceptsStatsCache",
+      "github.com/usewhale/whale/internal/tools::TestShellRunDescriptionUsesConfiguredForegroundWait",
+      "github.com/usewhale/whale/internal/tui::TestSummarizeToolResultForChatPreservesShellANSI"
+    ],
+    "required_pass": [],
+    "allow_extra_failures": false,
+    "parser": {
+      "framework": "go-test",
+      "result_source": "verifier-owned-go-json"
+    }
+  },
+  "artifacts": {
+    "stdout_log": "/logs/verifier/test-stdout.txt",
+    "stderr_log": "/logs/verifier/test-stderr.txt",
+    "parsed_results": "/logs/verifier/output.json",
+    "report": "/logs/verifier/report.json",
+    "reward": "/logs/verifier/reward.txt"
+  }
+}

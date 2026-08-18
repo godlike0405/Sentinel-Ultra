@@ -1,0 +1,82 @@
+{"Time":"2026-08-17T18:16:50.068635514-07:00","Action":"start","Package":"github.com/usewhale/whale/internal/app"}
+{"Time":"2026-08-17T18:16:50.188974442-07:00","Action":"run","Package":"github.com/usewhale/whale/internal/app","Test":"TestCollectRecentAssistantTexts"}
+{"Time":"2026-08-17T18:16:50.189418942-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/app","Test":"TestCollectRecentAssistantTexts","Output":"=== RUN   TestCollectRecentAssistantTexts\n"}
+{"Time":"2026-08-17T18:16:50.189966542-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/app","Test":"TestCollectRecentAssistantTexts","Output":"--- PASS: TestCollectRecentAssistantTexts (0.00s)\n"}
+{"Time":"2026-08-17T18:16:50.190525742-07:00","Action":"pass","Package":"github.com/usewhale/whale/internal/app","Test":"TestCollectRecentAssistantTexts","Elapsed":0}
+{"Time":"2026-08-17T18:16:50.191173642-07:00","Action":"run","Package":"github.com/usewhale/whale/internal/app","Test":"TestSentinelStopEmptyContract"}
+{"Time":"2026-08-17T18:16:50.191549342-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/app","Test":"TestSentinelStopEmptyContract","Output":"=== RUN   TestSentinelStopEmptyContract\n"}
+{"Time":"2026-08-17T18:16:50.191933842-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/app","Test":"TestSentinelStopEmptyContract","Output":"--- PASS: TestSentinelStopEmptyContract (0.00s)\n"}
+{"Time":"2026-08-17T18:16:50.192400743-07:00","Action":"pass","Package":"github.com/usewhale/whale/internal/app","Test":"TestSentinelStopEmptyContract","Elapsed":0}
+{"Time":"2026-08-17T18:16:50.192801343-07:00","Action":"run","Package":"github.com/usewhale/whale/internal/app","Test":"TestSentinelPSStopLifecycleContract"}
+{"Time":"2026-08-17T18:16:50.193313443-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/app","Test":"TestSentinelPSStopLifecycleContract","Output":"=== RUN   TestSentinelPSStopLifecycleContract\n"}
+{"Time":"2026-08-17T18:16:50.211914547-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/app","Test":"TestSentinelPSStopLifecycleContract","Output":"--- PASS: TestSentinelPSStopLifecycleContract (0.02s)\n"}
+{"Time":"2026-08-17T18:16:50.212434847-07:00","Action":"pass","Package":"github.com/usewhale/whale/internal/app","Test":"TestSentinelPSStopLifecycleContract","Elapsed":0.02}
+{"Time":"2026-08-17T18:16:50.212816847-07:00","Action":"run","Package":"github.com/usewhale/whale/internal/app","Test":"TestSentinelPSTimeoutExclusionContract"}
+{"Time":"2026-08-17T18:16:50.213190747-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/app","Test":"TestSentinelPSTimeoutExclusionContract","Output":"=== RUN   TestSentinelPSTimeoutExclusionContract\n"}
+{"Time":"2026-08-17T18:16:50.230984751-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/app","Test":"TestSentinelPSTimeoutExclusionContract","Output":"--- PASS: TestSentinelPSTimeoutExclusionContract (0.02s)\n"}
+{"Time":"2026-08-17T18:16:50.231459052-07:00","Action":"pass","Package":"github.com/usewhale/whale/internal/app","Test":"TestSentinelPSTimeoutExclusionContract","Elapsed":0.02}
+{"Time":"2026-08-17T18:16:50.231857452-07:00","Action":"run","Package":"github.com/usewhale/whale/internal/app","Test":"TestSentinelStopSingularCountContract"}
+{"Time":"2026-08-17T18:16:50.232205652-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/app","Test":"TestSentinelStopSingularCountContract","Output":"=== RUN   TestSentinelStopSingularCountContract\n"}
+{"Time":"2026-08-17T18:16:50.237530553-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/app","Test":"TestSentinelStopSingularCountContract","Output":"--- PASS: TestSentinelStopSingularCountContract (0.01s)\n"}
+{"Time":"2026-08-17T18:16:50.238099053-07:00","Action":"pass","Package":"github.com/usewhale/whale/internal/app","Test":"TestSentinelStopSingularCountContract","Elapsed":0.01}
+{"Time":"2026-08-17T18:16:50.238485853-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/app","Output":"PASS\n"}
+{"Time":"2026-08-17T18:16:50.240705954-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/app","Output":"ok  \tgithub.com/usewhale/whale/internal/app\t0.171s\n"}
+{"Time":"2026-08-17T18:16:50.241397254-07:00","Action":"pass","Package":"github.com/usewhale/whale/internal/app","Elapsed":0.173}
+{"Time":"2026-08-17T18:16:55.301407414-07:00","Action":"start","Package":"github.com/usewhale/whale/internal/runtime/commands"}
+{"Time":"2026-08-17T18:16:55.353171525-07:00","Action":"run","Package":"github.com/usewhale/whale/internal/runtime/commands","Test":"TestClassifySubmitAcceptsStatsCache"}
+{"Time":"2026-08-17T18:16:55.353606125-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/runtime/commands","Test":"TestClassifySubmitAcceptsStatsCache","Output":"=== RUN   TestClassifySubmitAcceptsStatsCache\n"}
+{"Time":"2026-08-17T18:16:55.354127026-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/runtime/commands","Test":"TestClassifySubmitAcceptsStatsCache","Output":"--- PASS: TestClassifySubmitAcceptsStatsCache (0.00s)\n"}
+{"Time":"2026-08-17T18:16:55.354552526-07:00","Action":"pass","Package":"github.com/usewhale/whale/internal/runtime/commands","Test":"TestClassifySubmitAcceptsStatsCache","Elapsed":0}
+{"Time":"2026-08-17T18:16:55.354909226-07:00","Action":"run","Package":"github.com/usewhale/whale/internal/runtime/commands","Test":"TestSentinelStopClassificationContract"}
+{"Time":"2026-08-17T18:16:55.355306026-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/runtime/commands","Test":"TestSentinelStopClassificationContract","Output":"=== RUN   TestSentinelStopClassificationContract\n"}
+{"Time":"2026-08-17T18:16:55.355672626-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/runtime/commands","Test":"TestSentinelStopClassificationContract","Output":"    sentinel_stop_all_test.go:11: /stop classification = {Line:/stop Class:7}, want local-mutating\n"}
+{"Time":"2026-08-17T18:16:55.356084726-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/runtime/commands","Test":"TestSentinelStopClassificationContract","Output":"--- FAIL: TestSentinelStopClassificationContract (0.00s)\n"}
+{"Time":"2026-08-17T18:16:55.356472426-07:00","Action":"fail","Package":"github.com/usewhale/whale/internal/runtime/commands","Test":"TestSentinelStopClassificationContract","Elapsed":0}
+{"Time":"2026-08-17T18:16:55.356839226-07:00","Action":"run","Package":"github.com/usewhale/whale/internal/runtime/commands","Test":"TestSentinelStopCatalogContract"}
+{"Time":"2026-08-17T18:16:55.357182026-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/runtime/commands","Test":"TestSentinelStopCatalogContract","Output":"=== RUN   TestSentinelStopCatalogContract\n"}
+{"Time":"2026-08-17T18:16:55.357533226-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/runtime/commands","Test":"TestSentinelStopCatalogContract","Output":"--- PASS: TestSentinelStopCatalogContract (0.00s)\n"}
+{"Time":"2026-08-17T18:16:55.358216227-07:00","Action":"pass","Package":"github.com/usewhale/whale/internal/runtime/commands","Test":"TestSentinelStopCatalogContract","Elapsed":0}
+{"Time":"2026-08-17T18:16:55.358741427-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/runtime/commands","Output":"FAIL\n"}
+{"Time":"2026-08-17T18:16:55.359228927-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/runtime/commands","Output":"FAIL\tgithub.com/usewhale/whale/internal/runtime/commands\t0.057s\n"}
+{"Time":"2026-08-17T18:16:55.359636027-07:00","Action":"fail","Package":"github.com/usewhale/whale/internal/runtime/commands","Elapsed":0.058}
+{"Time":"2026-08-17T18:17:00.996790402-07:00","Action":"start","Package":"github.com/usewhale/whale/internal/tools"}
+{"Time":"2026-08-17T18:17:01.105482116-07:00","Action":"run","Package":"github.com/usewhale/whale/internal/tools","Test":"TestShellRunDescriptionUsesConfiguredForegroundWait"}
+{"Time":"2026-08-17T18:17:01.107552416-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/tools","Test":"TestShellRunDescriptionUsesConfiguredForegroundWait","Output":"=== RUN   TestShellRunDescriptionUsesConfiguredForegroundWait\n"}
+{"Time":"2026-08-17T18:17:01.108898816-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/tools","Test":"TestShellRunDescriptionUsesConfiguredForegroundWait","Output":"--- PASS: TestShellRunDescriptionUsesConfiguredForegroundWait (0.00s)\n"}
+{"Time":"2026-08-17T18:17:01.110019316-07:00","Action":"pass","Package":"github.com/usewhale/whale/internal/tools","Test":"TestShellRunDescriptionUsesConfiguredForegroundWait","Elapsed":0}
+{"Time":"2026-08-17T18:17:01.111369016-07:00","Action":"run","Package":"github.com/usewhale/whale/internal/tools","Test":"TestSentinelRunningViewAndSingleCancelContract"}
+{"Time":"2026-08-17T18:17:01.112823916-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/tools","Test":"TestSentinelRunningViewAndSingleCancelContract","Output":"=== RUN   TestSentinelRunningViewAndSingleCancelContract\n"}
+{"Time":"2026-08-17T18:17:01.147264321-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/tools","Test":"TestSentinelRunningViewAndSingleCancelContract","Output":"--- PASS: TestSentinelRunningViewAndSingleCancelContract (0.04s)\n"}
+{"Time":"2026-08-17T18:17:01.148408621-07:00","Action":"pass","Package":"github.com/usewhale/whale/internal/tools","Test":"TestSentinelRunningViewAndSingleCancelContract","Elapsed":0.04}
+{"Time":"2026-08-17T18:17:01.149409521-07:00","Action":"run","Package":"github.com/usewhale/whale/internal/tools","Test":"TestSentinelCancelAllContract"}
+{"Time":"2026-08-17T18:17:01.150277021-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/tools","Test":"TestSentinelCancelAllContract","Output":"=== RUN   TestSentinelCancelAllContract\n"}
+{"Time":"2026-08-17T18:17:01.169093623-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/tools","Test":"TestSentinelCancelAllContract","Output":"--- PASS: TestSentinelCancelAllContract (0.02s)\n"}
+{"Time":"2026-08-17T18:17:01.169515223-07:00","Action":"pass","Package":"github.com/usewhale/whale/internal/tools","Test":"TestSentinelCancelAllContract","Elapsed":0.02}
+{"Time":"2026-08-17T18:17:01.170039923-07:00","Action":"run","Package":"github.com/usewhale/whale/internal/tools","Test":"TestSentinelRunningViewExcludesTimedOutContract"}
+{"Time":"2026-08-17T18:17:01.170389323-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/tools","Test":"TestSentinelRunningViewExcludesTimedOutContract","Output":"=== RUN   TestSentinelRunningViewExcludesTimedOutContract\n"}
+{"Time":"2026-08-17T18:17:01.189425926-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/tools","Test":"TestSentinelRunningViewExcludesTimedOutContract","Output":"--- PASS: TestSentinelRunningViewExcludesTimedOutContract (0.02s)\n"}
+{"Time":"2026-08-17T18:17:01.189864426-07:00","Action":"pass","Package":"github.com/usewhale/whale/internal/tools","Test":"TestSentinelRunningViewExcludesTimedOutContract","Elapsed":0.02}
+{"Time":"2026-08-17T18:17:01.190327626-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/tools","Output":"PASS\n"}
+{"Time":"2026-08-17T18:17:01.191595126-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/tools","Output":"ok  \tgithub.com/usewhale/whale/internal/tools\t0.194s\n"}
+{"Time":"2026-08-17T18:17:01.192278026-07:00","Action":"pass","Package":"github.com/usewhale/whale/internal/tools","Elapsed":0.195}
+{"Time":"2026-08-17T18:17:10.063709045-07:00","Action":"start","Package":"github.com/usewhale/whale/internal/tui"}
+{"Time":"2026-08-17T18:17:10.275623383-07:00","Action":"run","Package":"github.com/usewhale/whale/internal/tui","Test":"TestSentinelBusyStopDispatchContract"}
+{"Time":"2026-08-17T18:17:10.276185383-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/tui","Test":"TestSentinelBusyStopDispatchContract","Output":"=== RUN   TestSentinelBusyStopDispatchContract\n"}
+{"Time":"2026-08-17T18:17:10.286830785-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/tui","Test":"TestSentinelBusyStopDispatchContract","Output":"    sentinel_stop_all_test.go:34: busy /stop intents=[]\n"}
+{"Time":"2026-08-17T18:17:10.287331485-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/tui","Test":"TestSentinelBusyStopDispatchContract","Output":"--- FAIL: TestSentinelBusyStopDispatchContract (0.01s)\n"}
+{"Time":"2026-08-17T18:17:10.287816285-07:00","Action":"fail","Package":"github.com/usewhale/whale/internal/tui","Test":"TestSentinelBusyStopDispatchContract","Elapsed":0.01}
+{"Time":"2026-08-17T18:17:10.288246486-07:00","Action":"run","Package":"github.com/usewhale/whale/internal/tui","Test":"TestSentinelStopSuggestionAutoRunContract"}
+{"Time":"2026-08-17T18:17:10.288637686-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/tui","Test":"TestSentinelStopSuggestionAutoRunContract","Output":"=== RUN   TestSentinelStopSuggestionAutoRunContract\n"}
+{"Time":"2026-08-17T18:17:10.291044586-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/tui","Test":"TestSentinelStopSuggestionAutoRunContract","Output":"--- PASS: TestSentinelStopSuggestionAutoRunContract (0.00s)\n"}
+{"Time":"2026-08-17T18:17:10.291456386-07:00","Action":"pass","Package":"github.com/usewhale/whale/internal/tui","Test":"TestSentinelStopSuggestionAutoRunContract","Elapsed":0}
+{"Time":"2026-08-17T18:17:10.291801386-07:00","Action":"run","Package":"github.com/usewhale/whale/internal/tui","Test":"TestSentinelRunningShellSummaryContract"}
+{"Time":"2026-08-17T18:17:10.292162886-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/tui","Test":"TestSentinelRunningShellSummaryContract","Output":"=== RUN   TestSentinelRunningShellSummaryContract\n"}
+{"Time":"2026-08-17T18:17:10.292883886-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/tui","Test":"TestSentinelRunningShellSummaryContract","Output":"--- PASS: TestSentinelRunningShellSummaryContract (0.00s)\n"}
+{"Time":"2026-08-17T18:17:10.293385786-07:00","Action":"pass","Package":"github.com/usewhale/whale/internal/tui","Test":"TestSentinelRunningShellSummaryContract","Elapsed":0}
+{"Time":"2026-08-17T18:17:10.293751187-07:00","Action":"run","Package":"github.com/usewhale/whale/internal/tui","Test":"TestSummarizeToolResultForChatPreservesShellANSI"}
+{"Time":"2026-08-17T18:17:10.294118087-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/tui","Test":"TestSummarizeToolResultForChatPreservesShellANSI","Output":"=== RUN   TestSummarizeToolResultForChatPreservesShellANSI\n"}
+{"Time":"2026-08-17T18:17:10.294453487-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/tui","Test":"TestSummarizeToolResultForChatPreservesShellANSI","Output":"--- PASS: TestSummarizeToolResultForChatPreservesShellANSI (0.00s)\n"}
+{"Time":"2026-08-17T18:17:10.294841187-07:00","Action":"pass","Package":"github.com/usewhale/whale/internal/tui","Test":"TestSummarizeToolResultForChatPreservesShellANSI","Elapsed":0}
+{"Time":"2026-08-17T18:17:10.295228087-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/tui","Output":"FAIL\n"}
+{"Time":"2026-08-17T18:17:10.295696987-07:00","Action":"output","Package":"github.com/usewhale/whale/internal/tui","Output":"FAIL\tgithub.com/usewhale/whale/internal/tui\t0.231s\n"}
+{"Time":"2026-08-17T18:17:10.296012687-07:00","Action":"fail","Package":"github.com/usewhale/whale/internal/tui","Elapsed":0.232}

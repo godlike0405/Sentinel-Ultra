@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="620" height="130" viewBox="0 0 620 130" role="img" aria-label="Whale">
+  <title>Whale</title>
+  <defs>
+    <linearGradient id="whale-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#8FABFF"/>
+      <stop offset="20%" stop-color="#6D88FB"/>
+      <stop offset="45%" stop-color="#4D6BFE"/>
+      <stop offset="70%" stop-color="#3B50E0"/>
+      <stop offset="100%" stop-color="#2A3DB8"/>
+    </linearGradient>
+  </defs>
+
+  <text x="310" y="83"
+        text-anchor="middle"
+        font-family="ui-monospace, SFMono-Regular, 'Cascadia Code', Menlo, Consolas, 'DejaVu Sans Mono', monospace"
+        font-size="68"
+        font-weight="800"
+        fill="url(#whale-grad)"
+        letter-spacing="18">WHALE
+    <animate attributeName="opacity"
+             values="0.9;1;0.9"
+             dur="3.2s"
+             repeatCount="indefinite"/>
+  </text>
+</svg>

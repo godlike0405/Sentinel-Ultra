@@ -1,0 +1,53 @@
+{
+  "schema_version": "compact-swebench-harborized-v1",
+  "execution": {
+    "commands": [
+      "python -m pytest -q ${TEST_ID}"
+    ],
+    "selected_test_files_to_run": [
+      "tests/core/test_otel_instrumentation.py",
+      "tests/core/test_telemetry.py"
+    ],
+    "env": {
+      "GOLF_TELEMETRY": "0"
+    },
+    "timeout_sec": 240
+  },
+  "grading": {
+    "fail_to_pass": [
+      "tests/core/test_otel_instrumentation.py::test_public_exports_and_provider_accessor",
+      "tests/core/test_otel_instrumentation.py::test_mcp_result_serialization_prefers_real_content",
+      "tests/core/test_otel_instrumentation.py::test_disabled_telemetry_hooks_are_transparent",
+      "tests/core/test_otel_instrumentation.py::test_tool_span_preserves_parent_payload_context_and_metrics",
+      "tests/core/test_otel_instrumentation.py::test_resource_span_has_contract_attributes_and_parent",
+      "tests/core/test_otel_instrumentation.py::test_prompt_span_has_contract_attributes_and_parent",
+      "tests/core/test_otel_instrumentation.py::test_message_span_has_contract_attributes_and_current_parent",
+      "tests/core/test_otel_instrumentation.py::test_tool_failure_marks_error_reraises_and_updates_metrics",
+      "tests/core/test_otel_instrumentation.py::test_resource_failure_marks_error_and_reraises",
+      "tests/core/test_otel_instrumentation.py::test_prompt_failure_marks_error_and_reraises",
+      "tests/core/test_otel_instrumentation.py::test_http_context_is_captured_for_mcp_then_restored",
+      "tests/core/test_otel_instrumentation.py::test_http_context_is_restored_when_downstream_fails",
+      "tests/core/test_otel_instrumentation.py::test_non_http_asgi_scope_passes_through_without_http_parent",
+      "tests/core/test_otel_instrumentation.py::test_public_build_uses_one_mcp_boundary_and_original_components"
+    ],
+    "pass_to_pass": [
+      "tests/core/test_telemetry.py::TestTelemetryConfiguration::test_telemetry_disabled_by_env",
+      "tests/core/test_telemetry.py::TestErrorSanitization::test_sanitizes_file_paths",
+      "tests/core/test_telemetry.py::TestErrorSanitization::test_sanitizes_api_keys",
+      "tests/core/test_telemetry.py::TestErrorSanitization::test_sanitizes_email_addresses"
+    ],
+    "required_pass": [],
+    "allow_extra_failures": false,
+    "parser": {
+      "framework": "pytest",
+      "result_source": "verifier_owned_exit_status"
+    }
+  },
+  "artifacts": {
+    "stdout_log": "/logs/verifier/test-stdout.txt",
+    "stderr_log": "/logs/verifier/test-stderr.txt",
+    "parsed_results": "/logs/verifier/output.json",
+    "report": "/logs/verifier/report.json",
+    "reward": "/logs/verifier/reward.txt"
+  }
+}

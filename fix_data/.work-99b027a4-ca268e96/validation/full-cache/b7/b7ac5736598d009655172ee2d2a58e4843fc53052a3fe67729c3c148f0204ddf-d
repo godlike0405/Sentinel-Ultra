@@ -1,0 +1,15 @@
+./collection.go
+./common.go
+./context.go
+./errors.go
+./eval.go
+./functojs.go
+./gotojs.go
+./handle.go
+./jstogo.go
+./mem.go
+./options.go
+./proxy.go
+./runtime.go
+./utils.go
+./value.go

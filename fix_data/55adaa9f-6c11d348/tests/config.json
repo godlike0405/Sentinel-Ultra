@@ -1,0 +1,58 @@
+{
+  "schema_version": "compact-swebench-harborized-v1",
+  "execution": {
+    "commands": [
+      "cargo test --locked -p specta-tags --test sentinel_transform_contract",
+      "cargo test --locked -p specta --lib datatype::named::tests::file_path_to_module_path_supports_unix_and_windows_separators -- --exact"
+    ],
+    "selected_test_files_to_run": [
+      "specta-tags/tests/sentinel_transform_contract.rs",
+      "specta/src/datatype/named.rs"
+    ],
+    "env": {
+      "CARGO_NET_OFFLINE": "true",
+      "PATH": "/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    },
+    "timeout_sec": 240
+  },
+  "grading": {
+    "fail_to_pass": [
+      "v1_leaf_and_identity_analysis_contract",
+      "v1_builtin_named_type_contract",
+      "v1_custom_matcher_contract",
+      "v1_composite_graph_contract",
+      "v1_enum_and_generic_contract",
+      "v1_bytes_opt_in_contract",
+      "v1_compact_serialization_contract",
+      "v1_runtime_minimality_and_language_contract",
+      "v1_runtime_family_and_result_contract",
+      "v1_reserved_names_contract",
+      "v2_leaf_builtins_and_identity_contract",
+      "v2_named_matcher_matrix_contract",
+      "v2_nested_object_key_and_variable_contract",
+      "v2_list_tuple_map_nullable_contract",
+      "v2_external_enum_contract",
+      "v2_internal_enum_contract",
+      "v2_adjacent_enum_contract",
+      "v2_untagged_enum_is_identity_contract",
+      "v2_recursive_and_generic_contract",
+      "v2_trusting_output_across_graph_contract"
+    ],
+    "pass_to_pass": [
+      "datatype::named::tests::file_path_to_module_path_supports_unix_and_windows_separators"
+    ],
+    "required_pass": [],
+    "allow_extra_failures": false,
+    "parser": {
+      "framework": "rust-test",
+      "result_source": "verifier_owned_json"
+    }
+  },
+  "artifacts": {
+    "stdout_log": "/logs/verifier/test-stdout.txt",
+    "stderr_log": "/logs/verifier/test-stderr.txt",
+    "parsed_results": "/logs/verifier/output.json",
+    "report": "/logs/verifier/report.json",
+    "reward": "/logs/verifier/reward.txt"
+  }
+}

@@ -1,0 +1,402 @@
+name: Release
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: write
+
+env:
+  CODEX_ZSH_RELEASE_TAG: rust-v0.134.0-alpha.3
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Check formatting
+        run: make fmt-check
+
+      - name: Run go vet
+        run: make vet
+
+      - name: Run tests
+        run: make test
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: darwin
+            goarch: amd64
+            asset_name: whale-darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            asset_name: whale-darwin-arm64
+          - goos: linux
+            goarch: amd64
+            asset_name: whale-linux-amd64
+          - goos: linux
+            goarch: arm64
+            asset_name: whale-linux-arm64
+          - goos: windows
+            goarch: amd64
+            asset_name: whale-windows-amd64
+          - goos: windows
+            goarch: arm64
+            asset_name: whale-windows-arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build release binary
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ github.event.release.tag_name }}
+        run: |
+          mkdir -p dist
+          output="dist/${{ matrix.asset_name }}"
+          if [ "${GOOS}" = "windows" ]; then
+            output="${output}.exe"
+          fi
+          go build -trimpath -ldflags "-s -w -X github.com/usewhale/whale/internal/build.Version=${VERSION}" -o "${output}" ./cmd/whale
+
+          zsh_asset=""
+          zsh_sha256=""
+          case "${GOOS}/${GOARCH}" in
+            darwin/amd64)
+              zsh_asset="codex-zsh-x86_64-apple-darwin.tar.gz"
+              zsh_sha256="0246fd4703bb540ae74f13ec739ca365ebd607df44a1f21e335eb7a421352923"
+              ;;
+            darwin/arm64)
+              zsh_asset="codex-zsh-aarch64-apple-darwin.tar.gz"
+              zsh_sha256="49dec9832379688c9090666694a3449502ac5ebd4d76b9ffde1d0999cd088205"
+              ;;
+            linux/amd64)
+              zsh_asset="codex-zsh-x86_64-unknown-linux-musl.tar.gz"
+              zsh_sha256="e7f760998c9644448d2cb8a821084a0134d6820c14b284bd7f39d7f32262ad40"
+              ;;
+            linux/arm64)
+              zsh_asset="codex-zsh-aarch64-unknown-linux-musl.tar.gz"
+              zsh_sha256="8d50cff5dfabc97e37e1138513da022d9247a802c2ff996ab91654bf1892c7d5"
+              ;;
+          esac
+          if [ -n "${zsh_asset}" ]; then
+            runtime_tmp="$(mktemp -d)"
+            runtime_archive="${runtime_tmp}/${zsh_asset}"
+            runtime_url="https://github.com/openai/codex/releases/download/${CODEX_ZSH_RELEASE_TAG}/${zsh_asset}"
+            curl --fail --location --retry 3 --connect-timeout 20 --output "${runtime_archive}" "${runtime_url}"
+            actual_runtime_sha256="$(sha256sum "${runtime_archive}" | awk '{print $1}')"
+            if [ "${actual_runtime_sha256}" != "${zsh_sha256}" ]; then
+              echo "codex zsh runtime checksum mismatch" >&2
+              echo "expected: ${zsh_sha256}" >&2
+              echo "actual:   ${actual_runtime_sha256}" >&2
+              exit 1
+            fi
+            tar -xzf "${runtime_archive}" -C "${runtime_tmp}"
+            install -D -m 0755 "${runtime_tmp}/codex-zsh/bin/zsh" dist/runtime/zsh
+            rm -rf "${runtime_tmp}"
+          fi
+
+          if [ "${GOOS}" = "windows" ]; then
+            (cd dist && zip "${{ matrix.asset_name }}.zip" "${{ matrix.asset_name }}.exe")
+          elif [ -d dist/runtime ]; then
+            tar -czf "dist/${{ matrix.asset_name }}.tar.gz" -C dist "${{ matrix.asset_name }}" runtime
+          else
+            tar -czf "dist/${{ matrix.asset_name }}.tar.gz" -C dist "${{ matrix.asset_name }}"
+          fi
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: dist/${{ matrix.asset_name }}*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          find . -type f -maxdepth 2 ! -name "checksums.txt" -exec sha256sum {} \; | sed 's#^\([0-9a-f]\+\)  \./#\1  #' > checksums.txt
+
+      - name: Verify release assets
+        run: |
+          set -euo pipefail
+          cd dist
+          required_assets="
+          whale-darwin-amd64/whale-darwin-amd64.tar.gz
+          whale-darwin-arm64/whale-darwin-arm64.tar.gz
+          whale-linux-amd64/whale-linux-amd64.tar.gz
+          whale-linux-arm64/whale-linux-arm64.tar.gz
+          whale-windows-amd64/whale-windows-amd64.zip
+          whale-windows-arm64/whale-windows-arm64.zip
+          "
+          for asset in ${required_assets}; do
+            if ! awk -v asset="${asset}" '$2 == asset { found = 1 } END { exit found ? 0 : 1 }' checksums.txt; then
+              echo "missing release asset checksum: ${asset}" >&2
+              echo "checksums.txt:" >&2
+              cat checksums.txt >&2
+              exit 1
+            fi
+          done
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name }}
+          files: |
+            dist/**/whale-*
+            dist/checksums.txt
+
+  homebrew:
+    needs: release
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download release checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          mkdir -p dist
+          gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --pattern checksums.txt --dir dist --clobber
+
+      - name: Checkout Homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: usewhale/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update formula
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+
+          checksum() {
+            awk -v name="$1" '$2 == name { print $1 }' dist/checksums.txt
+          }
+
+          darwin_arm64_sha="$(checksum "whale-darwin-arm64/whale-darwin-arm64.tar.gz")"
+          darwin_amd64_sha="$(checksum "whale-darwin-amd64/whale-darwin-amd64.tar.gz")"
+          linux_arm64_sha="$(checksum "whale-linux-arm64/whale-linux-arm64.tar.gz")"
+          linux_amd64_sha="$(checksum "whale-linux-amd64/whale-linux-amd64.tar.gz")"
+
+          if [ -z "${darwin_arm64_sha}" ] || [ -z "${darwin_amd64_sha}" ] || [ -z "${linux_arm64_sha}" ] || [ -z "${linux_amd64_sha}" ]; then
+            echo "missing one or more tarball checksums" >&2
+            cat dist/checksums.txt >&2
+            exit 1
+          fi
+
+          cat > homebrew-tap/Formula/whale.rb <<EOF
+          class Whale < Formula
+            desc "DeepSeek-native coding agent for the terminal"
+            homepage "https://github.com/usewhale/DeepSeek-Code-Whale"
+            version "${version}"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/usewhale/DeepSeek-Code-Whale/releases/download/${TAG}/whale-darwin-arm64.tar.gz"
+                sha256 "${darwin_arm64_sha}"
+              else
+                url "https://github.com/usewhale/DeepSeek-Code-Whale/releases/download/${TAG}/whale-darwin-amd64.tar.gz"
+                sha256 "${darwin_amd64_sha}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "https://github.com/usewhale/DeepSeek-Code-Whale/releases/download/${TAG}/whale-linux-arm64.tar.gz"
+                sha256 "${linux_arm64_sha}"
+              else
+                url "https://github.com/usewhale/DeepSeek-Code-Whale/releases/download/${TAG}/whale-linux-amd64.tar.gz"
+                sha256 "${linux_amd64_sha}"
+              end
+            end
+
+            def install
+              bin.install Dir["whale-*"].first => "whale"
+              libexec.install "runtime" if Dir.exist?("runtime")
+            end
+
+            test do
+              assert_match "${TAG}", shell_output("#{bin}/whale --version")
+            end
+          end
+          EOF
+
+          ruby -c homebrew-tap/Formula/whale.rb
+
+      - name: Commit formula update
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          cd homebrew-tap
+          if git diff --quiet -- Formula/whale.rb; then
+            echo "Formula/whale.rb already up to date for ${TAG}"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/whale.rb
+          git commit -m "Update whale to ${TAG}"
+          git push
+
+  npm-publish:
+    needs: build
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Inject binaries into platform packages
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+
+          # Map CI asset names to npm platform directory names
+          declare -A ASSET_MAP
+          ASSET_MAP["whale-darwin-arm64"]="npm/whale-darwin-arm64"
+          ASSET_MAP["whale-darwin-amd64"]="npm/whale-darwin-x64"
+          ASSET_MAP["whale-linux-arm64"]="npm/whale-linux-arm64"
+          ASSET_MAP["whale-linux-amd64"]="npm/whale-linux-x64"
+          ASSET_MAP["whale-windows-amd64"]="npm/whale-win32-x64"
+          ASSET_MAP["whale-windows-arm64"]="npm/whale-win32-arm64"
+
+          for asset in "${!ASSET_MAP[@]}"; do
+            target_dir="${ASSET_MAP[$asset]}"
+            echo "=== Injecting $asset into $target_dir ==="
+
+            # Locate the archive
+            archive=$(find dist/"$asset" -name "${asset}.tar.gz" -o -name "${asset}.zip" 2>/dev/null | head -1)
+            if [ -z "$archive" ]; then
+              echo "WARNING: No archive found for $asset, skipping"
+              continue
+            fi
+
+            # Extract binary
+            case "$archive" in
+              *.tar.gz)
+                tar xzf "$archive" -C "$target_dir/vendor/"
+                # Rename from platform-specific name to canonical "whale"
+                mv "$target_dir/vendor/$asset" "$target_dir/vendor/whale" 2>/dev/null || true
+                ;;
+              *.zip)
+                unzip -o "$archive" -d "$target_dir/vendor/"
+                mv "$target_dir/vendor/${asset}.exe" "$target_dir/vendor/whale.exe" 2>/dev/null || true
+                ;;
+            esac
+
+            chmod +x "$target_dir/vendor/whale" 2>/dev/null || true
+            chmod +x "$target_dir/vendor/whale.exe" 2>/dev/null || true
+            chmod +x "$target_dir/vendor/runtime/zsh" 2>/dev/null || true
+          done
+
+      - name: Verify binaries injected
+        run: |
+          set -euo pipefail
+          for dir in npm/whale-*; do
+            if [ "$dir" = "npm/whale" ]; then continue; fi
+            binary="$dir/vendor/whale"
+            if [ -f "$binary" ]; then
+              file "$binary"
+            else
+              binary="$dir/vendor/whale.exe"
+              if [ -f "$binary" ]; then
+                file "$binary"
+              else
+                echo "ERROR: No binary found in $dir/vendor/"
+                ls -la "$dir/vendor/"
+                exit 1
+              fi
+            fi
+          done
+
+      - name: Set version and publish platform packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+
+          for dir in npm/whale-*; do
+            pkg_name="$(basename "$dir")"
+            # Skip the meta package (whale without platform suffix)
+            if [ "$pkg_name" = "whale" ]; then continue; fi
+
+            echo "=== Publishing $pkg_name @ $version ==="
+            (cd "$dir" && \
+              npm version "$version" --allow-same-version --no-git-tag-version && \
+              npm publish --access public)
+          done
+
+      - name: Publish meta package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          echo "=== Publishing @usewhale/whale @ $version ==="
+          cd npm/whale
+          npm version "$version" --allow-same-version --no-git-tag-version
+          npm publish --access public

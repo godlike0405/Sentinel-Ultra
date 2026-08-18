@@ -1,0 +1,55 @@
+{
+  "schema_version": "compact-swebench-harborized-v1",
+  "execution": {
+    "commands": [
+      "node --test web/__tests__/sentinel-story-navigation.test.js"
+    ],
+    "selected_test_files_to_run": [
+      "web/__tests__/sentinel-story-navigation.test.js",
+      "web/__tests__/crit-renderer.test.js"
+    ],
+    "env": {},
+    "timeout_sec": 240
+  },
+  "grading": {
+    "fail_to_pass": [
+      "line comment anchors preserve side and scope",
+      "file comment anchors preserve file scope without a side",
+      "new-side lookup ignores an old-side collision",
+      "old-side lookup ignores a new-side collision",
+      "legacy lookup remains new-first and covers insertions and deletions",
+      "automatic gap merging retains both raw owners and preceding context ownership",
+      "comment gap merging retains later ownership and assigns synthesized context backward",
+      "unified display mapping translates old context but retains deletions",
+      "split and legacy display mapping use the matched coordinate space",
+      "file navigation selects the first owning chapter and reports misses",
+      "line navigation uses raw ownership and explicit misses do not fall back to a file",
+      "comment-card navigation forwards the comment side",
+      "file-scoped comment cards navigate by file ownership",
+      "renderer routing activates by side and targets the translated DOM row",
+      "scope reload invalidates Story clones before replacement file data loads",
+      "npm and Bun lockfiles agree on embedded runtime versions",
+      "embedded markdown runtime matches the repository-pinned dependency",
+      "embedded diagram runtime matches the repository-pinned dependency"
+    ],
+    "pass_to_pass": [
+      "register and current",
+      "register throws on missing method",
+      "anchorFromComment with line anchor",
+      "anchorFromComment with DOM anchor"
+    ],
+    "required_pass": [],
+    "allow_extra_failures": false,
+    "parser": {
+      "framework": "verifier-owned-node-status",
+      "result_source": "verifier_owned"
+    }
+  },
+  "artifacts": {
+    "stdout_log": "/logs/verifier/test-stdout.txt",
+    "stderr_log": "/logs/verifier/test-stderr.txt",
+    "parsed_results": "/logs/verifier/output.json",
+    "report": "/logs/verifier/report.json",
+    "reward": "/logs/verifier/reward.txt"
+  }
+}

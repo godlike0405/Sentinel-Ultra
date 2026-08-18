@@ -1,0 +1,37 @@
+schema_version = "1.3"
+
+[metadata]
+author_name = "anonymous"
+author_email = "anonymous@snorkel.ai"
+category = "implementation"
+subcategory = "bug_fix"
+coding_language = "python"
+repo_name = "golf"
+repo_license = "Apache-2.0"
+source_pr_url = "https://github.com/golf-mcp/golf/pull/126"
+base_commit_sha = "f4d9d74b423dcd5e515ac754f15b813cf8297e0e"
+model_difficulty = "medium"
+difficulty_explanation = "Requires tracing an HTTP-to-MCP context handoff, implementing four asynchronous middleware paths with failure transparency, preserving build-time component registration, and serializing FastMCP result types without breaking existing telemetry behavior."
+tags = ["opentelemetry", "telemetry", "middleware", "mcp", "instrumentation", "serialization"]
+difficulty = "medium"
+task_type = "implementation"
+task_subtype = "bug_fix"
+source = "https://github.com/golf-mcp/golf/pull/126"
+language = "python"
+expert_time_estimate_min = 60.0
+junior_time_estimate_min = 180.0
+pr_created_at = "2025-12-12T11:15:34Z"
+pr_merged_at = "2025-12-12T11:22:57Z"
+
+[verifier]
+timeout_sec = 300.0
+
+[agent]
+timeout_sec = 1800.0
+
+[environment]
+build_timeout_sec = 900.0
+cpus = 4
+memory_mb = 8192
+storage_mb = 10240
+gpus = 0

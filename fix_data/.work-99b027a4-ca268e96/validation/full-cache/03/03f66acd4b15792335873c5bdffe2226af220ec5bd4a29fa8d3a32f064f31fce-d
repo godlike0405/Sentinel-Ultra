@@ -1,0 +1,9 @@
+./doc.go
+./ioctl.go
+./ioctl_inner.go
+./pty_linux.go
+./run.go
+./start.go
+./winsize.go
+./winsize_unix.go
+./ztypes_amd64.go

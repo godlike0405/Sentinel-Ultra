@@ -1,0 +1,328 @@
+diff --git a/internal/app/background_tasks.go b/internal/app/background_tasks.go
+index 06fc224..0347ebb 100644
+--- a/internal/app/background_tasks.go
++++ b/internal/app/background_tasks.go
+@@ -11,49 +11,76 @@ import (
+ 
+ func (a *App) executePSCommand() CommandExecution {
+ 	if a == nil || a.toolset == nil {
+-		text := "Background tasks\n\nNo background shell tasks."
++		text := "Background tasks\n\nNo background shell tasks running."
+ 		return CommandExecution{Handled: true, Text: text, LocalResult: buildBackgroundTasksLocalResult(nil, text)}
+ 	}
+-	tasks := a.toolset.BackgroundShellTasks()
++	tasks := a.toolset.RunningBackgroundShellTasks()
+ 	text := formatBackgroundTasks(tasks)
+ 	return CommandExecution{Handled: true, Text: text, LocalResult: buildBackgroundTasksLocalResult(tasks, text)}
+ }
+ 
+ func (a *App) executeStopCommand(line string) (CommandExecution, error) {
+ 	fields := strings.Fields(strings.TrimSpace(line))
+-	if len(fields) != 2 {
+-		return CommandExecution{Handled: true}, errors.New("usage: /stop <task_id>")
++	if len(fields) != 1 {
++		return CommandExecution{Handled: true}, errors.New("usage: /stop")
+ 	}
+ 	if a == nil || a.toolset == nil {
+-		return CommandExecution{Handled: true}, errors.New("task not found")
++		text := "No background shell tasks running."
++		return CommandExecution{
++			Handled:     true,
++			Text:        text,
++			LocalResult: buildStoppedBackgroundTasksLocalResult(nil, text),
++			Mutated:     true,
++		}, nil
+ 	}
+-	task, err := a.toolset.CancelBackgroundShellTask(a.ctx, fields[1])
++	tasks, err := a.toolset.CancelAllBackgroundShellTasks(a.ctx)
+ 	if err != nil {
+ 		return CommandExecution{Handled: true}, err
+ 	}
+-	text := fmt.Sprintf("Stopped background task\n\ntask:    %s\nstatus:  %s\ncommand: %s", task.ID, task.Status, task.Command)
++	text := formatStoppedBackgroundTasks(tasks)
+ 	return CommandExecution{
+ 		Handled:     true,
+ 		Text:        text,
+-		LocalResult: buildBackgroundTasksLocalResult([]tools.BackgroundShellTask{task}, text),
++		LocalResult: buildStoppedBackgroundTasksLocalResult(tasks, text),
+ 		Mutated:     true,
+ 	}, nil
+ }
+ 
++func formatStoppedBackgroundTasks(tasks []tools.BackgroundShellTask) string {
++	if len(tasks) == 0 {
++		return "No background shell tasks running."
++	}
++	var b strings.Builder
++	if len(tasks) == 1 {
++		b.WriteString("Stopped 1 background shell task.")
++	} else {
++		b.WriteString(fmt.Sprintf("Stopped %d background shell tasks.", len(tasks)))
++	}
++	for _, task := range tasks {
++		b.WriteString("\n\n")
++		b.WriteString(taskDisplayName(task))
++		b.WriteString("\nstatus:  ")
++		b.WriteString(task.Status)
++		if task.CWD != "" {
++			b.WriteString("\ncwd:     ")
++			b.WriteString(task.CWD)
++		}
++	}
++	return b.String()
++}
++
+ func formatBackgroundTasks(tasks []tools.BackgroundShellTask) string {
+ 	var b strings.Builder
+ 	b.WriteString("Background tasks")
+ 	if len(tasks) == 0 {
+-		b.WriteString("\n\nNo background shell tasks.")
++		b.WriteString("\n\nNo background shell tasks running.")
+ 		return b.String()
+ 	}
+ 	for _, task := range tasks {
+ 		b.WriteString("\n\n")
+-		b.WriteString(task.ID)
++		b.WriteString(taskDisplayName(task))
+ 		b.WriteString("\nstatus:  ")
+ 		b.WriteString(task.Status)
+-		b.WriteString("\ncommand: ")
+-		b.WriteString(task.Command)
+ 		if task.CWD != "" {
+ 			b.WriteString("\ncwd:     ")
+ 			b.WriteString(task.CWD)
+@@ -73,28 +100,41 @@ func formatBackgroundTasks(tasks []tools.BackgroundShellTask) string {
+ }
+ 
+ func buildBackgroundTasksLocalResult(tasks []tools.BackgroundShellTask, text string) *LocalResult {
++	return buildBackgroundTasksLocalResultWithTitle("Background tasks", tasks, text)
++}
++
++func buildStoppedBackgroundTasksLocalResult(tasks []tools.BackgroundShellTask, text string) *LocalResult {
++	return buildBackgroundTasksLocalResultWithTitle("Stopped background tasks", tasks, text)
++}
++
++func buildBackgroundTasksLocalResultWithTitle(title string, tasks []tools.BackgroundShellTask, text string) *LocalResult {
+ 	fields := make([]LocalResultField, 0, len(tasks))
+ 	for _, task := range tasks {
+ 		value := task.Status
+ 		if task.CWD != "" {
+ 			value += " · " + task.CWD
+ 		}
+-		if task.Command != "" {
+-			value += " · " + task.Command
+-		}
+-		fields = append(fields, LocalResultField{Label: task.ID, Value: value})
++		fields = append(fields, LocalResultField{Label: taskDisplayName(task), Value: value})
+ 	}
+ 	if len(fields) == 0 {
+-		fields = append(fields, LocalResultField{Label: "tasks", Value: "none"})
++		fields = append(fields, LocalResultField{Label: "running", Value: "none"})
+ 	}
+ 	return &LocalResult{
+ 		Kind:      "background_tasks",
+-		Title:     "Background tasks",
++		Title:     title,
+ 		Fields:    fields,
+ 		PlainText: text,
+ 	}
+ }
+ 
++func taskDisplayName(task tools.BackgroundShellTask) string {
++	command := strings.TrimSpace(task.Command)
++	if command == "" {
++		return "background shell task"
++	}
++	return command
++}
++
+ func formatTaskAge(t time.Time) string {
+ 	if t.IsZero() {
+ 		return "unknown"
+diff --git a/internal/runtime/commands/catalog.go b/internal/runtime/commands/catalog.go
+index 35ea53e..a6192e1 100644
+--- a/internal/runtime/commands/catalog.go
++++ b/internal/runtime/commands/catalog.go
+@@ -31,7 +31,7 @@ func DefaultSlashCommands() []SlashCommandSpec {
+ 		{Name: "/focus", Description: "Toggle focus view", AutoRun: true},
+ 		{Name: "/diff", Description: "Show current git diff", AutoRun: true},
+ 		{Name: "/ps", Description: "Show background shell tasks", AutoRun: true},
+-		{Name: "/stop", Description: "Stop a background shell task", ArgumentHint: "<task_id>"},
++		{Name: "/stop", Description: "Stop all background shell tasks", AutoRun: true},
+ 		{Name: "/goal", Description: "Set or inspect the active session goal", ArgumentHint: "[--tokens 50k] <objective>|status|pause|resume|clear", AutoRun: true, Options: []SlashCommandOption{
+ 			{Token: "status", Description: "Show the active goal", AutoRun: true},
+ 			{Token: "pause", Description: "Pause the active goal", AutoRun: true},
+diff --git a/internal/runtime/commands/classify.go b/internal/runtime/commands/classify.go
+index eef9241..f2793f4 100644
+--- a/internal/runtime/commands/classify.go
++++ b/internal/runtime/commands/classify.go
+@@ -37,7 +37,7 @@ func (c SubmitClassification) BusyImmediate() bool {
+ 		return true
+ 	}
+ 	fields := strings.Fields(c.Line)
+-	return c.Class == SubmitLocalMutating && len(fields) == 2 && fields[0] == "/stop"
++	return c.Class == SubmitLocalMutating && len(fields) == 1 && fields[0] == "/stop"
+ }
+ 
+ func (c SubmitClassification) SubmitBarrier() bool {
+@@ -71,7 +71,7 @@ func classifySlashFields(head string, fields []string, line string) SubmitClass
+ 		}
+ 		return SubmitUsageError
+ 	case "/stop":
+-		if len(fields) == 2 {
++		if len(fields) == 1 {
+ 			return SubmitLocalMutating
+ 		}
+ 		return SubmitUsageError
+diff --git a/internal/tools/background_tasks.go b/internal/tools/background_tasks.go
+index 55cda84..3c08a68 100644
+--- a/internal/tools/background_tasks.go
++++ b/internal/tools/background_tasks.go
+@@ -22,6 +22,14 @@ type BackgroundShellTask struct {
+ }
+ 
+ func (b *Toolset) BackgroundShellTasks() []BackgroundShellTask {
++	return b.backgroundShellTasks(false)
++}
++
++func (b *Toolset) RunningBackgroundShellTasks() []BackgroundShellTask {
++	return b.backgroundShellTasks(true)
++}
++
++func (b *Toolset) backgroundShellTasks(runningOnly bool) []BackgroundShellTask {
+ 	if b == nil || b.tasks == nil {
+ 		return nil
+ 	}
+@@ -29,29 +37,17 @@ func (b *Toolset) BackgroundShellTasks() []BackgroundShellTask {
+ 	b.tasks.pruneCompletedLocked(time.Now(), "")
+ 	tasks := make([]*shellTask, 0, len(b.tasks.tasks))
+ 	for _, task := range b.tasks.tasks {
+-		tasks = append(tasks, task)
++		if !runningOnly || task.snapshot().Status == "running" {
++			tasks = append(tasks, task)
++		}
+ 	}
+ 	b.tasks.mu.Unlock()
+ 
+ 	out := make([]BackgroundShellTask, 0, len(tasks))
+ 	for _, task := range tasks {
+-		snap := task.snapshot()
+-		out = append(out, BackgroundShellTask{
+-			ID:         snap.ID,
+-			Command:    snap.Command,
+-			CWD:        snap.CWD,
+-			Status:     snap.Status,
+-			Transport:  string(snap.Transport),
+-			StartedAt:  snap.StartedAt,
+-			FinishedAt: snap.FinishedAt,
+-			LastOutput: snap.LastOutput,
+-			CanWrite:   snap.CanWrite,
+-			ExitCode:   snap.ExitCode,
+-		})
+-	}
+-	sort.SliceStable(out, func(i, j int) bool {
+-		return out[i].StartedAt.Before(out[j].StartedAt)
+-	})
++		out = append(out, backgroundShellTaskFromSnapshot(task.snapshot()))
++	}
++	sortBackgroundShellTasks(out)
+ 	return out
+ }
+ 
+@@ -78,6 +74,54 @@ func (b *Toolset) CancelBackgroundShellTask(ctx context.Context, taskID string)
+ 	case <-time.After(3 * time.Second):
+ 	}
+ 	snap := task.snapshot()
++	return backgroundShellTaskFromSnapshot(snap), nil
++}
++
++func (b *Toolset) CancelAllBackgroundShellTasks(ctx context.Context) ([]BackgroundShellTask, error) {
++	if ctx == nil {
++		ctx = context.Background()
++	}
++	if b == nil || b.tasks == nil {
++		return nil, nil
++	}
++	b.tasks.mu.Lock()
++	b.tasks.pruneCompletedLocked(time.Now(), "")
++	tasks := make([]*shellTask, 0, len(b.tasks.tasks))
++	for _, task := range b.tasks.tasks {
++		if task.snapshot().Status == "running" {
++			tasks = append(tasks, task)
++		}
++	}
++	b.tasks.mu.Unlock()
++	if len(tasks) == 0 {
++		return nil, nil
++	}
++
++	for _, task := range tasks {
++		task.cancelRun()
++	}
++
++	waitCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
++	defer cancel()
++	for _, task := range tasks {
++		select {
++		case <-waitCtx.Done():
++			if errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
++				return nil, ctx.Err()
++			}
++		case <-task.done:
++		}
++	}
++
++	out := make([]BackgroundShellTask, 0, len(tasks))
++	for _, task := range tasks {
++		out = append(out, backgroundShellTaskFromSnapshot(task.snapshot()))
++	}
++	sortBackgroundShellTasks(out)
++	return out, nil
++}
++
++func backgroundShellTaskFromSnapshot(snap shellTaskSnapshot) BackgroundShellTask {
+ 	return BackgroundShellTask{
+ 		ID:         snap.ID,
+ 		Command:    snap.Command,
+@@ -89,5 +133,11 @@ func (b *Toolset) CancelBackgroundShellTask(ctx context.Context, taskID string)
+ 		LastOutput: snap.LastOutput,
+ 		CanWrite:   snap.CanWrite,
+ 		ExitCode:   snap.ExitCode,
+-	}, nil
++	}
++}
++
++func sortBackgroundShellTasks(tasks []BackgroundShellTask) {
++	sort.SliceStable(tasks, func(i, j int) bool {
++		return tasks[i].StartedAt.Before(tasks[j].StartedAt)
++	})
+ }
+diff --git a/internal/tui/tool_result_summary.go b/internal/tui/tool_result_summary.go
+index afff091..4a75d0e 100644
+--- a/internal/tui/tool_result_summary.go
++++ b/internal/tui/tool_result_summary.go
+@@ -138,19 +138,12 @@ func summarizeShellResult(env toolResultEnvelope, successBySignal bool) (string,
+ 	hasExitCode := hasInt(env.metrics["exit_code"])
+ 	duration := formatDurationMS(asInt64(env.metrics["duration_ms"]))
+ 	if env.status == "running" {
+-		taskID := core.AsString(env.payload["task_id"])
+ 		reason := shellDiagnosisLabel(core.AsString(env.diagnosis["reason"]))
+-		if taskID != "" {
+-			if reason != "" && duration != "" {
+-				return "result_running", reason + " · " + duration + " · " + taskID
+-			}
+-			if reason != "" {
+-				return "result_running", reason + " · " + taskID
+-			}
+-			if duration != "" {
+-				return "result_running", "running in background · " + duration + " · " + taskID
+-			}
+-			return "result_running", "running in background · " + taskID
++		if reason != "" && duration != "" {
++			return "result_running", reason + " · " + duration
++		}
++		if reason != "" {
++			return "result_running", reason
+ 		}
+ 		if duration != "" {
+ 			return "result_running", "running · " + duration

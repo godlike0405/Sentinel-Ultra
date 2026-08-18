@@ -1,0 +1,47 @@
+schema_version = "1.3"
+
+[metadata]
+hardening_cycles = "2"
+agent_hardened = "true"
+author_name = "anonymous"
+author_email = "anonymous@snorkel.ai"
+# --- swe_ultra_requirements §4 field names ---
+category = "implementation"
+subcategory = "feature"
+coding_language = "rust"
+repo_name = "specta"
+repo_license = "MIT"
+source_pr_url = "https://github.com/specta-rs/specta/pull/458"
+base_commit_sha = "4a2878cad6f1064f573479c60c55bcdba7922477"
+model_difficulty = "medium"
+difficulty_explanation = "Requires designing a new Rust workspace crate, traversing recursive Specta datatype graphs, maintaining a compact serialization protocol, and generating two distinct JavaScript/TypeScript transformation strategies across primitives, collections, generics, and enum representations. The latest packaged tier was medium; the expanded full-PR contract requires a fresh platform difficulty run."
+tags = ["code-generation", "javascript-codegen", "type-mapping", "specta", "rust"]
+# --- legacy aliases (kept for backward-compatible internal consumers) ---
+difficulty = "medium"
+task_type = "implementation"
+task_subtype = "feature"
+source = "https://github.com/specta-rs/specta/pull/458"
+language = "rust"
+expert_time_estimate_min = 120.0
+junior_time_estimate_min = 420.0
+pr_created_at = "2026-03-11T15:41:44Z"
+pr_merged_at = "2026-03-25T18:18:17Z"
+
+[verifier]
+timeout_sec = 300.0
+network_mode = "no-network"
+
+[agent]
+timeout_sec = 1800.0
+network_mode = "allowlist"
+allowed_hosts = [
+    "api.portkey.ai",
+]
+
+[environment]
+build_timeout_sec = 900.0
+cpus = 4
+memory_mb = 8192
+storage_mb = 10240
+gpus = 0
+network_mode = "public"

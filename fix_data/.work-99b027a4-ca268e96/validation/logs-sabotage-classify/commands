@@ -1,0 +1,4 @@
+go test -count=1 -json ./internal/app -run '^(TestSentinelStopEmptyContract|TestSentinelPSStopLifecycleContract|TestSentinelPSTimeoutExclusionContract|TestSentinelStopSingularCountContract|TestCollectRecentAssistantTexts)$'
+go test -count=1 -json ./internal/runtime/commands -run '^(TestSentinelStopClassificationContract|TestSentinelStopCatalogContract|TestClassifySubmitAcceptsStatsCache)$'
+go test -count=1 -json ./internal/tools -run '^(TestSentinelRunningViewAndSingleCancelContract|TestSentinelCancelAllContract|TestSentinelRunningViewExcludesTimedOutContract|TestShellRunDescriptionUsesConfiguredForegroundWait)$'
+go test -count=1 -json ./internal/tui -run '^(TestSentinelBusyStopDispatchContract|TestSentinelStopSuggestionAutoRunContract|TestSentinelRunningShellSummaryContract|TestSummarizeToolResultForChatPreservesShellANSI)$'

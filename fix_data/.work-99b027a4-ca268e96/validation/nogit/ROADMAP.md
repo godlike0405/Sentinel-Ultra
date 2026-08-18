@@ -1,0 +1,169 @@
+# Whale Roadmap
+
+This roadmap is for contributors and users interested in where Whale is heading. It is not a release commitment — it breaks down the most worthwhile directions into **discussable**, claimable, and verifiable todos.
+
+**If you think anything on this roadmap should be improved, speak up. We are still learning.**
+
+Whale's core positioning stays the same: DeepSeek-native, terminal-first, affordable for long coding sessions.
+
+## Overview
+
+- [ ] TUI stability and local telemetry
+- [ ] Windows support
+- [ ] Chinese-first documentation system
+- [ ] Test system improvements
+- [x] Subagent capability optimization
+- [ ] Token usage and cache hit rate comparisons
+- [ ] Common slash command workflows
+
+## TUI Stability and Local Telemetry
+
+Whale needs to become a stable, smooth terminal tool where failures are diagnosable. The biggest UX issues today are not missing features — they are TUI interactions, information flow, and failure diagnostics.
+
+- [ ] Identify and fix TUI lag issues
+- [ ] Optimize streaming output refresh rhythm to reduce interference between input box, status bar, and chat area
+- [ ] Improve information layering: user messages, model responses, thinking, tool calls, tool results, errors, and status hints should be easier to distinguish
+- [ ] Optimize theme colors for dark terminals, light terminals, and low-contrast environments
+- [ ] Improve display of approvals, diffs, shell output, MCP errors, and subagent progress
+- [x] Add local telemetry to observe tool call success rate, failure reasons, latency, retry count, token usage, and cache hits
+- [x] Improve error classification and hints after tool call failures
+- [x] Improve retry strategy: distinguish between retriable errors, parameter errors, permission denials, user cancellation, and cases where the model needs to replan
+- [x] Add debug entry points so users and contributors can quickly collect issue context
+
+Splittable issues:
+
+- [ ] TUI lag reproduction and profiling
+- [ ] Redesign tool call/result display hierarchy
+- [x] Add tool call telemetry recording
+- [x] Add failure reason classification stats
+- [ ] Improve MCP/tool error readability in TUI
+
+## Windows Support
+
+Windows support should not stop at "it compiles." Real support means installation, shell, paths, terminal, CI, releases, and documentation.
+
+- [x] Add Windows CI covering full repo test compilation and basic shell runtime tests
+- [x] Verify Windows shell command execution behavior, including `cmd`, PowerShell, and Git Bash trade-offs (shared shell resolver and basic runtime tests added)
+- [x] Fix Windows-specific differences: path handling, line endings, encoding, terminal size, key events
+- [x] Add Windows release assets and verify required assets in the release workflow
+- [x] Add PowerShell install script or clearly recommend an install method
+- [x] Document current Windows support scope and known limitations
+- [ ] Add Windows-specific `whale doctor` checks
+- [x] Verify that when Windows users ask Whale to compile a local project, stderr/stdout are returned to the model correctly
+
+Splittable issues:
+
+- [x] Windows CI baseline
+- [x] Windows shell resolver
+- [x] Windows install documentation
+- [x] Windows release assets
+- [ ] Windows terminal/TUI smoke test
+
+## Chinese-First Documentation System
+
+Whale's primary users and contributors are likely to read Chinese first. Documentation should get Chinese solid first, then add English.
+
+- [ ] Add architecture docs explaining the relationship between CLI, TUI, App, Agent, Tools, MCP, and Skills
+- [ ] Add quick-start docs covering install, setup, doctor, TUI, exec, resume, ask, plan
+- [ ] Add provider configuration docs for DeepSeek official, Alibaba Cloud Bailian, Volcano Engine, SiliconFlow, and OpenAI-compatible endpoints
+- [ ] Add MCP setup tutorial and common server examples
+- [ ] Add Skills usage, installation, creation, and disable guides
+- [ ] Add contribution guide: how to set up the environment, run tests, debug TUI bugs, write evals, and submit PRs
+- [ ] Add debugging guide: how to read logs, telemetry, usage, session, and MCP status
+- [ ] Fill in FAQ: API keys, model selection, caching, cost, Windows, terminal compatibility, common errors
+
+Splittable issues:
+
+- [ ] `docs/architecture.md`
+- [ ] `docs/getting-started.md`
+- [ ] `docs/providers.md`
+- [ ] `docs/debugging.md`
+- [ ] `docs/contributing.zh-CN.md`
+
+## Test System Improvements
+
+Whale already has Go unit tests and offline evals, but TUI interactions, end-to-end behavior, and benchmarks need systematizing. The test system should serve real regression, not just chase quantity.
+
+- [x] Fill in core package tests: config, session, policy, tools, agent, mcp, skills, telemetry
+- [x] Add TUI behavior tests covering input, queuing, approval, slash picker, skills picker, session picker, interrupt
+- [ ] Add TUI render/golden tests to freeze key UI output under narrow, wide, and mixed-language layouts
+- [ ] Improve eval harness docs so contributors can add new deterministic evals
+- [x] Add more regression evals: tool parameter repair, failure recovery, ask/plan modes, MCP errors, subagent result aggregation
+- [ ] Organize SWE-bench usage docs, clarifying it is an external benchmark, not a substitute for local regression tests
+- [ ] Add boundary notes for live smoke tests: only for real API verification, not a mandatory CI run
+- [ ] Clarify in the PR template which tests different change types should run
+
+Splittable issues:
+
+- [ ] TUI golden test helper
+- [ ] Compact (auto and manual) tests
+- [ ] Eval task writing guide
+- [ ] Ask/plan mode regression evals
+- [ ] MCP failure recovery evals
+- [ ] SWE-bench usage guide
+
+## Subagent Capability Optimization
+
+Subagents are still relatively weak. Focus on reliability and observability first, then consider more complex multi-agent orchestration.
+
+- [x] Clarify subagent usage boundaries: read-only exploration, review, research, or can it be extended to stronger tasks
+- [x] Improve subagent prompts to return structured, useful, and actionable conclusions
+- [x] Improve subagent progress display so users know what it is doing
+- [x] Add subagent token, latency, and failure rate stats
+- [x] Add subagent cancellation and timeout handling
+- [x] Support clearer roles such as `explore`, `review`, `research`
+- [x] Investigate whether to fork sessions or use independent context instead of one-shot tool calls
+- [x] Add subagent-related evals to verify it is actually more useful than the main agent searching alone
+
+Splittable issues:
+
+- [x] Subagent prompt optimization
+- [x] Subagent telemetry
+- [x] Subagent TUI progress
+- [x] Subagent timeout/cancel
+- [x] Subagent eval cases
+
+## Token Usage and Cache Hit Rate Comparisons
+
+One of Whale's differentiators is DeepSeek's cost and prefix cache. Credible data is needed to show how it differs from other agents.
+
+- [x] Design a comparison task set: read code, fix bugs, run tests, refactor, small multi-turn tasks, large repo exploration
+- [x] Record Whale's token usage, cache hits, latency, tool call count, and success rate
+- [ ] Compare with pi, Codex CLI, Claude Code, DeepSeek-TUI, Aider, and other common agents
+- [ ] Separate the impact of model pricing, cache hits, context strategy, and tool call strategy on cost
+- [x] Output reproducible benchmark scripts
+- [x] Output a report explaining which tasks Whale is cheaper for and which tasks it is not good enough at yet (English report done; Chinese report pending)
+- [x] Avoid treating one-shot results as permanent conclusions — note the date, version, model, and config in reports
+
+Splittable issues:
+
+- [x] Benchmark task set design
+- [x] Token/cache collection format
+- [ ] Whale vs pi cost comparison
+- [ ] Whale vs Codex/Claude Code cost comparison
+- [ ] Chinese benchmark report
+
+## Common Slash Commands and @-based Workflows
+
+New slash commands should serve real workflows, not expand the command surface for its own sake. Each command needs to answer: what problem does it solve, is it just an alias, does it need persistent state, and can it be tested?
+
+- [x] `/review`: review the current git diff or a specified range, output a priority-ordered review
+- [x] `/fork`: fork the current session to explore an alternative path
+- [ ] `/cwd`: view or change the current working directory; also evaluate whether `/status` or the status bar is a better fit
+- [x] `/btw`: define the semantics clearly before implementing, avoid becoming a vague catch-all
+- [ ] Support `@`-based scoping operations
+- [ ] Support rules configuration
+
+Splittable issues:
+
+- [x] `/review` design and implementation
+- [x] `/fork` session semantics design
+- [ ] `/cwd` — should it be a slash command?
+- [x] `/btw` design and implementation
+- [ ] Support `@`-based operations
+- [ ] Support rules configuration
+
+## Not Doing (for now)
+
+- [ ] No rush to build a large dashboard
+- [ ] No overly novel or complex agent designs

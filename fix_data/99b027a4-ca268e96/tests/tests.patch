@@ -1,0 +1,472 @@
+diff --git a/internal/app/sentinel_stop_all_test.go b/internal/app/sentinel_stop_all_test.go
+new file mode 100644
+index 0000000..1405716
+--- /dev/null
++++ b/internal/app/sentinel_stop_all_test.go
+@@ -0,0 +1,154 @@
++package app
++
++import (
++	"context"
++	"encoding/json"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/usewhale/whale/internal/core"
++	whaletools "github.com/usewhale/whale/internal/tools"
++)
++
++func sentinelAppShellTool(t *testing.T, ts *whaletools.Toolset) core.Tool {
++	t.Helper()
++	for _, tool := range ts.Tools() {
++		if tool.Name() == "shell_run" {
++			return tool
++		}
++	}
++	t.Fatal("shell_run tool is unavailable")
++	return nil
++}
++
++func sentinelAppStartTask(t *testing.T, tool core.Tool, command string, timeoutMS int) string {
++	t.Helper()
++	input := map[string]any{"command": command, "background": true}
++	if timeoutMS > 0 {
++		input["timeout_ms"] = timeoutMS
++	}
++	raw, err := json.Marshal(input)
++	if err != nil {
++		t.Fatalf("marshal shell input: %v", err)
++	}
++	res, err := tool.Run(context.Background(), core.ToolCall{ID: "sentinel", Name: "shell_run", Input: string(raw)})
++	if err != nil || res.IsError {
++		t.Fatalf("start %q: err=%v result=%+v", command, err, res)
++	}
++	var envelope struct {
++		Data struct {
++			Payload struct {
++				TaskID string `json:"task_id"`
++			} `json:"payload"`
++		} `json:"data"`
++	}
++	if err := json.Unmarshal([]byte(res.Content), &envelope); err != nil {
++		t.Fatalf("decode shell result: %v", err)
++	}
++	if envelope.Data.Payload.TaskID == "" {
++		t.Fatalf("missing task id in %s", res.Content)
++	}
++	return envelope.Data.Payload.TaskID
++}
++
++func TestSentinelStopEmptyContract(t *testing.T) {
++	app := &App{ctx: context.Background()}
++	res, err := app.ExecuteLocalCommand("/stop")
++	if err != nil || !res.Handled || res.Text != "No background shell tasks running." {
++		t.Fatalf("empty /stop result=%+v err=%v", res, err)
++	}
++	_, err = app.ExecuteLocalCommand("/stop opaque-id")
++	if err == nil || !strings.Contains(err.Error(), "usage: /stop") {
++		t.Fatalf("/stop with argument error=%v", err)
++	}
++}
++
++func TestSentinelPSStopLifecycleContract(t *testing.T) {
++	ts, err := whaletools.NewToolset(t.TempDir())
++	if err != nil {
++		t.Fatalf("new toolset: %v", err)
++	}
++	app := &App{ctx: context.Background(), toolset: ts}
++	shell := sentinelAppShellTool(t, ts)
++	firstID := sentinelAppStartTask(t, shell, "sleep 30", 0)
++	time.Sleep(2 * time.Millisecond)
++	secondID := sentinelAppStartTask(t, shell, "sleep 31", 0)
++
++	_, listing, _, err := app.HandleLocalCommand("/ps")
++	if err != nil || !strings.Contains(listing, "sleep 30") || !strings.Contains(listing, "sleep 31") {
++		t.Fatalf("running /ps output=%q err=%v", listing, err)
++	}
++	if strings.Index(listing, "sleep 30") >= strings.Index(listing, "sleep 31") || strings.Contains(listing, firstID) || strings.Contains(listing, secondID) {
++		t.Fatalf("/ps order or identifier leak: %q", listing)
++	}
++
++	_, stopped, _, err := app.HandleLocalCommand("/stop")
++	if err != nil || !strings.HasPrefix(stopped, "Stopped 2 background shell tasks.\n") {
++		t.Fatalf("/stop output=%q err=%v", stopped, err)
++	}
++	for _, want := range []string{"sleep 30", "sleep 31", "status:", "cwd:"} {
++		if !strings.Contains(stopped, want) {
++			t.Fatalf("/stop output missing %q: %q", want, stopped)
++		}
++	}
++	if strings.Contains(stopped, firstID) || strings.Contains(stopped, secondID) {
++		t.Fatalf("/stop leaked task id: %q", stopped)
++	}
++	for _, task := range ts.BackgroundShellTasks() {
++		if task.Status == "running" {
++			t.Fatalf("/stop left a running task: %+v", task)
++		}
++	}
++	_, after, _, err := app.HandleLocalCommand("/ps")
++	if err != nil || !strings.Contains(after, "No background shell tasks running.") || strings.Contains(after, "sleep 30") || strings.Contains(after, "sleep 31") {
++		t.Fatalf("post-stop /ps output=%q err=%v", after, err)
++	}
++}
++
++func TestSentinelPSTimeoutExclusionContract(t *testing.T) {
++	ts, err := whaletools.NewToolset(t.TempDir())
++	if err != nil {
++		t.Fatalf("new toolset: %v", err)
++	}
++	app := &App{ctx: context.Background(), toolset: ts}
++	id := sentinelAppStartTask(t, sentinelAppShellTool(t, ts), "sleep 1", 1)
++	deadline := time.Now().Add(5 * time.Second)
++	for {
++		history := ts.BackgroundShellTasks()
++		if len(history) == 1 && history[0].ID == id && history[0].Status == "timeout" {
++			break
++		}
++		if time.Now().After(deadline) {
++			t.Fatalf("timed-out task missing from history: %+v", history)
++		}
++		time.Sleep(10 * time.Millisecond)
++	}
++	res := app.executePSCommand()
++	if strings.Contains(res.Text, "sleep 1") || strings.Contains(res.Text, id) || !strings.Contains(res.Text, "No background shell tasks running.") {
++		t.Fatalf("timeout-only /ps result=%+v", res)
++	}
++	if res.LocalResult == nil || len(res.LocalResult.Fields) != 1 || res.LocalResult.Fields[0].Label != "running" || res.LocalResult.Fields[0].Value != "none" {
++		t.Fatalf("timeout-only local result=%+v", res.LocalResult)
++	}
++}
++
++func TestSentinelStopSingularCountContract(t *testing.T) {
++	ts, err := whaletools.NewToolset(t.TempDir())
++	if err != nil {
++		t.Fatalf("new toolset: %v", err)
++	}
++	app := &App{ctx: context.Background(), toolset: ts}
++	id := sentinelAppStartTask(t, sentinelAppShellTool(t, ts), "sleep 30", 0)
++	res, err := app.ExecuteLocalCommand("/stop")
++	if err != nil || !strings.HasPrefix(res.Text, "Stopped 1 background shell task.\n") {
++		t.Fatalf("singular /stop result=%+v err=%v", res, err)
++	}
++	if !strings.Contains(res.Text, "sleep 30") || !strings.Contains(res.Text, "status:") || strings.Contains(res.Text, id) {
++		t.Fatalf("singular /stop details=%q", res.Text)
++	}
++	again, err := app.ExecuteLocalCommand("/stop")
++	if err != nil || again.Text != "No background shell tasks running." {
++		t.Fatalf("second /stop result=%+v err=%v", again, err)
++	}
++}
+diff --git a/internal/runtime/commands/sentinel_stop_all_test.go b/internal/runtime/commands/sentinel_stop_all_test.go
+new file mode 100644
+index 0000000..89d0d4e
+--- /dev/null
++++ b/internal/runtime/commands/sentinel_stop_all_test.go
+@@ -0,0 +1,43 @@
++package commands
++
++import (
++	"strings"
++	"testing"
++)
++
++func TestSentinelStopClassificationContract(t *testing.T) {
++	valid := ClassifySubmit("/stop", CommandsHelp())
++	if valid.Line != "/stop" || valid.Class != SubmitLocalMutating {
++		t.Fatalf("/stop classification = %+v, want local-mutating", valid)
++	}
++	if !valid.BusyImmediate() {
++		t.Fatal("/stop must remain immediately dispatchable while busy")
++	}
++	for _, line := range []string{"/stop task-1", "/stop task-1 extra"} {
++		got := ClassifySubmit(line, CommandsHelp())
++		if got.Class != SubmitUsageError || got.BusyImmediate() {
++			t.Fatalf("%q classification = %+v, want usage error", line, got)
++		}
++	}
++}
++
++func TestSentinelStopCatalogContract(t *testing.T) {
++	var stop *SlashCommandSpec
++	for _, spec := range DefaultSlashCommands() {
++		if spec.Name == "/stop" {
++			copy := spec
++			stop = &copy
++			break
++		}
++	}
++	if stop == nil {
++		t.Fatal("/stop is missing from the slash-command catalog")
++	}
++	if stop.Description != "Stop all background shell tasks" || !stop.AutoRun || stop.ArgumentHint != "" {
++		t.Fatalf("unexpected /stop catalog entry: %+v", *stop)
++	}
++	help := CommandsHelp()
++	if !strings.Contains(", "+help+", ", ", /stop, ") || strings.Contains(help, "/stop <") {
++		t.Fatalf("help must list bare /stop, got %q", help)
++	}
++}
+diff --git a/internal/tools/sentinel_stop_all_test.go b/internal/tools/sentinel_stop_all_test.go
+new file mode 100644
+index 0000000..7b3e41c
+--- /dev/null
++++ b/internal/tools/sentinel_stop_all_test.go
+@@ -0,0 +1,172 @@
++package tools
++
++import (
++	"context"
++	"encoding/json"
++	"reflect"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/usewhale/whale/internal/core"
++)
++
++func sentinelRunningTasks(t *testing.T, ts *Toolset) []BackgroundShellTask {
++	t.Helper()
++	method := reflect.ValueOf(ts).MethodByName("RunningBackgroundShellTasks")
++	if !method.IsValid() {
++		t.Fatal("Toolset.RunningBackgroundShellTasks is unavailable")
++	}
++	values := method.Call(nil)
++	if len(values) != 1 {
++		t.Fatalf("RunningBackgroundShellTasks returned %d values", len(values))
++	}
++	tasks, ok := values[0].Interface().([]BackgroundShellTask)
++	if !ok {
++		t.Fatalf("RunningBackgroundShellTasks returned %T", values[0].Interface())
++	}
++	return tasks
++}
++
++func sentinelCancelAll(t *testing.T, ts *Toolset) ([]BackgroundShellTask, error) {
++	t.Helper()
++	method := reflect.ValueOf(ts).MethodByName("CancelAllBackgroundShellTasks")
++	if !method.IsValid() {
++		t.Fatal("Toolset.CancelAllBackgroundShellTasks is unavailable")
++	}
++	values := method.Call([]reflect.Value{reflect.ValueOf(context.Background())})
++	if len(values) != 2 {
++		t.Fatalf("CancelAllBackgroundShellTasks returned %d values", len(values))
++	}
++	tasks, ok := values[0].Interface().([]BackgroundShellTask)
++	if !ok && !values[0].IsNil() {
++		t.Fatalf("CancelAllBackgroundShellTasks returned %T", values[0].Interface())
++	}
++	var err error
++	if !values[1].IsNil() {
++		err, ok = values[1].Interface().(error)
++		if !ok {
++			t.Fatalf("CancelAllBackgroundShellTasks error result is %T", values[1].Interface())
++		}
++	}
++	return tasks, err
++}
++
++func sentinelStartBackgroundTask(t *testing.T, ts *Toolset, command string, timeoutMS int) string {
++	t.Helper()
++	input := map[string]any{"command": command, "background": true}
++	if timeoutMS > 0 {
++		input["timeout_ms"] = timeoutMS
++	}
++	raw, err := json.Marshal(input)
++	if err != nil {
++		t.Fatalf("marshal shell input: %v", err)
++	}
++	res, err := ts.shellRun(context.Background(), core.ToolCall{ID: "sentinel", Name: "shell_run", Input: string(raw)})
++	if err != nil || res.IsError {
++		t.Fatalf("start %q: err=%v result=%+v", command, err, res)
++	}
++	var envelope struct {
++		Data struct {
++			Payload struct {
++				TaskID string `json:"task_id"`
++			} `json:"payload"`
++		} `json:"data"`
++	}
++	if err := json.Unmarshal([]byte(res.Content), &envelope); err != nil {
++		t.Fatalf("decode shell result: %v", err)
++	}
++	if envelope.Data.Payload.TaskID == "" {
++		t.Fatalf("shell result has no task id: %s", res.Content)
++	}
++	return envelope.Data.Payload.TaskID
++}
++
++func sentinelWaitForTaskStatus(t *testing.T, ts *Toolset, id, want string) BackgroundShellTask {
++	t.Helper()
++	deadline := time.Now().Add(5 * time.Second)
++	for time.Now().Before(deadline) {
++		for _, task := range ts.BackgroundShellTasks() {
++			if task.ID == id && task.Status == want {
++				return task
++			}
++		}
++		time.Sleep(10 * time.Millisecond)
++	}
++	t.Fatalf("task %s did not reach %q; history=%+v", id, want, ts.BackgroundShellTasks())
++	return BackgroundShellTask{}
++}
++
++func TestSentinelRunningViewAndSingleCancelContract(t *testing.T) {
++	ts, err := NewToolset(t.TempDir())
++	if err != nil {
++		t.Fatalf("new toolset: %v", err)
++	}
++	id := sentinelStartBackgroundTask(t, ts, "sleep 30", 0)
++	running := sentinelRunningTasks(t, ts)
++	if len(running) != 1 || running[0].ID != id || running[0].Status != "running" {
++		t.Fatalf("running view = %+v", running)
++	}
++	stopped, err := ts.CancelBackgroundShellTask(context.Background(), id)
++	if err != nil || stopped.ID != id || stopped.Status == "running" {
++		t.Fatalf("single cancel result=%+v err=%v", stopped, err)
++	}
++	if got := sentinelRunningTasks(t, ts); len(got) != 0 {
++		t.Fatalf("single-canceled task remains running: %+v", got)
++	}
++	history := ts.BackgroundShellTasks()
++	if len(history) != 1 || history[0].ID != id || history[0].Status == "running" {
++		t.Fatalf("single-canceled task missing from history: %+v", history)
++	}
++}
++
++func TestSentinelCancelAllContract(t *testing.T) {
++	ts, err := NewToolset(t.TempDir())
++	if err != nil {
++		t.Fatalf("new toolset: %v", err)
++	}
++	firstID := sentinelStartBackgroundTask(t, ts, "sleep 30", 0)
++	time.Sleep(2 * time.Millisecond)
++	secondID := sentinelStartBackgroundTask(t, ts, "sleep 31", 0)
++	started := time.Now()
++	stopped, err := sentinelCancelAll(t, ts)
++	if err != nil {
++		t.Fatalf("cancel all: %v", err)
++	}
++	if elapsed := time.Since(started); elapsed >= 5*time.Second {
++		t.Fatalf("cancel all took %s; cancellation must use a short bounded wait", elapsed)
++	}
++	if len(stopped) != 2 || stopped[0].ID != firstID || stopped[1].ID != secondID {
++		t.Fatalf("cancel-all order/result = %+v", stopped)
++	}
++	for _, task := range stopped {
++		if task.Status == "running" {
++			t.Fatalf("cancel-all returned a running task: %+v", task)
++		}
++	}
++	if got := sentinelRunningTasks(t, ts); len(got) != 0 {
++		t.Fatalf("cancel-all left running tasks: %+v", got)
++	}
++	if history := ts.BackgroundShellTasks(); len(history) != 2 {
++		t.Fatalf("cancel-all discarded history: %+v", history)
++	}
++	again, err := sentinelCancelAll(t, ts)
++	if err != nil || len(again) != 0 {
++		t.Fatalf("idempotent cancel-all = %+v, %v", again, err)
++	}
++}
++
++func TestSentinelRunningViewExcludesTimedOutContract(t *testing.T) {
++	ts, err := NewToolset(t.TempDir())
++	if err != nil {
++		t.Fatalf("new toolset: %v", err)
++	}
++	id := sentinelStartBackgroundTask(t, ts, "sleep 1", 1)
++	timedOut := sentinelWaitForTaskStatus(t, ts, id, "timeout")
++	if !strings.Contains(timedOut.Command, "sleep 1") {
++		t.Fatalf("unexpected timed-out history entry: %+v", timedOut)
++	}
++	if got := sentinelRunningTasks(t, ts); len(got) != 0 {
++		t.Fatalf("timed-out task appears in running view: %+v", got)
++	}
++}
+diff --git a/internal/tui/sentinel_stop_all_test.go b/internal/tui/sentinel_stop_all_test.go
+new file mode 100644
+index 0000000..458e452
+--- /dev/null
++++ b/internal/tui/sentinel_stop_all_test.go
+@@ -0,0 +1,79 @@
++package tui
++
++import (
++	"testing"
++
++	tea "github.com/charmbracelet/bubbletea"
++	"github.com/usewhale/whale/internal/runtime/protocol"
++)
++
++func sentinelTUIModel() (model, *[]protocol.Intent) {
++	m := newModel(nil, "", "", "")
++	intents := []protocol.Intent{}
++	m.dispatch = func(intent protocol.Intent) {
++		intents = append(intents, intent)
++	}
++	return m, &intents
++}
++
++func sentinelTUIUpdate(t *testing.T, m model, msg tea.Msg) model {
++	t.Helper()
++	next, _ := m.Update(msg)
++	updated, ok := next.(model)
++	if !ok {
++		t.Fatalf("model update returned %T", next)
++	}
++	return updated
++}
++
++func TestSentinelBusyStopDispatchContract(t *testing.T) {
++	m, intents := sentinelTUIModel()
++	m.busy = true
++	m.submitPromptWhileBusy("/stop")
++	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentSubmitLocal || (*intents)[0].Input != "/stop" {
++		t.Fatalf("busy /stop intents=%+v", *intents)
++	}
++}
++
++func TestSentinelStopSuggestionAutoRunContract(t *testing.T) {
++	m, intents := sentinelTUIModel()
++	m.input.SetValue("/sto")
++	m.updateSlashMatches()
++	found := false
++	for i, suggestion := range m.slash.matches {
++		if suggestion.Display == "/stop" {
++			m.slash.selected = i
++			found = true
++			break
++		}
++	}
++	if !found {
++		t.Fatalf("/stop suggestion missing: %+v", m.slash.matches)
++	}
++	m = sentinelTUIUpdate(t, m, tea.KeyMsg{Type: tea.KeyEnter})
++	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentSubmitLocal || (*intents)[0].Input != "/stop" {
++		t.Fatalf("suggestion intents=%+v", *intents)
++	}
++	if got := m.input.Value(); got != "" {
++		t.Fatalf("input after auto-run=%q", got)
++	}
++	if m.hasSlashSuggestions() {
++		t.Fatalf("suggestions remain after auto-run: %+v", m.slash.matches)
++	}
++}
++
++func TestSentinelRunningShellSummaryContract(t *testing.T) {
++	cases := []struct {
++		raw  string
++		want string
++	}{
++		{raw: `{"success":true,"code":"ok","data":{"status":"running","metrics":{"duration_ms":15000},"payload":{"task_id":"task-123","command":"go test ./..."}}}`, want: "running · 15s"},
++		{raw: `{"success":true,"code":"ok","data":{"status":"running","metrics":{"duration_ms":15000},"payload":{"task_id":"task-123"},"diagnosis":{"reason":"build_test_long_running"}}}`, want: "build/test running · 15s"},
++	}
++	for _, tc := range cases {
++		role, got := summarizeToolResultForChat("shell_run", tc.raw)
++		if role != "result_running" || got != tc.want {
++			t.Fatalf("running summary role=%q text=%q, want %q", role, got, tc.want)
++		}
++	}
++}

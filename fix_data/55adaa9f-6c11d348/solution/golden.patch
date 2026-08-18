@@ -1,0 +1,1598 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index a2d917b..728c70b 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2067,6 +2067,18 @@ dependencies = [
+  "uuid",
+ ]
+ 
++[[package]]
++name = "specta-tags"
++version = "0.0.0"
++dependencies = [
++ "bytes",
++ "chrono",
++ "serde",
++ "serde_json",
++ "specta",
++ "specta-serde",
++]
++
+ [[package]]
+ name = "specta-tests"
+ version = "0.0.0"
+diff --git a/specta-serde/src/lib.rs b/specta-serde/src/lib.rs
+index c44821a..c3b11d5 100644
+--- a/specta-serde/src/lib.rs
++++ b/specta-serde/src/lib.rs
+@@ -551,7 +551,9 @@ fn rewrite_datatype_for_phase(
+             };
+ 
+             let mut new_reference = match mode {
+-                PhaseRewrite::Unified => unreachable!("unified mode should not reference split types"),
++                PhaseRewrite::Unified => {
++                    unreachable!("unified mode should not reference split types")
++                }
+                 PhaseRewrite::Serialize => target.serialize.reference(generics),
+                 PhaseRewrite::Deserialize => target.deserialize.reference(generics),
+             };
+diff --git a/specta-swift/src/primitives.rs b/specta-swift/src/primitives.rs
+index f7dff43..d9af6bd 100644
+--- a/specta-swift/src/primitives.rs
++++ b/specta-swift/src/primitives.rs
+@@ -33,7 +33,9 @@ fn enum_string_raw_value(variant: &Variant) -> Option<&str> {
+ fn resolved_string_enum(e: &Enum) -> Option<Vec<(&str, &str)>> {
+     e.variants()
+         .iter()
+-        .map(|(variant_name, variant)| enum_string_raw_value(variant).map(|raw| (variant_name.as_ref(), raw)))
++        .map(|(variant_name, variant)| {
++            enum_string_raw_value(variant).map(|raw| (variant_name.as_ref(), raw))
++        })
+         .collect()
+ }
+ 
+@@ -453,7 +455,8 @@ fn enum_to_swift(
+         match variant.fields() {
+             specta::datatype::Fields::Unit => {
+                 if is_string_enum {
+-                    let raw_value = enum_string_raw_value(variant).expect("string enum variants should have string literal payloads");
++                    let raw_value = enum_string_raw_value(variant)
++                        .expect("string enum variants should have string literal payloads");
+                     result.push_str(&format!("    case {} = \"{}\"\n", variant_name, raw_value));
+                 } else {
+                     result.push_str(&format!("    case {}\n", variant_name));
+diff --git a/specta-tags/Cargo.toml b/specta-tags/Cargo.toml
+new file mode 100644
+index 0000000..1d2b3ee
+--- /dev/null
++++ b/specta-tags/Cargo.toml
+@@ -0,0 +1,25 @@
++[package]
++name = "specta-tags"
++version = "0.0.0"
++edition = "2024"
++# TODO: Publishing metadata
++publish = false
++
++# /bin/sh RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc --all-features
++[package.metadata."docs.rs"]
++all-features = true
++rustdoc-args = ["--cfg", "docsrs"]
++
++[lints]
++workspace = true
++
++[dependencies]
++specta = { version = "=2.0.0-rc.23", path = "../specta" }
++specta-serde = { version = "0.0.10", path = "../specta-serde" }
++serde = { version = "1", features = ["derive"] } # TODO: Drop `derive` feature???
++serde_json = "1"
++
++[dev-dependencies]
++bytes = "1.11.1"
++chrono = "0.4.44"
++specta = { version = "=2.0.0-rc.23", path = "../specta", features = ["derive", "chrono", "bytes"] }
+diff --git a/specta-tags/examples/tags.rs b/specta-tags/examples/tags.rs
+new file mode 100644
+index 0000000..c40cd0c
+--- /dev/null
++++ b/specta-tags/examples/tags.rs
+@@ -0,0 +1,86 @@
++//! Basic capabilities of `specta-tags`.
++
++use std::{
++    collections::BTreeMap,
++    time::{Duration, SystemTime},
++};
++
++use specta::{
++    Type, Types,
++    datatype::{DataType, List, Primitive},
++};
++use specta_tags::{Analyzer, RuntimeRequirements, RuntimeTarget, render_runtime};
++
++#[allow(dead_code)]
++#[derive(Type)]
++struct FileChunk {
++    created_at: SystemTime,
++    payload: Vec<u8>,
++    checksums: Vec<u64>,
++}
++
++#[allow(dead_code)]
++#[derive(Type)]
++struct TransferEvent {
++    event_id: u128,
++    happened_at: SystemTime,
++    expires_in: Option<Duration>,
++    chunks: Vec<FileChunk>,
++    retries_by_region: BTreeMap<String, i64>,
++}
++
++fn main() -> Result<(), serde_json::Error> {
++    let analyzer = Analyzer::with_builtins().with_list_u8_is_bytes(true);
++
++    let bigint_spec = analyzer.analyze(
++        &DataType::Primitive(Primitive::u128),
++        &Types::default(),
++        &[],
++    );
++    println!(
++        "bigint ->\n{}\n",
++        serde_json::to_string_pretty(&bigint_spec)?
++    );
++
++    let uint8_array_spec = analyzer.analyze(
++        &DataType::List(List::new(DataType::Primitive(Primitive::u8))),
++        &Types::default(),
++        &[],
++    );
++    println!(
++        "UInt8Array (Vec<u8>) ->\n{}\n",
++        serde_json::to_string_pretty(&uint8_array_spec)?
++    );
++
++    let mut date_types = Types::default();
++    let date_datatype = SystemTime::definition(&mut date_types);
++    let date_spec = analyzer.analyze(&date_datatype, &date_types, &[]);
++    println!(
++        "date (SystemTime) ->\n{}\n",
++        serde_json::to_string_pretty(&date_spec)?
++    );
++
++    let mut types = Types::default();
++    let datatype = TransferEvent::definition(&mut types);
++
++    let spec = analyzer.analyze(&datatype, &types, &[]);
++
++    println!("nested object ->");
++    println!("{}", serde_json::to_string_pretty(&spec)?);
++
++    let requirements = RuntimeRequirements::from_specs([&spec]);
++
++    println!("\n--- TypeScript Runtime ---\n");
++    println!(
++        "{}",
++        render_runtime(RuntimeTarget::TypeScript, &requirements)
++    );
++
++    println!("\n--- JavaScript Runtime ---\n");
++    println!(
++        "{}",
++        render_runtime(RuntimeTarget::JavaScript, &requirements)
++    );
++
++    Ok(())
++}
+diff --git a/specta-tags/examples/tags2.rs b/specta-tags/examples/tags2.rs
+new file mode 100644
+index 0000000..f5c7999
+--- /dev/null
++++ b/specta-tags/examples/tags2.rs
+@@ -0,0 +1,26 @@
++use specta::{Type, Types};
++
++#[derive(Type)]
++pub struct A {
++    bigint: u128,
++    date: chrono::DateTime<chrono::Utc>,
++    bytes: bytes::Bytes,
++    b: B,
++}
++
++#[derive(Type)]
++pub struct B {
++    bigint: u128,
++    date: chrono::DateTime<chrono::Utc>,
++    bytes: bytes::Bytes,
++}
++
++fn main() {
++    let mut types = Types::default();
++    let dt = A::definition(&mut types);
++
++    let tags = specta_tags::v2::TransformPlan::analyze(dt, &types);
++    println!("--- PLAN ---\n{tags:?}");
++    // This would be emitted for each Tauri Specta command.
++    println!("--- RESULT ---\n result.then((v) => {})", tags.map("v"));
++}
+diff --git a/specta-tags/src/lib.rs b/specta-tags/src/lib.rs
+new file mode 100644
+index 0000000..2d5aaff
+--- /dev/null
++++ b/specta-tags/src/lib.rs
+@@ -0,0 +1,11 @@
++//! Shared semantic mapping analysis and JS/TS runtime generation.
++#![cfg_attr(docsrs, feature(doc_cfg))]
++#![doc(
++    html_logo_url = "https://github.com/specta-rs/specta/raw/main/.github/logo-128.png",
++    html_favicon_url = "https://github.com/specta-rs/specta/raw/main/.github/logo-128.png"
++)]
++
++mod v1;
++pub mod v2;
++
++pub use v1::*;
+diff --git a/specta-tags/src/v1.rs b/specta-tags/src/v1.rs
+new file mode 100644
+index 0000000..51cf462
+--- /dev/null
++++ b/specta-tags/src/v1.rs
+@@ -0,0 +1,755 @@
++use std::borrow::Cow;
++
++use serde::{Serialize, Serializer, ser::SerializeSeq};
++use specta::{
++    Types,
++    datatype::{DataType, Fields, GenericReference, NamedReference, Primitive, Reference},
++};
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum RuntimeTarget {
++    TypeScript,
++    JavaScript,
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum SemanticKind {
++    Date,
++    Bytes,
++}
++
++#[derive(Debug, Clone, Default)]
++pub struct Analyzer {
++    matchers: Vec<Matcher>,
++    list_u8_is_bytes: bool,
++}
++
++#[derive(Debug, Clone)]
++struct Matcher {
++    module_path: Cow<'static, str>,
++    name: Cow<'static, str>,
++    kind: SemanticKind,
++}
++
++impl Analyzer {
++    pub fn with_builtins() -> Self {
++        let mut this = Self::default();
++        for (module_path, name, kind) in BUILTIN_MATCHERS {
++            this = this.with_named_type(*module_path, *name, *kind);
++        }
++        this
++    }
++
++    pub fn with_named_type(
++        mut self,
++        module_path: impl Into<Cow<'static, str>>,
++        name: impl Into<Cow<'static, str>>,
++        kind: SemanticKind,
++    ) -> Self {
++        self.matchers.push(Matcher {
++            module_path: module_path.into(),
++            name: name.into(),
++            kind,
++        });
++        self
++    }
++
++    pub fn with_list_u8_is_bytes(mut self, enabled: bool) -> Self {
++        self.list_u8_is_bytes = enabled;
++        self
++    }
++
++    pub fn analyze(
++        &self,
++        dt: &DataType,
++        types: &Types,
++        generics: &[(GenericReference, DataType)],
++    ) -> TransformSpec {
++        self.analyze_inner(dt, types, generics, &mut Vec::new())
++    }
++
++    fn analyze_inner(
++        &self,
++        dt: &DataType,
++        types: &Types,
++        generics: &[(GenericReference, DataType)],
++        stack: &mut Vec<NamedReference>,
++    ) -> TransformSpec {
++        match dt {
++            DataType::Primitive(Primitive::i64)
++            | DataType::Primitive(Primitive::u64)
++            | DataType::Primitive(Primitive::i128)
++            | DataType::Primitive(Primitive::u128) => TransformSpec::BigInt,
++            DataType::Primitive(_) => TransformSpec::Identity,
++            DataType::List(list) => {
++                if self.list_u8_is_bytes && matches!(list.ty(), DataType::Primitive(Primitive::u8))
++                {
++                    TransformSpec::Bytes
++                } else {
++                    TransformSpec::List(Box::new(self.analyze_inner(
++                        list.ty(),
++                        types,
++                        generics,
++                        stack,
++                    )))
++                }
++            }
++            DataType::Map(map) => TransformSpec::Map(Box::new(self.analyze_inner(
++                map.value_ty(),
++                types,
++                generics,
++                stack,
++            ))),
++            DataType::Struct(st) => match st.fields() {
++                Fields::Unit => TransformSpec::Identity,
++                Fields::Unnamed(fields) => TransformSpec::Tuple(
++                    fields
++                        .fields()
++                        .iter()
++                        .filter_map(|field| field.ty())
++                        .map(|ty| self.analyze_inner(ty, types, generics, stack))
++                        .collect(),
++                ),
++                Fields::Named(fields) => TransformSpec::Object(
++                    fields
++                        .fields()
++                        .iter()
++                        .filter_map(|(name, field)| field.ty().map(|ty| (name, ty)))
++                        .map(|(name, ty)| {
++                            (
++                                name.to_string(),
++                                self.analyze_inner(ty, types, generics, stack),
++                            )
++                        })
++                        .collect(),
++                ),
++            },
++            DataType::Enum(e) => TransformSpec::Enum(
++                e.variants()
++                    .iter()
++                    .filter(|(_, variant)| !variant.skip())
++                    .map(|(name, variant)| {
++                        let (kind, spec) = match variant.fields() {
++                            Fields::Unit => {
++                                (EnumVariantTransformKind::Unit, TransformSpec::Identity)
++                            }
++                            Fields::Unnamed(fields) => {
++                                let fields = fields
++                                    .fields()
++                                    .iter()
++                                    .filter_map(|field| field.ty())
++                                    .map(|ty| self.analyze_inner(ty, types, generics, stack))
++                                    .collect::<Vec<_>>();
++                                let spec = if fields.len() == 1 {
++                                    fields.into_iter().next().unwrap_or_default()
++                                } else {
++                                    TransformSpec::Tuple(fields)
++                                };
++                                (EnumVariantTransformKind::Unnamed, spec)
++                            }
++                            Fields::Named(fields) => {
++                                let spec = TransformSpec::Object(
++                                    fields
++                                        .fields()
++                                        .iter()
++                                        .filter_map(|(name, field)| field.ty().map(|ty| (name, ty)))
++                                        .map(|(name, ty)| {
++                                            (
++                                                name.to_string(),
++                                                self.analyze_inner(ty, types, generics, stack),
++                                            )
++                                        })
++                                        .collect(),
++                                );
++                                (EnumVariantTransformKind::Named, spec)
++                            }
++                        };
++
++                        EnumVariantTransformSpec {
++                            name: name.to_string(),
++                            kind,
++                            spec,
++                        }
++                    })
++                    .collect(),
++            ),
++            DataType::Tuple(tuple) => TransformSpec::Tuple(
++                tuple
++                    .elements()
++                    .iter()
++                    .map(|ty| self.analyze_inner(ty, types, generics, stack))
++                    .collect(),
++            ),
++            DataType::Nullable(inner) => {
++                TransformSpec::Nullable(Box::new(self.analyze_inner(inner, types, generics, stack)))
++            }
++            DataType::Reference(Reference::Named(r)) => {
++                if let Some(ndt) = r.get(types) {
++                    if let Some(kind) = self.resolve_named_kind(ndt.module_path(), ndt.name()) {
++                        return kind.into();
++                    }
++
++                    if stack.contains(r) {
++                        return TransformSpec::Identity;
++                    }
++
++                    stack.push(r.clone());
++                    let spec = self.analyze_inner(ndt.ty(), types, r.generics(), stack);
++                    stack.pop();
++                    spec
++                } else {
++                    TransformSpec::Identity
++                }
++            }
++            DataType::Reference(Reference::Generic(generic)) => generics
++                .iter()
++                .find(|(key, _)| key == generic)
++                .map(|(_, dt)| self.analyze_inner(dt, types, &[], stack))
++                .unwrap_or_default(),
++            DataType::Reference(Reference::Opaque(_)) => TransformSpec::Identity,
++        }
++    }
++
++    fn resolve_named_kind(&self, module_path: &str, name: &str) -> Option<SemanticKind> {
++        self.matchers
++            .iter()
++            .find(|m| m.module_path == module_path && m.name == name)
++            .map(|m| m.kind)
++    }
++}
++
++const BUILTIN_MATCHERS: &[(&str, &str, SemanticKind)] = &[
++    // Date-like
++    ("std::time", "SystemTime", SemanticKind::Date),
++    ("toml::value", "Datetime", SemanticKind::Date),
++    ("chrono", "NaiveDateTime", SemanticKind::Date),
++    ("chrono", "NaiveDate", SemanticKind::Date),
++    ("chrono", "Date", SemanticKind::Date),
++    ("chrono", "DateTime", SemanticKind::Date),
++    ("time", "PrimitiveDateTime", SemanticKind::Date),
++    ("time", "OffsetDateTime", SemanticKind::Date),
++    ("time", "Date", SemanticKind::Date),
++    ("jiff", "Timestamp", SemanticKind::Date),
++    ("jiff", "Zoned", SemanticKind::Date),
++    ("jiff::civil", "Date", SemanticKind::Date),
++    ("jiff::civil", "DateTime", SemanticKind::Date),
++    ("bson", "DateTime", SemanticKind::Date),
++    // Byte-like
++    ("bytes", "Bytes", SemanticKind::Bytes),
++    ("bytes", "BytesMut", SemanticKind::Bytes),
++];
++
++#[derive(Debug, Clone, Default)]
++pub enum TransformSpec {
++    #[default]
++    Identity,
++    BigInt,
++    Date,
++    Bytes,
++    Nullable(Box<TransformSpec>),
++    List(Box<TransformSpec>),
++    Tuple(Vec<TransformSpec>),
++    Object(Vec<(String, TransformSpec)>),
++    Map(Box<TransformSpec>),
++    Enum(Vec<EnumVariantTransformSpec>),
++}
++
++impl Serialize for TransformSpec {
++    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
++    where
++        S: Serializer,
++    {
++        match self {
++            Self::Identity => serializer.serialize_u8(0),
++            Self::BigInt => serializer.serialize_u8(1),
++            Self::Date => serializer.serialize_u8(2),
++            Self::Bytes => serializer.serialize_u8(3),
++            Self::Nullable(inner) => {
++                let mut seq = serializer.serialize_seq(Some(2))?;
++                seq.serialize_element(&4u8)?;
++                seq.serialize_element(inner)?;
++                seq.end()
++            }
++            Self::List(inner) => {
++                let mut seq = serializer.serialize_seq(Some(2))?;
++                seq.serialize_element(&5u8)?;
++                seq.serialize_element(inner)?;
++                seq.end()
++            }
++            Self::Tuple(items) => {
++                let mut seq = serializer.serialize_seq(Some(2))?;
++                seq.serialize_element(&6u8)?;
++                seq.serialize_element(items)?;
++                seq.end()
++            }
++            Self::Object(fields) => {
++                let mut seq = serializer.serialize_seq(Some(2))?;
++                seq.serialize_element(&7u8)?;
++                seq.serialize_element(fields)?;
++                seq.end()
++            }
++            Self::Map(inner) => {
++                let mut seq = serializer.serialize_seq(Some(2))?;
++                seq.serialize_element(&8u8)?;
++                seq.serialize_element(inner)?;
++                seq.end()
++            }
++            Self::Enum(variants) => {
++                let mut seq = serializer.serialize_seq(Some(2))?;
++                seq.serialize_element(&9u8)?;
++                seq.serialize_element(variants)?;
++                seq.end()
++            }
++        }
++    }
++}
++
++impl TransformSpec {
++    pub fn is_identity(&self) -> bool {
++        match self {
++            Self::Identity => true,
++            Self::Nullable(inner) | Self::List(inner) | Self::Map(inner) => inner.is_identity(),
++            Self::Tuple(items) => items.iter().all(Self::is_identity),
++            Self::Object(fields) => fields.iter().all(|(_, spec)| spec.is_identity()),
++            Self::Enum(variants) => variants.iter().all(|variant| variant.spec.is_identity()),
++            Self::BigInt | Self::Date | Self::Bytes => false,
++        }
++    }
++
++    pub fn to_json(&self) -> String {
++        serde_json::to_string(self).expect("failed to serialize transform spec")
++    }
++
++    fn collect_requirements(&self, req: &mut RuntimeRequirements) {
++        req.needs_transform = true;
++        match self {
++            Self::Identity => {}
++            Self::BigInt => req.needs_bigint = true,
++            Self::Date => req.needs_date = true,
++            Self::Bytes => req.needs_bytes = true,
++            Self::Nullable(inner) => {
++                req.needs_nullable = true;
++                inner.collect_requirements(req);
++            }
++            Self::List(inner) => {
++                req.needs_list = true;
++                inner.collect_requirements(req);
++            }
++            Self::Tuple(items) => {
++                req.needs_tuple = true;
++                items.iter().for_each(|item| item.collect_requirements(req));
++            }
++            Self::Object(fields) => {
++                req.needs_object = true;
++                fields
++                    .iter()
++                    .for_each(|(_, item)| item.collect_requirements(req));
++            }
++            Self::Map(inner) => {
++                req.needs_map = true;
++                inner.collect_requirements(req);
++            }
++            Self::Enum(variants) => {
++                req.needs_enum = true;
++                variants
++                    .iter()
++                    .for_each(|variant| variant.spec.collect_requirements(req));
++            }
++        }
++    }
++}
++
++impl From<SemanticKind> for TransformSpec {
++    fn from(value: SemanticKind) -> Self {
++        match value {
++            SemanticKind::Date => Self::Date,
++            SemanticKind::Bytes => Self::Bytes,
++        }
++    }
++}
++
++#[derive(Debug, Clone)]
++pub struct EnumVariantTransformSpec {
++    pub name: String,
++    pub kind: EnumVariantTransformKind,
++    pub spec: TransformSpec,
++}
++
++impl Serialize for EnumVariantTransformSpec {
++    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
++    where
++        S: Serializer,
++    {
++        let mut seq = serializer.serialize_seq(Some(3))?;
++        seq.serialize_element(&self.name)?;
++        seq.serialize_element(&self.kind.code())?;
++        seq.serialize_element(&self.spec)?;
++        seq.end()
++    }
++}
++
++#[derive(Debug, Clone)]
++pub enum EnumVariantTransformKind {
++    Unit,
++    Named,
++    Unnamed,
++}
++
++impl EnumVariantTransformKind {
++    const fn code(&self) -> u8 {
++        match self {
++            Self::Unit => 0,
++            Self::Named => 1,
++            Self::Unnamed => 2,
++        }
++    }
++}
++
++#[derive(Debug, Clone, Default)]
++pub struct RuntimeRequirements {
++    pub needs_transform: bool,
++    pub needs_result_helper: bool,
++    needs_bigint: bool,
++    needs_date: bool,
++    needs_bytes: bool,
++    needs_nullable: bool,
++    needs_list: bool,
++    needs_tuple: bool,
++    needs_object: bool,
++    needs_map: bool,
++    needs_enum: bool,
++}
++
++impl RuntimeRequirements {
++    pub fn from_specs<'a>(specs: impl IntoIterator<Item = &'a TransformSpec>) -> Self {
++        let mut req = Self::default();
++        for spec in specs {
++            spec.collect_requirements(&mut req);
++        }
++        req
++    }
++
++    pub fn with_result_helper(mut self, enabled: bool) -> Self {
++        self.needs_result_helper = enabled;
++        self
++    }
++
++    pub fn is_empty(&self) -> bool {
++        !self.needs_transform && !self.needs_result_helper
++    }
++}
++
++pub const RUNTIME_RESERVED_NAMES: &[&str] = &[
++    "__TS_transform",
++    "__TS_transformEnum",
++    "__TS_transformResult",
++];
++
++pub fn render_runtime(target: RuntimeTarget, req: &RuntimeRequirements) -> Cow<'static, str> {
++    if req.is_empty() {
++        return Cow::Borrowed("");
++    }
++
++    let mut out = String::new();
++
++    if target == RuntimeTarget::TypeScript {
++        out.push_str(TRANSFORM_SPEC_TS);
++        out.push('\n');
++    }
++
++    // The result helper delegates to the transform function even when its
++    // caller supplied identity specs and requested no other runtime cases.
++    if req.needs_transform || req.needs_result_helper {
++        out.push_str(match target {
++            RuntimeTarget::TypeScript => TRANSFORM_FN_PREFIX_TS,
++            RuntimeTarget::JavaScript => TRANSFORM_FN_PREFIX_JS,
++        });
++
++        if req.needs_bigint {
++            out.push_str(CASE_BIGINT);
++        }
++        if req.needs_date {
++            out.push_str(CASE_DATE);
++        }
++        if req.needs_bytes {
++            out.push_str(CASE_BYTES);
++        }
++        if req.needs_nullable {
++            out.push_str(CASE_NULLABLE);
++        }
++        if req.needs_list {
++            out.push_str(CASE_LIST);
++        }
++        if req.needs_tuple {
++            out.push_str(CASE_TUPLE);
++        }
++        if req.needs_object {
++            out.push_str(CASE_OBJECT);
++        }
++        if req.needs_map {
++            out.push_str(CASE_MAP);
++        }
++        if req.needs_enum {
++            out.push_str(CASE_ENUM);
++        }
++
++        out.push_str(TRANSFORM_FN_SUFFIX);
++
++        if req.needs_enum {
++            out.push_str(match target {
++                RuntimeTarget::TypeScript => ENUM_HELPERS_TS,
++                RuntimeTarget::JavaScript => ENUM_HELPERS_JS,
++            });
++        }
++    }
++
++    if req.needs_result_helper {
++        out.push_str(match target {
++            RuntimeTarget::TypeScript => TRANSFORM_RESULT_TS,
++            RuntimeTarget::JavaScript => TRANSFORM_RESULT_JS,
++        });
++    }
++
++    Cow::Owned(out)
++}
++
++const TRANSFORM_SPEC_TS: &str = r#"type __TS_TransformSpec =
++    | 0
++    | 1
++    | 2
++    | 3
++    | [4, __TS_TransformSpec]
++    | [5, __TS_TransformSpec]
++    | [6, __TS_TransformSpec[]]
++    | [7, [string, __TS_TransformSpec][]]
++    | [8, __TS_TransformSpec]
++    | [9, __TS_EnumVariantTransformSpec[]];
++
++type __TS_EnumVariantTransformSpec = [
++    name: string,
++    kind: 0 | 1 | 2,
++    spec: __TS_TransformSpec,
++];
++"#;
++
++const TRANSFORM_FN_PREFIX_TS: &str = "function __TS_transform<T>(value: T, spec: __TS_TransformSpec): T {\n    if (spec == null || spec === 0) return value;\n\n    const rawValue = value as any;\n    const op = Array.isArray(spec) ? spec[0] : spec;\n\n    switch (op) {\n";
++const TRANSFORM_FN_PREFIX_JS: &str = "function __TS_transform(value, spec) {\n    if (spec == null || spec === 0) return value;\n\n    const rawValue = value;\n    const op = Array.isArray(spec) ? spec[0] : spec;\n\n    switch (op) {\n";
++
++const CASE_BIGINT: &str = r#"        case 1:
++            if (typeof rawValue === "bigint") return value;
++            if (typeof rawValue === "number" && Number.isInteger(rawValue)) return BigInt(rawValue);
++            if (typeof rawValue === "string") {
++                try {
++                    return BigInt(rawValue);
++                } catch {
++                    return value;
++                }
++            }
++            return value;
++"#;
++
++const CASE_DATE: &str = "        case 2:\n            return (typeof rawValue === \"string\" ? new Date(rawValue) : value);\n";
++const CASE_BYTES: &str = "        case 3:\n            return (Array.isArray(rawValue) && rawValue.every((v) => typeof v === \"number\") ? Uint8Array.from(rawValue) : value);\n";
++const CASE_NULLABLE: &str = "        case 4:\n            return (Array.isArray(spec) ? (rawValue == null ? value : __TS_transform(value, spec[1])) : value);\n";
++const CASE_LIST: &str = "        case 5:\n            return (Array.isArray(spec) && Array.isArray(rawValue) ? rawValue.map((item) => __TS_transform(item, spec[1])) : value);\n";
++const CASE_TUPLE: &str = "        case 6:\n            return (Array.isArray(spec) && Array.isArray(spec[1]) && Array.isArray(rawValue)\n                ? rawValue.map((item, index) => __TS_transform(item, spec[1][index] ?? 0))\n                : value);\n";
++const CASE_OBJECT: &str = r#"        case 7: {
++            if (!Array.isArray(spec) || !Array.isArray(spec[1])) return value;
++            if (rawValue == null || typeof rawValue !== "object" || Array.isArray(rawValue)) return value;
++
++            let out = rawValue;
++            for (const [key, nested] of spec[1]) {
++                if (!Object.prototype.hasOwnProperty.call(rawValue, key)) continue;
++                const next = __TS_transform(rawValue[key], nested);
++                if (next !== rawValue[key]) {
++                    if (out === rawValue) out = { ...rawValue };
++                    out[key] = next;
++                }
++            }
++            return out;
++        }
++"#;
++const CASE_MAP: &str = r#"        case 8: {
++            if (!Array.isArray(spec)) return value;
++            if (rawValue == null || typeof rawValue !== "object" || Array.isArray(rawValue)) return value;
++
++            let out = rawValue;
++            for (const key of Object.keys(rawValue)) {
++                const next = __TS_transform(rawValue[key], spec[1]);
++                if (next !== rawValue[key]) {
++                    if (out === rawValue) out = { ...rawValue };
++                    out[key] = next;
++                }
++            }
++            return out;
++        }
++"#;
++const CASE_ENUM: &str = "        case 9:\n            return (Array.isArray(spec) && Array.isArray(spec[1]) ? __TS_transformEnum(value, spec[1]) : value);\n";
++
++const TRANSFORM_FN_SUFFIX: &str = "        default:\n            return value;\n    }\n}\n\n";
++
++const ENUM_HELPERS_TS: &str = r#"function __TS_transformEnum<T>(value: T, variants: __TS_EnumVariantTransformSpec[]): T {
++    const rawValue = value as any;
++    for (const variant of variants) {
++        if (variant[1] === 0) continue;
++
++        if (rawValue != null && typeof rawValue === "object" && !Array.isArray(rawValue)) {
++            if (Object.prototype.hasOwnProperty.call(rawValue, variant[0])) {
++                const next = __TS_transform(rawValue[variant[0]], variant[2]);
++                if (next === rawValue[variant[0]]) return value;
++                return { ...rawValue, [variant[0]]: next } as T;
++            }
++
++            if (rawValue.type === variant[0] && Object.prototype.hasOwnProperty.call(rawValue, "data")) {
++                const next = __TS_transform(rawValue.data, variant[2]);
++                if (next === rawValue.data) return value;
++                return { ...rawValue, data: next } as T;
++            }
++
++            if (rawValue.tag === variant[0] && Object.prototype.hasOwnProperty.call(rawValue, "content")) {
++                const next = __TS_transform(rawValue.content, variant[2]);
++                if (next === rawValue.content) return value;
++                return { ...rawValue, content: next } as T;
++            }
++        }
++
++        const direct = __TS_transform(value, variant[2]);
++        if (direct !== value) return direct;
++    }
++    return value;
++}
++
++"#;
++
++const ENUM_HELPERS_JS: &str = r#"function __TS_transformEnum(value, variants) {
++    for (const variant of variants) {
++        if (variant[1] === 0) continue;
++
++        if (value != null && typeof value === "object" && !Array.isArray(value)) {
++            if (Object.prototype.hasOwnProperty.call(value, variant[0])) {
++                const next = __TS_transform(value[variant[0]], variant[2]);
++                if (next === value[variant[0]]) return value;
++                return { ...value, [variant[0]]: next };
++            }
++
++            if (value.type === variant[0] && Object.prototype.hasOwnProperty.call(value, "data")) {
++                const next = __TS_transform(value.data, variant[2]);
++                if (next === value.data) return value;
++                return { ...value, data: next };
++            }
++
++            if (value.tag === variant[0] && Object.prototype.hasOwnProperty.call(value, "content")) {
++                const next = __TS_transform(value.content, variant[2]);
++                if (next === value.content) return value;
++                return { ...value, content: next };
++            }
++        }
++
++        const direct = __TS_transform(value, variant[2]);
++        if (direct !== value) return direct;
++    }
++    return value;
++}
++
++"#;
++
++const TRANSFORM_RESULT_TS: &str = r#"function __TS_transformResult<T, E>(
++    result: Promise<{ status: "ok"; data: T } | { status: "error"; error: E }>,
++    okSpec: __TS_TransformSpec,
++    errSpec: __TS_TransformSpec,
++): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {
++    return result.then((value) => {
++        if (value?.status === "ok") {
++            return { status: "ok", data: __TS_transform(value.data, okSpec) };
++        }
++
++        if (value?.status === "error") {
++            return { status: "error", error: __TS_transform(value.error, errSpec) };
++        }
++
++        return value;
++    });
++}
++"#;
++
++const TRANSFORM_RESULT_JS: &str = r#"function __TS_transformResult(result, okSpec, errSpec) {
++    return result.then((value) => {
++        if (value?.status === "ok") {
++            return { status: "ok", data: __TS_transform(value.data, okSpec) };
++        }
++
++        if (value?.status === "error") {
++            return { status: "error", error: __TS_transform(value.error, errSpec) };
++        }
++
++        return value;
++    });
++}
++"#;
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn detects_primitive_bigint() {
++        let analyzer = Analyzer::with_builtins();
++        let spec = analyzer.analyze(
++            &DataType::Primitive(Primitive::u128),
++            &Types::default(),
++            &[],
++        );
++
++        assert!(matches!(spec, TransformSpec::BigInt));
++    }
++
++    #[test]
++    fn list_u8_detection_is_opt_in() {
++        let dt = DataType::List(specta::datatype::List::new(DataType::Primitive(
++            Primitive::u8,
++        )));
++
++        let default_spec = Analyzer::with_builtins().analyze(&dt, &Types::default(), &[]);
++        assert!(!matches!(default_spec, TransformSpec::Bytes));
++
++        let bytes_spec = Analyzer::with_builtins()
++            .with_list_u8_is_bytes(true)
++            .analyze(&dt, &Types::default(), &[]);
++        assert!(matches!(bytes_spec, TransformSpec::Bytes));
++    }
++
++    #[test]
++    fn runtime_is_minimal_for_single_bigint() {
++        let req = RuntimeRequirements::from_specs([&TransformSpec::BigInt]);
++        let runtime = render_runtime(RuntimeTarget::JavaScript, &req);
++
++        assert!(runtime.contains("case 1"));
++        assert!(!runtime.contains("case 2"));
++        assert!(!runtime.contains("case 9"));
++        assert!(!runtime.contains("function __TS_transformEnum"));
++    }
++
++    #[test]
++    fn serializes_compact_leaf_opcodes() {
++        assert_eq!(TransformSpec::Identity.to_json(), "0");
++        assert_eq!(TransformSpec::BigInt.to_json(), "1");
++        assert_eq!(TransformSpec::Date.to_json(), "2");
++        assert_eq!(TransformSpec::Bytes.to_json(), "3");
++    }
++
++    #[test]
++    fn serializes_compact_composite_shapes() {
++        let object = TransformSpec::Object(vec![(
++            "created_at".to_string(),
++            TransformSpec::Nullable(Box::new(TransformSpec::Date)),
++        )]);
++        assert_eq!(object.to_json(), r#"[7,[["created_at",[4,2]]]]"#);
++
++        let en = TransformSpec::Enum(vec![EnumVariantTransformSpec {
++            name: "Created".to_string(),
++            kind: EnumVariantTransformKind::Named,
++            spec: TransformSpec::Tuple(vec![TransformSpec::BigInt]),
++        }]);
++        assert_eq!(en.to_json(), r#"[9,[["Created",1,[6,[1]]]]]"#);
++    }
++}
+diff --git a/specta-tags/src/v2.rs b/specta-tags/src/v2.rs
+new file mode 100644
+index 0000000..69864a1
+--- /dev/null
++++ b/specta-tags/src/v2.rs
+@@ -0,0 +1,596 @@
++use std::borrow::Cow;
++
++use specta::{
++    Types,
++    datatype::{DataType, Fields, GenericReference, NamedReference, Primitive, Reference},
++};
++use specta_serde::internal::SerdeContainerAttrs;
++
++// TODO: Allow configuring custom named types via NDT name and module path using config params.
++// TODO: Tagging-style system for `rspc` w/ runtime
++
++// TODO: Core changes to `BigInt` handling with Typescript exporter???
++// TODO: How to handle `UInt8Array`?
++// TODO: Could we support `Custom` tags? If the runtime is fixed thats hard.
++
++// TODO: Documentations -> Explain how input types *just work* (double check that though)
++
++/// A tag is used to identify the transformation required for a given data type.
++pub enum Tag {
++    /// [BigInt](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt)
++    BigInt,
++    /// [Uint8Array](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Uint8Array)
++    Uint8Array,
++    /// [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date)
++    Date,
++    /// A custom tag.
++    ///
++    /// TODO: Document this
++    Custom(Box<dyn Fn(&str) -> Cow<'static, str> + Send + Sync>),
++}
++
++impl std::fmt::Debug for Tag {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        match self {
++            Self::BigInt => f.write_str("BigInt"),
++            Self::Uint8Array => f.write_str("Uint8Array"),
++            Self::Date => f.write_str("Date"),
++            Self::Custom(_) => f.write_str("Custom(<fn>)"),
++        }
++    }
++}
++
++/// TODO
++#[derive(Debug)]
++pub struct TransformPlan {
++    plan: PlanNode,
++}
++
++impl TransformPlan {
++    /// TODO
++    pub fn analyze(dt: DataType, types: &Types) -> Self {
++        // Scan all `DataType` references, etc. and collect tags and their object location for `Self::map` to use.
++        //
++        // You should match on `NamedDataType`'s name and module path to determine known named types.
++
++        Self {
++            plan: Analyzer::default().analyze(&dt, types, &[], &mut Vec::new()),
++        }
++    }
++
++    /// TODO
++    ///
++    /// This should produce something like
++    pub fn map<'a>(&self, t: &'a str) -> Cow<'a, str> {
++        // If `t` is a struct and has tags we wanna decompose it to something like:
++        // `{ ...t, field_with_override: { nested_override: new Date(t.field_with_override.nested_override) } }`
++        //
++        // If a nested tag doesn't have tags we should just return it to avoid deconstructing it.
++        //
++        // Otherwise we need to traverse the structure to apply the tags inline.
++        // This should just be plain JS code so should work in Typescript (via inference) and in JS.
++        //
++        // If it has no tags we can just return `t` as is.
++
++        if self.plan.is_identity() {
++            return t.into();
++        }
++
++        Cow::Owned(Renderer::default().render(&self.plan, t))
++    }
++}
++
++#[derive(Debug)]
++enum PlanNode {
++    Identity,
++    Leaf(Tag),
++    Nullable(Box<PlanNode>),
++    List(Box<PlanNode>),
++    Tuple(Vec<PlanNode>),
++    Object(Vec<(String, PlanNode)>),
++    Map(Box<PlanNode>),
++    Enum {
++        repr: EnumRepr,
++        variants: Vec<EnumVariantPlan>,
++    },
++}
++
++impl PlanNode {
++    fn is_identity(&self) -> bool {
++        match self {
++            Self::Identity => true,
++            Self::Leaf(_) => false,
++            Self::Nullable(inner) | Self::List(inner) | Self::Map(inner) => inner.is_identity(),
++            Self::Tuple(items) => items.iter().all(Self::is_identity),
++            Self::Object(fields) => fields.iter().all(|(_, v)| v.is_identity()),
++            Self::Enum { variants, .. } => variants.iter().all(|v| v.plan.is_identity()),
++        }
++    }
++}
++
++#[derive(Debug)]
++struct EnumVariantPlan {
++    name: String,
++    kind: EnumVariantKind,
++    plan: PlanNode,
++}
++
++#[derive(Debug, Clone, Copy)]
++enum EnumVariantKind {
++    Unit,
++    Named,
++    Unnamed,
++}
++
++#[derive(Debug, Clone)]
++enum EnumRepr {
++    External,
++    Internal { tag: String },
++    Adjacent { tag: String, content: String },
++    Untagged,
++}
++
++impl Default for EnumRepr {
++    fn default() -> Self {
++        Self::External
++    }
++}
++
++#[derive(Clone, Copy)]
++enum KnownNamedTag {
++    Date,
++    Uint8Array,
++}
++
++const BUILTIN_MATCHERS: &[(&str, &str, KnownNamedTag)] = &[
++    // Date-like
++    ("std::time", "SystemTime", KnownNamedTag::Date),
++    ("toml::value", "Datetime", KnownNamedTag::Date),
++    ("chrono", "NaiveDateTime", KnownNamedTag::Date),
++    ("chrono", "NaiveDate", KnownNamedTag::Date),
++    ("chrono", "Date", KnownNamedTag::Date),
++    ("chrono", "DateTime", KnownNamedTag::Date),
++    ("time", "PrimitiveDateTime", KnownNamedTag::Date),
++    ("time", "OffsetDateTime", KnownNamedTag::Date),
++    ("time", "Date", KnownNamedTag::Date),
++    ("jiff", "Timestamp", KnownNamedTag::Date),
++    ("jiff", "Zoned", KnownNamedTag::Date),
++    ("jiff::civil", "Date", KnownNamedTag::Date),
++    ("jiff::civil", "DateTime", KnownNamedTag::Date),
++    ("bson", "DateTime", KnownNamedTag::Date),
++    // Byte-like
++    ("bytes", "Bytes", KnownNamedTag::Uint8Array),
++    ("bytes", "BytesMut", KnownNamedTag::Uint8Array),
++];
++
++#[derive(Default)]
++struct Analyzer;
++
++impl Analyzer {
++    fn analyze(
++        &self,
++        dt: &DataType,
++        types: &Types,
++        generics: &[(GenericReference, DataType)],
++        stack: &mut Vec<NamedReference>,
++    ) -> PlanNode {
++        match dt {
++            DataType::Primitive(Primitive::i64)
++            | DataType::Primitive(Primitive::u64)
++            | DataType::Primitive(Primitive::i128)
++            | DataType::Primitive(Primitive::u128) => PlanNode::Leaf(Tag::BigInt),
++            DataType::Primitive(_) => PlanNode::Identity,
++            DataType::List(list) => {
++                let inner = self.analyze(list.ty(), types, generics, stack);
++                if inner.is_identity() {
++                    PlanNode::Identity
++                } else {
++                    PlanNode::List(Box::new(inner))
++                }
++            }
++            DataType::Map(map) => {
++                let inner = self.analyze(map.value_ty(), types, generics, stack);
++                if inner.is_identity() {
++                    PlanNode::Identity
++                } else {
++                    PlanNode::Map(Box::new(inner))
++                }
++            }
++            DataType::Struct(st) => self.analyze_fields(st.fields(), types, generics, stack),
++            DataType::Enum(en) => {
++                let repr = parse_enum_repr(en.attributes());
++                let mut variants = Vec::new();
++
++                for (name, variant) in en.variants().iter().filter(|(_, v)| !v.skip()) {
++                    let (kind, plan) = match variant.fields() {
++                        Fields::Unit => (EnumVariantKind::Unit, PlanNode::Identity),
++                        Fields::Unnamed(fields) => {
++                            let mut items = fields
++                                .fields()
++                                .iter()
++                                .filter_map(|field| field.ty())
++                                .map(|ty| self.analyze(ty, types, generics, stack))
++                                .collect::<Vec<_>>();
++
++                            let plan = if items.is_empty() {
++                                PlanNode::Identity
++                            } else if items.len() == 1 {
++                                items.remove(0)
++                            } else {
++                                PlanNode::Tuple(items)
++                            };
++
++                            (EnumVariantKind::Unnamed, plan)
++                        }
++                        Fields::Named(fields) => {
++                            let object = fields
++                                .fields()
++                                .iter()
++                                .filter_map(|(field_name, field)| {
++                                    let ty = field.ty()?;
++                                    let plan = self.analyze(ty, types, generics, stack);
++                                    (!plan.is_identity()).then(|| (field_name.to_string(), plan))
++                                })
++                                .collect::<Vec<_>>();
++
++                            let plan = if object.is_empty() {
++                                PlanNode::Identity
++                            } else {
++                                PlanNode::Object(object)
++                            };
++
++                            (EnumVariantKind::Named, plan)
++                        }
++                    };
++
++                    if !plan.is_identity() {
++                        variants.push(EnumVariantPlan {
++                            name: name.to_string(),
++                            kind,
++                            plan,
++                        });
++                    }
++                }
++
++                // An untagged payload has no discriminator that a trusting transform can
++                // consult without inspecting runtime types or shapes. Leave it unchanged.
++                if variants.is_empty() || matches!(repr, EnumRepr::Untagged) {
++                    PlanNode::Identity
++                } else {
++                    PlanNode::Enum { repr, variants }
++                }
++            }
++            DataType::Tuple(tuple) => {
++                let items = tuple
++                    .elements()
++                    .iter()
++                    .map(|ty| self.analyze(ty, types, generics, stack))
++                    .collect::<Vec<_>>();
++
++                if items.iter().all(PlanNode::is_identity) {
++                    PlanNode::Identity
++                } else {
++                    PlanNode::Tuple(items)
++                }
++            }
++            DataType::Nullable(inner) => {
++                let inner = self.analyze(inner, types, generics, stack);
++                if inner.is_identity() {
++                    PlanNode::Identity
++                } else {
++                    PlanNode::Nullable(Box::new(inner))
++                }
++            }
++            DataType::Reference(Reference::Named(reference)) => {
++                if let Some(ndt) = reference.get(types) {
++                    if let Some(tag) = self.resolve_named_tag(ndt.module_path(), ndt.name()) {
++                        return match tag {
++                            KnownNamedTag::Date => PlanNode::Leaf(Tag::Date),
++                            KnownNamedTag::Uint8Array => PlanNode::Leaf(Tag::Uint8Array),
++                        };
++                    }
++
++                    if stack.contains(reference) {
++                        return PlanNode::Identity;
++                    }
++
++                    stack.push(reference.clone());
++                    let out = self.analyze(ndt.ty(), types, reference.generics(), stack);
++                    stack.pop();
++                    out
++                } else {
++                    PlanNode::Identity
++                }
++            }
++            DataType::Reference(Reference::Generic(generic)) => generics
++                .iter()
++                .find(|(key, _)| key == generic)
++                .map(|(_, dt)| self.analyze(dt, types, &[], stack))
++                .unwrap_or(PlanNode::Identity),
++            DataType::Reference(Reference::Opaque(_)) => PlanNode::Identity,
++        }
++    }
++
++    fn analyze_fields(
++        &self,
++        fields: &Fields,
++        types: &Types,
++        generics: &[(GenericReference, DataType)],
++        stack: &mut Vec<NamedReference>,
++    ) -> PlanNode {
++        match fields {
++            Fields::Unit => PlanNode::Identity,
++            Fields::Unnamed(fields) => {
++                let items = fields
++                    .fields()
++                    .iter()
++                    .filter_map(|field| field.ty())
++                    .map(|ty| self.analyze(ty, types, generics, stack))
++                    .collect::<Vec<_>>();
++
++                if items.iter().all(PlanNode::is_identity) {
++                    PlanNode::Identity
++                } else {
++                    PlanNode::Tuple(items)
++                }
++            }
++            Fields::Named(fields) => {
++                let object = fields
++                    .fields()
++                    .iter()
++                    .filter_map(|(name, field)| {
++                        let ty = field.ty()?;
++                        let plan = self.analyze(ty, types, generics, stack);
++                        (!plan.is_identity()).then(|| (name.to_string(), plan))
++                    })
++                    .collect::<Vec<_>>();
++
++                if object.is_empty() {
++                    PlanNode::Identity
++                } else {
++                    PlanNode::Object(object)
++                }
++            }
++        }
++    }
++
++    fn resolve_named_tag(&self, module_path: &str, name: &str) -> Option<KnownNamedTag> {
++        BUILTIN_MATCHERS
++            .iter()
++            .find(|(module, ty_name, _)| module_path == *module && name == *ty_name)
++            .map(|(_, _, kind)| *kind)
++    }
++}
++
++#[derive(Default)]
++struct Renderer {
++    ident_counter: usize,
++}
++
++impl Renderer {
++    fn render(&mut self, plan: &PlanNode, input: &str) -> String {
++        match plan {
++            PlanNode::Identity => input.to_string(),
++            PlanNode::Leaf(tag) => self.render_leaf(tag, input),
++            PlanNode::Nullable(inner) => {
++                let inner = self.render(inner, input);
++                format!("({input} == null ? {input} : {inner})")
++            }
++            PlanNode::List(inner) => {
++                let item = self.next_ident("item");
++                let inner = self.render(inner, &item);
++                format!("{input}.map(({item}) => {inner})")
++            }
++            PlanNode::Tuple(items) => {
++                let rendered = items
++                    .iter()
++                    .enumerate()
++                    .map(|(idx, plan)| {
++                        let source = format!("{input}[{idx}]");
++                        self.render(plan, &source)
++                    })
++                    .collect::<Vec<_>>()
++                    .join(", ");
++
++                format!("[{rendered}]")
++            }
++            PlanNode::Object(fields) => {
++                let updates = fields
++                    .iter()
++                    .map(|(field, plan)| {
++                        let key = js_string(field);
++                        let source = format!("{input}[{key}]");
++                        let value = self.render(plan, &source);
++                        format!("{key}: {value}")
++                    })
++                    .collect::<Vec<_>>()
++                    .join(", ");
++
++                format!("{{ ...{input}, {updates} }}")
++            }
++            PlanNode::Map(inner) => {
++                let key = self.next_ident("key");
++                let value = self.next_ident("value");
++                let inner = self.render(inner, &value);
++
++                format!(
++                    "Object.fromEntries(Object.entries({input}).map(([{key}, {value}]) => [{key}, {inner}]))"
++                )
++            }
++            PlanNode::Enum { repr, variants } => self.render_enum(repr, variants, input),
++        }
++    }
++
++    fn render_leaf(&mut self, tag: &Tag, input: &str) -> String {
++        match tag {
++            Tag::BigInt => format!("BigInt({input})"),
++            Tag::Uint8Array => format!("Uint8Array.from({input})"),
++            Tag::Date => format!("new Date({input})"),
++            Tag::Custom(handler) => handler(input).into_owned(),
++        }
++    }
++
++    fn render_enum(
++        &mut self,
++        repr: &EnumRepr,
++        variants: &[EnumVariantPlan],
++        input: &str,
++    ) -> String {
++        let value = self.next_ident("value");
++        let mut out = format!("(() => {{ const {value} = {input};");
++
++        if variants.is_empty() {
++            out.push_str(&format!(" return {value}; }})()"));
++            return out;
++        }
++
++        match repr {
++            EnumRepr::External => {
++                for variant in variants {
++                    if matches!(variant.kind, EnumVariantKind::Unit) || variant.plan.is_identity() {
++                        continue;
++                    }
++
++                    let name = js_string(&variant.name);
++                    let payload = format!("{value}[{name}]");
++                    let next = self.render(&variant.plan, &payload);
++
++                    out.push_str(&format!(
++                        " if (Object.prototype.hasOwnProperty.call({value}, {name})) {{ const next = {next}; if (next !== {payload}) return {{ ...{value}, [{name}]: next }}; return {value}; }}"
++                    ));
++                }
++            }
++            EnumRepr::Internal { tag } => {
++                let tag_key = js_string(tag);
++                for variant in variants {
++                    if matches!(variant.kind, EnumVariantKind::Unit) || variant.plan.is_identity() {
++                        continue;
++                    }
++
++                    let name = js_string(&variant.name);
++                    out.push_str(&format!(" if ({value}[{tag_key}] === {name}) {{"));
++
++                    match variant.kind {
++                        EnumVariantKind::Named => {
++                            let next = self.render(&variant.plan, &value);
++                            out.push_str(&format!(
++                                " const next = {next}; if (next !== {value}) return next; return {value};"
++                            ));
++                        }
++                        EnumVariantKind::Unnamed => {
++                            let data_key = js_string("data");
++                            let payload = format!("{value}[{data_key}]");
++                            let next_payload = self.render(&variant.plan, &payload);
++                            let next_direct = self.render(&variant.plan, &value);
++                            out.push_str(&format!(
++                                " if (Object.prototype.hasOwnProperty.call({value}, {data_key})) {{ const next = {next_payload}; if (next !== {payload}) return {{ ...{value}, [{data_key}]: next }}; return {value}; }} const direct = {next_direct}; if (direct !== {value}) return direct; return {value};"
++                            ));
++                        }
++                        EnumVariantKind::Unit => {}
++                    }
++
++                    out.push_str(" }");
++                }
++            }
++            EnumRepr::Adjacent { tag, content } => {
++                let tag_key = js_string(tag);
++                let content_key = js_string(content);
++                for variant in variants {
++                    if matches!(variant.kind, EnumVariantKind::Unit) || variant.plan.is_identity() {
++                        continue;
++                    }
++
++                    let name = js_string(&variant.name);
++                    let payload = format!("{value}[{content_key}]");
++                    let next = self.render(&variant.plan, &payload);
++                    out.push_str(&format!(
++                        " if ({value}[{tag_key}] === {name} && Object.prototype.hasOwnProperty.call({value}, {content_key})) {{ const next = {next}; if (next !== {payload}) return {{ ...{value}, [{content_key}]: next }}; return {value}; }}"
++                    ));
++                }
++            }
++            EnumRepr::Untagged => {}
++        }
++
++        out.push_str(&format!(" return {value}; }})()"));
++        out
++    }
++
++    fn next_ident(&mut self, prefix: &str) -> String {
++        self.ident_counter += 1;
++        format!("__{prefix}{}", self.ident_counter)
++    }
++}
++
++fn js_string(value: &str) -> String {
++    serde_json::to_string(value).expect("failed to encode JavaScript string")
++}
++
++fn parse_enum_repr(attributes: &specta::datatype::Attributes) -> EnumRepr {
++    let Some(attrs) = attributes.get::<SerdeContainerAttrs>() else {
++        return EnumRepr::External;
++    };
++
++    if attrs.untagged {
++        EnumRepr::Untagged
++    } else {
++        match (&attrs.tag, &attrs.content) {
++            (Some(tag), Some(content)) => EnumRepr::Adjacent {
++                tag: tag.clone(),
++                content: content.clone(),
++            },
++            (Some(tag), None) => EnumRepr::Internal { tag: tag.clone() },
++            _ => EnumRepr::External,
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use specta::{Type, Types};
++
++    use super::TransformPlan;
++
++    #[derive(Type)]
++    struct Inner {
++        bigint: u128,
++        date: chrono::DateTime<chrono::Utc>,
++        bytes: bytes::Bytes,
++    }
++
++    #[derive(Type)]
++    struct Root {
++        bigint: u128,
++        date: chrono::DateTime<chrono::Utc>,
++        bytes: bytes::Bytes,
++        nested: Inner,
++        list: Vec<u128>,
++    }
++
++    #[test]
++    fn map_renders_trusting_transforms() {
++        let mut types = Types::default();
++        let dt = Root::definition(&mut types);
++        let plan = TransformPlan::analyze(dt, &types);
++        let js = plan.map("v");
++
++        assert!(
++            js.contains("BigInt(v[\"bigint\"])")
++                && js.contains("BigInt(v[\"nested\"][\"bigint\"])")
++        );
++        assert!(
++            js.contains("new Date(v[\"date\"])")
++                && js.contains("new Date(v[\"nested\"][\"date\"])")
++        );
++        assert!(
++            js.contains("Uint8Array.from(v[\"bytes\"])")
++                && js.contains("Uint8Array.from(v[\"nested\"][\"bytes\"])")
++        );
++        assert!(js.contains("v[\"list\"].map((__item"));
++
++        assert!(!js.contains("typeof "));
++        assert!(!js.contains("Array.isArray("));
++        assert!(!js.contains("Number.isInteger("));
++        assert!(!js.contains("try {"));
++        assert!(!js.contains(" catch "));
++    }
++}

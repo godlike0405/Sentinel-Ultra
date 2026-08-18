@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4D6BFE"/>
+      <stop offset="50%" stop-color="#3B50E0"/>
+      <stop offset="100%" stop-color="#2A3DB8"/>
+    </linearGradient>
+  </defs>
+  <!-- Dark rounded background -->
+  <rect width="64" height="64" rx="12" fill="#0a0d14"/>
+  <!-- Whale body — bolder, simplified for small sizes. Swimming right. -->
+  <path d="M 10,34
+           C 10,28 14,20 22,14
+           C 30,8 40,7 48,10
+           C 52,12 56,16 58,20
+           L 62,14
+           L 58,30
+           L 62,44
+           L 56,34
+           C 54,38 48,42 42,42
+           C 34,42 26,40 18,36
+           C 14,34 11,34 10,34 Z"
+        fill="url(#g)" opacity="0.95"/>
+  <!-- Eye -->
+  <circle cx="18" cy="24" r="1.5" fill="#0a0d14" opacity="0.7"/>
+  <!-- Water spout -->
+  <path d="M 30,10 Q 33,2 40,0" fill="none" stroke="url(#g)" stroke-width="1.5" stroke-linecap="round" opacity="0.7"/>
+  <path d="M 33,9 Q 36,0 42,-1" fill="none" stroke="url(#g)" stroke-width="1.2" stroke-linecap="round" opacity="0.5"/>
+</svg>

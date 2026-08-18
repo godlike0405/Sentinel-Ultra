@@ -1,0 +1,47 @@
+schema_version = "1.3"
+
+[metadata]
+hardening_cycles = "3"
+agent_hardened = "true"
+author_name = "anonymous"
+author_email = "anonymous@snorkel.ai"
+# --- swe_ultra_requirements §4 field names ---
+category = "implementation"
+subcategory = "feature"
+coding_language = "python"
+repo_name = "exo"
+repo_license = "Apache-2.0"
+source_pr_url = "https://github.com/exo-explore/exo/pull/1437"
+base_commit_sha = "7bed91c9c277d568c9ffcb24dd6b07d23285b3d0"
+model_difficulty = "hard"
+tags = ["rdma", "state-management", "info-gatherer", "svelte", "swift"]
+# --- legacy aliases (kept for backward-compatible internal consumers) ---
+difficulty = "hard"
+difficulty_explanation = "Cross-language feature spanning asynchronous Python collection and state propagation, Svelte state/UI behavior, and backward-compatible Swift decoding across twelve source files."
+task_type = "implementation"
+task_subtype = "feature"
+source = "https://github.com/exo-explore/exo/pull/1437"
+language = "python"
+expert_time_estimate_min = 180.0
+junior_time_estimate_min = 420.0
+pr_created_at = "2026-02-10T17:45:11Z"
+pr_merged_at = "2026-02-11T20:43:11Z"
+
+[verifier]
+timeout_sec = 300.0
+network_mode = "no-network"
+
+[agent]
+timeout_sec = 1800.0
+network_mode = "allowlist"
+allowed_hosts = [
+    "api.portkey.ai",
+]
+
+[environment]
+build_timeout_sec = 900.0
+cpus = 4
+memory_mb = 8192
+storage_mb = 10240
+gpus = 0
+network_mode = "public"
