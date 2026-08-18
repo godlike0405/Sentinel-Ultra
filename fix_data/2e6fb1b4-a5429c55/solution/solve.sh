@@ -15,7 +15,14 @@ fi
 [ -r "$PATCH_FILE" ] || { echo "solve.sh: missing $PATCH_FILE" >&2; exit 2; }
 
 cd "$WORKSPACE"
-if command -v git >/dev/null 2>&1 && [ -d .git ]; then
+GIT_WORKTREE=0
+if command -v git >/dev/null 2>&1 \
+  && [ "$(git -c safe.directory="$WORKSPACE" rev-parse --is-inside-work-tree 2>/dev/null || true)" = true ] \
+  && git -c safe.directory="$WORKSPACE" rev-parse HEAD >/dev/null 2>&1; then
+  GIT_WORKTREE=1
+fi
+
+if [ "$GIT_WORKTREE" -eq 1 ]; then
   if git -c safe.directory="$WORKSPACE" apply -p1 --reverse --check "$PATCH_FILE" >/dev/null 2>&1; then
     echo "solve.sh: golden patch is already applied" >&2
   elif git -c safe.directory="$WORKSPACE" apply -p1 --check "$PATCH_FILE" >/dev/null 2>&1; then

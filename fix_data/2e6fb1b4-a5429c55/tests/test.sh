@@ -56,9 +56,11 @@ if [ -z "$WORKSPACE" ]; then
 fi
 [ -n "$WORKSPACE" ] || infra_fail "could not locate the mounted crit workspace"
 
-if [ -d "$WORKSPACE/.git" ] && command -v git >/dev/null 2>&1; then
-  actual_head=$(git -c safe.directory="$WORKSPACE" -C "$WORKSPACE" rev-parse HEAD 2>>"$STDERR_LOG") \
-    || infra_fail "workspace Git metadata is unusable"
+GIT_WORKTREE=0
+if command -v git >/dev/null 2>&1 \
+  && [ "$(git -c safe.directory="$WORKSPACE" -C "$WORKSPACE" rev-parse --is-inside-work-tree 2>/dev/null || true)" = true ] \
+  && actual_head=$(git -c safe.directory="$WORKSPACE" -C "$WORKSPACE" rev-parse HEAD 2>/dev/null); then
+  GIT_WORKTREE=1
   [ "$actual_head" = "$BASE_SHA" ] || infra_fail "workspace HEAD does not match the declared base"
 fi
 
@@ -108,7 +110,7 @@ for rel in "$NODE_REL" "$E2E_SPEC_REL" "$E2E_CONFIG_REL"; do
   fi
 done
 
-if command -v git >/dev/null 2>&1 && [ -d "$WORKSPACE/.git" ]; then
+if [ "$GIT_WORKTREE" -eq 1 ]; then
   git -c safe.directory="$WORKSPACE" -C "$WORKSPACE" apply --check "$PATCH" 2>>"$STDERR_LOG" \
     || infra_fail "tests.patch does not apply cleanly"
   git -c safe.directory="$WORKSPACE" -C "$WORKSPACE" apply "$PATCH" 2>>"$STDERR_LOG" \
