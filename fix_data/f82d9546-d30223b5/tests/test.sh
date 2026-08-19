@@ -32,6 +32,23 @@ PY
 
 [[ -f "$CONFIG" ]] || fail_infrastructure "missing config.json"
 
+verify_workspace_identity() {
+  local relative expected actual
+  while read -r expected relative; do
+    [[ -f "$WORKSPACE/$relative" ]] \
+      || fail_infrastructure "workspace identity file is missing: $relative"
+    actual=$(sha256sum "$WORKSPACE/$relative" | awk '{print $1}') \
+      || fail_infrastructure "could not hash workspace identity file: $relative"
+    [[ "$actual" == "$expected" ]] \
+      || fail_infrastructure "workspace does not match the declared base: $relative"
+  done <<'IDENTITY_FILES'
+6c22818866dcd8b56a3ec274d7b792e42da63ec6ce2e9b7abbba5e842c8b3fb8 pyproject.toml
+ef9690f7cc6b44336e19fe56eff69193a090cb5619d68876a0d4dc2f6ab3c795 uv.lock
+253bc44025fe0731841cdb95e76c889ad129248e446305f8c65322c1b20da3d1 dashboard/package-lock.json
+12a6ed8c837f40b1add1b9fdd7a142bde27e399310da8f60c2a8ed45dcf31517 LICENSE
+IDENTITY_FILES
+}
+
 # Mounted solver workspaces take precedence over an image's build-time /app.
 WORKSPACE=
 for candidate in /testbed /workspace /app; do
@@ -42,9 +59,17 @@ for candidate in /testbed /workspace /app; do
 done
 [[ -n "$WORKSPACE" ]] || fail_infrastructure "could not resolve the exo workspace"
 
-if [[ -d "$WORKSPACE/.git" ]] && command -v git >/dev/null 2>&1; then
-  git -C "$WORKSPACE" -c safe.directory="$WORKSPACE" cat-file -e "$BASE_COMMIT^{commit}" \
-    2>>"$STDERR_LOG" || fail_infrastructure "declared base commit is unavailable"
+if command -v git >/dev/null 2>&1 \
+  && git -C "$WORKSPACE" -c safe.directory="$WORKSPACE" rev-parse --is-inside-work-tree \
+    >/dev/null 2>&1 \
+  && git -C "$WORKSPACE" -c safe.directory="$WORKSPACE" rev-parse --verify HEAD \
+    >/dev/null 2>&1 \
+  && git -C "$WORKSPACE" -c safe.directory="$WORKSPACE" cat-file -e "$BASE_COMMIT^{commit}" \
+    >/dev/null 2>&1; then
+  : # A usable object database contains the declared base.
+else
+  # Harbor mounts may omit Git or expose only a partial .git directory.
+  verify_workspace_identity
 fi
 
 SUITE_DIR=$(mktemp -d /tmp/sentinel-verifier-suite.XXXXXX) \

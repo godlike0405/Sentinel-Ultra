@@ -4,11 +4,10 @@ The cluster can discover Thunderbolt hardware and RDMA topology edges, but it do
 
 ## Backend behavior
 
-- Add a gathered-info event that carries `enabled: bool` for `rdma_ctl status`, and include it in the public gathered-info union.
-- Its asynchronous gather operation returns `None` unless the host is macOS and the installed `rdma_ctl` status interface is available. Recognize ordinary case-insensitive enabled and disabled status output. Ambiguous output, an unavailable command, launch failure, nonzero exit, or a stuck command yields no observation. The check must be bounded so it cannot stall the gatherer.
-- On macOS, the info gatherer polls this status periodically and sends each non-`None` result through its existing channel. The interval remains platform-conditioned and configurable through the public field named below; polling is disabled elsewhere. A polling failure is logged and swallowed so later polls still run, and the monitor participates in the gatherer's normal `run()` lifecycle and shutdown.
-- Add the corresponding profiling model and a per-node mapping in cluster `State`. The mapping defaults to empty and serializes through the existing camel-case wire format as `nodeRdmaCtl`.
-- Applying a gathered status sets or overwrites that node's value. Timing out a node removes only that node's value.
+- Expose a standard gathered-info event that carries the `rdma_ctl` enablement state as `enabled: bool`.
+- Report status only on macOS and only when a definitive enabled or disabled state can be determined. Other outcomes produce no observation and must neither escape as errors nor leave the check running without a bound.
+- On macOS, keep this status current through periodic checks and deliver successful observations to the rest of the gatherer pipeline. Checks are disabled elsewhere. The interval remains platform-conditioned and configurable. An unsuccessful check must not prevent later checks or interfere with clean service shutdown.
+- Cluster state must expose each node's latest reported status through the `nodeRdmaCtl` wire field. A newer observation replaces the node's prior reported value, and a timed-out node is no longer reported. States with no RDMA observations remain valid.
 - Extend each Thunderbolt interface identifier with its current link speed. Preserve it through model validation and serialize it as `linkSpeed` while retaining the existing domain UUID and RDMA-interface data.
 
 ## Dashboard behavior
@@ -20,14 +19,14 @@ The cluster can discover Thunderbolt hardware and RDMA topology edges, but it do
 
 ## macOS app behavior
 
-- Decode the cluster-wide `nodeRdmaCtl` mapping and its boolean status model. Older state payloads that omit the field must continue to decode, treating it as an empty mapping.
+- Decode the cluster-wide `nodeRdmaCtl` statuses. Older state payloads that omit the field must continue to decode with no known RDMA statuses.
 - The debug view reports RDMA enabled/disabled status for cluster nodes using their friendly names where possible, and identifies the local node.
-- Keep the local RDMA device and active-port diagnostics. Remove the redundant local `rdma_ctl status` process and local-only status field; enablement is sourced from cluster state.
+- Keep the local RDMA device and active-port diagnostics. Enablement must come from cluster state rather than an independent local-only observation.
 
 ## Compatibility requirements
 
 - New state fields must have backward-compatible defaults, and state JSON must round-trip without losing per-node values.
-- Missing binaries, unsupported platforms, process failures, and temporary polling errors must never terminate the info-gatherer service.
+- Inability to obtain RDMA status must never terminate the info-gatherer service.
 - Do not break existing event handling, timeout cleanup, topology data, dashboard consumers, or macOS decoding of older payloads.
 
-The public compatibility identifiers for this feature are `RdmaCtlStatus` for the gathered event, `NodeRdmaCtlStatus` for the profiling model, `State.node_rdma_ctl` / `nodeRdmaCtl` for the Python and wire fields, `InfoGatherer.rdma_ctl_poll_interval` for interval configuration, and `link_speed` / `linkSpeed` for the Thunderbolt model and wire fields. Their names are fixed because they cross existing model, event-union, configuration, or serialization boundaries; internal helper and file layout choices remain open.
+The compatibility names for the gathered and stored status models are `RdmaCtlStatus` and `NodeRdmaCtlStatus`. The state and Thunderbolt wire fields are `nodeRdmaCtl` and `linkSpeed`. Python storage, configuration, helper, component, and file-layout choices remain open.

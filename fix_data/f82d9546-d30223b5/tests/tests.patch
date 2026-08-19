@@ -1,19 +1,20 @@
 diff --git a/src/exo/utils/info_gatherer/tests/test_rdma_full_stack_contract.py b/src/exo/utils/info_gatherer/tests/test_rdma_full_stack_contract.py
 new file mode 100644
-index 00000000..91b99719
+index 0000000..d02520a
 --- /dev/null
 +++ b/src/exo/utils/info_gatherer/tests/test_rdma_full_stack_contract.py
-@@ -0,0 +1,630 @@
+@@ -0,0 +1,1127 @@
 +from __future__ import annotations
 +
 +import asyncio
 +import json
 +import os
++import re
 +import subprocess
 +import textwrap
 +from pathlib import Path
 +from types import SimpleNamespace
-+from typing import Any, cast, get_args
++from typing import Any, cast
 +from unittest.mock import AsyncMock, patch
 +
 +import anyio
@@ -29,11 +30,7 @@ index 00000000..91b99719
 +    from exo.shared.types.events import NodeGatheredInfo, NodeTimedOut
 +    from exo.shared.types.profiling import NodeRdmaCtlStatus
 +    from exo.shared.types.state import State
-+    from exo.utils.info_gatherer.info_gatherer import (
-+        GatheredInfo,
-+        InfoGatherer,
-+        RdmaCtlStatus,
-+    )
++    from exo.utils.info_gatherer.info_gatherer import InfoGatherer, RdmaCtlStatus
 +
 +    return locals()
 +
@@ -75,6 +72,28 @@ index 00000000..91b99719
 +        when="2026-02-10T12:00:00+00:00",
 +        info=symbols["RdmaCtlStatus"](enabled=enabled),
 +    )
++
++
++def _fast_status_gatherer(symbols: dict[str, Any], sender: Any) -> Any:
++    """Disable base monitors and accelerate any feature-added public setting."""
++    cls = symbols["InfoGatherer"]
++    kwargs: dict[str, Any] = {
++        "interface_watcher_interval": None,
++        "misc_poll_interval": None,
++        "system_profiler_interval": None,
++        "memory_poll_rate": None,
++        "macmon_interval": None,
++        "thunderbolt_bridge_poll_interval": None,
++    }
++    base_fields = {"info_sender", "_tg", *kwargs}
++    for name in cls.__dataclass_fields__:
++        if name not in base_fields and not name.startswith("_"):
++            kwargs[name] = 0
++    return cls(cast(Any, sender), **kwargs)
++
++
++def _wire(state: Any) -> dict[str, Any]:
++    return json.loads(state.model_dump_json(by_alias=True))
 +
 +
 +def test_gather_parses_enabled_disabled_and_unknown_statuses(
@@ -141,31 +160,25 @@ index 00000000..91b99719
 +    assert time.monotonic() - started < 20
 +
 +
-+def test_models_union_and_state_wire_name_form_one_contract() -> None:
++def test_status_models_and_state_wire_name_form_one_contract() -> None:
 +    symbols = _symbols()
 +    event = symbols["RdmaCtlStatus"](enabled=True)
 +    stored = symbols["NodeRdmaCtlStatus"](enabled=False)
 +    assert event.enabled is True and stored.enabled is False
-+    assert symbols["RdmaCtlStatus"] in get_args(symbols["GatheredInfo"])
 +    state = symbols["State"]()
-+    assert state.node_rdma_ctl == {}
-+    assert json.loads(state.model_dump_json(by_alias=True))["nodeRdmaCtl"] == {}
++    assert _wire(state)["nodeRdmaCtl"] == {}
 +
 +
 +def test_state_round_trip_preserves_per_node_rdma_values() -> None:
 +    symbols = _symbols()
-+    state = symbols["State"](
-+        node_rdma_ctl={
-+            symbols["NodeId"]("alpha"): symbols["NodeRdmaCtlStatus"](enabled=True),
-+            symbols["NodeId"]("beta"): symbols["NodeRdmaCtlStatus"](enabled=False),
-+        }
++    expected = {"alpha": {"enabled": True}, "beta": {"enabled": False}}
++    state = symbols["State"].model_validate(
++        {"nodeRdmaCtl": expected}
 +    )
 +    wire = state.model_dump_json(by_alias=True)
 +    restored = symbols["State"].model_validate_json(wire)
-+    assert restored.node_rdma_ctl == state.node_rdma_ctl
 +    assert restored.model_dump_json(by_alias=True) == wire
-+    payload = json.loads(wire)
-+    assert payload["nodeRdmaCtl"] == {"alpha": {"enabled": True}, "beta": {"enabled": False}}
++    assert json.loads(wire)["nodeRdmaCtl"] == expected
 +
 +
 +def test_apply_is_idempotent_by_overwrite_and_preserves_other_nodes() -> None:
@@ -175,24 +188,26 @@ index 00000000..91b99719
 +    state = apply_info(_gathered(symbols, "alpha", True), state)
 +    state = apply_info(_gathered(symbols, "beta", True), state)
 +    state = apply_info(_gathered(symbols, "alpha", False), state)
-+    assert state.node_rdma_ctl[symbols["NodeId"]("alpha")].enabled is False
-+    assert state.node_rdma_ctl[symbols["NodeId"]("beta")].enabled is True
++    assert _wire(state)["nodeRdmaCtl"] == {
++        "alpha": {"enabled": False},
++        "beta": {"enabled": True},
++    }
 +
 +
 +def test_node_timeout_removes_only_the_departed_rdma_status() -> None:
 +    symbols = _symbols()
-+    state = symbols["State"](
-+        node_rdma_ctl={
-+            symbols["NodeId"]("alpha"): symbols["NodeRdmaCtlStatus"](enabled=True),
-+            symbols["NodeId"]("beta"): symbols["NodeRdmaCtlStatus"](enabled=False),
++    state = symbols["State"].model_validate(
++        {
++            "nodeRdmaCtl": {
++                "alpha": {"enabled": True},
++                "beta": {"enabled": False},
++            }
 +        }
 +    )
 +    result = symbols["apply_node_timed_out"](
 +        symbols["NodeTimedOut"](node_id=symbols["NodeId"]("alpha")), state
 +    )
-+    assert result.node_rdma_ctl == {
-+        symbols["NodeId"]("beta"): symbols["NodeRdmaCtlStatus"](enabled=False)
-+    }
++    assert _wire(result)["nodeRdmaCtl"] == {"beta": {"enabled": False}}
 +
 +
 +def test_macos_run_polls_repeatedly_and_publishes_non_none_statuses() -> None:
@@ -222,29 +237,18 @@ index 00000000..91b99719
 +        return value
 +
 +    async def scenario() -> None:
-+        gatherer = symbols["InfoGatherer"](
-+            cast(Any, Sender()),
-+            interface_watcher_interval=None,
-+            misc_poll_interval=None,
-+            system_profiler_interval=None,
-+            memory_poll_rate=None,
-+            macmon_interval=None,
-+            thunderbolt_bridge_poll_interval=None,
-+            rdma_ctl_poll_interval=0,
-+        )
++        gatherer = _fast_status_gatherer(symbols, Sender())
 +        with (
 +            patch("exo.utils.info_gatherer.info_gatherer.IS_DARWIN", True),
 +            patch.object(symbols["RdmaCtlStatus"], "gather", new=gather),
 +            patch("exo.utils.info_gatherer.info_gatherer.NodeConfig.gather", new=AsyncMock(return_value=None)),
 +            patch("exo.utils.info_gatherer.info_gatherer.StaticNodeInformation.gather", new=AsyncMock(return_value=SimpleNamespace())),
 +            patch("exo.utils.info_gatherer.info_gatherer.shutil.which", return_value=None),
-+            patch("exo.utils.info_gatherer.info_gatherer.logger.warning") as warning,
 +        ):
 +            async with anyio.create_task_group() as tg:
 +                tg.start_soon(gatherer.run)
 +                await asyncio.wait_for(complete.wait(), timeout=1)
 +                gatherer.shutdown()
-+            assert warning.called
 +
 +    anyio.run(scenario)
 +    values = [item.enabled for item in sent if isinstance(item, symbols["RdmaCtlStatus"])]
@@ -260,16 +264,7 @@ index 00000000..91b99719
 +            return None
 +
 +    async def scenario() -> None:
-+        gatherer = symbols["InfoGatherer"](
-+            cast(Any, Sender()),
-+            interface_watcher_interval=None,
-+            misc_poll_interval=None,
-+            system_profiler_interval=None,
-+            memory_poll_rate=None,
-+            macmon_interval=None,
-+            thunderbolt_bridge_poll_interval=None,
-+            rdma_ctl_poll_interval=0,
-+        )
++        gatherer = _fast_status_gatherer(symbols, Sender())
 +        with (
 +            patch("exo.utils.info_gatherer.info_gatherer.IS_DARWIN", False),
 +            patch.object(symbols["RdmaCtlStatus"], "gather", new=gather),
@@ -282,17 +277,6 @@ index 00000000..91b99719
 +
 +    anyio.run(scenario)
 +    gather.assert_not_awaited()
-+
-+
-+def test_poll_interval_default_tracks_the_local_platform() -> None:
-+    symbols = _symbols()
-+    field = symbols["InfoGatherer"].__dataclass_fields__["rdma_ctl_poll_interval"]
-+    from exo.utils.info_gatherer import info_gatherer as module
-+
-+    if module.IS_DARWIN:
-+        assert field.default is not None and field.default > 0
-+    else:
-+        assert field.default is None
 +
 +
 +def test_thunderbolt_identifier_exposes_link_speed_on_the_wire() -> None:
@@ -309,7 +293,6 @@ index 00000000..91b99719
 +    ident = ThunderboltConnectivityData.model_validate(raw).ident({"Thunderbolt 1": "en7"})
 +    assert ident is not None
 +    assert ident.rdma_interface == "rdma_en7"
-+    assert ident.link_speed == "80 Gb/s"
 +    assert ident.model_dump(by_alias=True)["linkSpeed"] == "80 Gb/s"
 +
 +
@@ -358,54 +341,17 @@ index 00000000..91b99719
 +          nodeRdmaCtl: { alpha: { enabled: true }, beta: { enabled: false } },
 +          nodeThunderboltBridge: {}, thunderboltBridgeCycles: []
 +        };
-+        globalThis.fetch = async () => ({ ok: true, json: async () => state });
++        globalThis.fetch = async (input) => {
++          const url = String(input);
++          if (url.endsWith("/models")) {
++            return { ok: true, json: async () => ({ data: [] }) };
++          }
++          return { ok: true, json: async () => state };
++        };
 +        globalThis.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
 +        try {
-+          const store = await server.ssrLoadModule("/src/lib/stores/app.svelte.ts");
-+          await store.refreshState();
-+          if (scenario === "store") {
-+            assert.deepEqual(store.nodeRdmaCtl(), state.nodeRdmaCtl);
-+            assert.deepEqual(store.nodeThunderbolt(), state.nodeThunderbolt);
-+            const edges = store.topologyData().edges;
-+            assert.equal(edges[0].sourceRdmaIface, "rdma_en2");
-+            assert.equal(edges[0].sinkRdmaIface, "rdma_en3");
-+          } else if (scenario === "model-card") {
-+            store.setDebugMode(true);
-+            const { render } = await server.ssrLoadModule("svelte/server");
-+            const component = (await server.ssrLoadModule("/src/lib/components/ModelCard.svelte")).default;
-+            const body = render(component, { props: {
-+              model: { id: "example/model" }, nodes: store.topologyData().nodes,
-+              runtime: "MlxIbv", apiPreview: { error: null, memory_delta_by_node: { alpha: 1024, beta: 1024 } }
-+            }}).body;
-+            assert.match(body, /rdma_en2/);
-+            assert.match(body, /rdma_en3/);
-+          } else if (scenario === "prompt") {
-+            const { render } = await server.ssrLoadModule("svelte/server");
-+            const page = (await server.ssrLoadModule("/src/routes/+page.svelte")).default;
-+            const window = new Window();
-+            const hasDismissibleStatus = (body) => {
-+              window.document.body.innerHTML = body;
-+              return [...window.document.querySelectorAll('[role="status"]')]
-+                .some((element) =>
-+                  element.querySelector("button") !== null &&
-+                  element.querySelector("ol") !== null &&
-+                  element.querySelector("code") !== null
-+                );
-+            };
-+            state.nodeThunderbolt = { alpha: state.nodeThunderbolt.alpha };
-+            await store.refreshState();
-+            assert.equal(hasDismissibleStatus(render(page).body), false);
-+            state.nodeThunderbolt = {
-+              alpha: { interfaces: [{ rdmaInterface: "rdma_en2", domainUuid: "a", linkSpeed: "80 Gb/s" }] },
-+              beta: { interfaces: [{ rdmaInterface: "rdma_en3", domainUuid: "b", linkSpeed: "80 Gb/s" }] }
-+            };
-+            await store.refreshState();
-+            assert.equal(hasDismissibleStatus(render(page).body), true);
-+            state.nodeRdmaCtl = { alpha: { enabled: true }, beta: { enabled: true } };
-+            await store.refreshState();
-+            assert.equal(hasDismissibleStatus(render(page).body), false);
-+            window.close();
-+          } else if (scenario === "topology") {
++          if (scenario === "dashboard") {
++            state.nodeRdmaCtl = { alpha: { enabled: true }, beta: { enabled: false } };
 +            const { svelte } = await import(pathToFileURL(path.join(
 +              dashboard, "node_modules/@sveltejs/vite-plugin-svelte/src/index.js"
 +            )));
@@ -414,12 +360,9 @@ index 00000000..91b99719
 +            const outDir = path.join(dashboard, ".sentinel-topology-build");
 +            await fs.writeFile(entry, `
 +              import { mount, unmount, tick } from "svelte";
-+              import TopologyGraph from "./src/lib/components/TopologyGraph.svelte";
-+              import { refreshState, setDebugMode } from "./src/lib/stores/app.svelte.ts";
++              import Page from "./src/routes/+page.svelte";
 +              export async function run(target) {
-+                await refreshState();
-+                setDebugMode(true);
-+                const component = mount(TopologyGraph, { target });
++                const component = mount(Page, { target });
 +                await tick();
 +                return () => unmount(component);
 +              }
@@ -469,10 +412,42 @@ index 00000000..91b99719
 +              };
 +              const module = await import(pathToFileURL(path.join(outDir, "bundle.js")) + `?t=${Date.now()}`);
 +              const dispose = await module.run(window.document.body);
++              await new Promise((resolve) => setTimeout(resolve, 80));
++              const isGuidance = (element) => {
++                const text = element.textContent ?? "";
++                return /rdma/i.test(text) && /enabl/i.test(text) &&
++                  element.querySelector("button, a[href], [role='button']") !== null;
++              };
++              const hasDismissibleGuidance = () =>
++                [...window.document.body.querySelectorAll("*")]
++                  .some((element) => isGuidance(element) &&
++                    ![...element.children].some(isGuidance));
++              assert.equal(hasDismissibleGuidance(), true);
++
++              const debugControl = [...window.document.querySelectorAll("button")].find((element) =>
++                /debug/i.test(`${element.textContent ?? ""} ${element.getAttribute("title") ?? ""} ${element.getAttribute("aria-label") ?? ""}`)
++              );
++              assert.ok(debugControl, "the existing debug-mode control must remain usable");
++              debugControl.click();
 +              await new Promise((resolve) => setTimeout(resolve, 20));
-+              const renderedText = window.document.body.textContent;
++              const renderedText = window.document.body.textContent ?? "";
 +              assert.match(renderedText, /RDMA:ON/);
 +              assert.match(renderedText, /RDMA:OFF/);
++              assert.match(renderedText, /rdma_en2/);
++              assert.match(renderedText, /rdma_en3/);
++
++              state.nodeThunderbolt = { alpha: state.nodeThunderbolt.alpha };
++              await new Promise((resolve) => setTimeout(resolve, 1050));
++              assert.equal(hasDismissibleGuidance(), false);
++              state.nodeThunderbolt = {
++                alpha: { interfaces: [{ rdmaInterface: "rdma_en2", domainUuid: "a", linkSpeed: "80 Gb/s" }] },
++                beta: { interfaces: [{ rdmaInterface: "rdma_en3", domainUuid: "b", linkSpeed: "80 Gb/s" }] }
++              };
++              await new Promise((resolve) => setTimeout(resolve, 1050));
++              assert.equal(hasDismissibleGuidance(), true);
++              state.nodeRdmaCtl = { alpha: { enabled: true }, beta: { enabled: true } };
++              await new Promise((resolve) => setTimeout(resolve, 1050));
++              assert.equal(hasDismissibleGuidance(), false);
 +              dispose();
 +              window.close();
 +            } finally {
@@ -507,24 +482,9 @@ index 00000000..91b99719
 +    assert result.returncode == 0, result.stdout + "\n" + result.stderr
 +
 +
-+def test_dashboard_store_preserves_rdma_state_and_topology_interfaces() -> None:
++def test_dashboard_runtime_preserves_and_renders_the_rdma_contract() -> None:
 +    _symbols()
-+    _assert_node_case("store")
-+
-+
-+def test_model_card_renders_directional_rdma_interface_labels() -> None:
-+    _symbols()
-+    _assert_node_case("model-card")
-+
-+
-+def test_dashboard_prompt_tracks_cluster_rdma_state() -> None:
-+    _symbols()
-+    _assert_node_case("prompt")
-+
-+
-+def test_dashboard_per_node_debug_labels_render_cluster_state() -> None:
-+    _symbols()
-+    _assert_node_case("topology")
++    _assert_node_case("dashboard")
 +
 +
 +def _swift_parse(path: Path) -> None:
@@ -572,11 +532,539 @@ index 00000000..91b99719
 +    return "".join(output)
 +
 +
++def _swift_view_properties(source: str) -> dict[str, str]:
++    declaration = re.compile(
++        r"(?:(?:private|fileprivate|internal|public)\s+)?"
++        r"var\s+([A-Za-z_]\w*)\s*:\s*some\s+View\s*\{"
++    )
++    properties: dict[str, str] = {}
++    for match in declaration.finditer(source):
++        start = match.end() - 1
++        depth = 0
++        in_string = False
++        escaped = False
++        for index in range(start, len(source)):
++            char = source[index]
++            if in_string:
++                if escaped:
++                    escaped = False
++                elif char == "\\":
++                    escaped = True
++                elif char == '"':
++                    in_string = False
++                continue
++            if char == '"':
++                in_string = True
++            elif char == "{":
++                depth += 1
++            elif char == "}":
++                depth -= 1
++                if depth == 0:
++                    properties.setdefault(match.group(1), source[start + 1 : index])
++                    break
++    return properties
++
++
++def _reachable_view_properties(properties: dict[str, str]) -> set[str]:
++    reachable = {"body"}
++    changed = True
++    while changed:
++        changed = False
++        for owner in tuple(reachable):
++            block = properties.get(owner, "")
++            for candidate in properties:
++                if candidate not in reachable and re.search(rf"\b{re.escape(candidate)}\b", block):
++                    reachable.add(candidate)
++                    changed = True
++    return reachable
++
++
++def _compile_swift_module(
++    source: Path, module_name: str, output_dir: Path
++) -> None:
++    result = subprocess.run(
++        [
++            "swiftc",
++            "-emit-library",
++            "-emit-module",
++            "-module-name",
++            module_name,
++            str(source),
++            "-o",
++            str(output_dir / f"lib{module_name}.so"),
++        ],
++        text=True,
++        capture_output=True,
++        timeout=60,
++        check=False,
++    )
++    assert result.returncode == 0, result.stdout + "\n" + result.stderr
++
++
++def _run_swift_ui_contract(tmp_path: Path) -> dict[str, list[str]]:
++    tmp_path.mkdir(parents=True, exist_ok=True)
++    swiftui = tmp_path / "SwiftUI.swift"
++    swiftui.write_text(
++        textwrap.dedent(
++            r'''
++            public protocol View {}
++
++            public enum RenderLog {
++                nonisolated(unsafe) public static var lines: [String] = []
++            }
++
++            public struct RenderedView: View {
++                public init() {}
++            }
++
++            @resultBuilder
++            public enum ViewBuilder {
++                public static func buildBlock(_ components: RenderedView...) -> RenderedView {
++                    RenderedView()
++                }
++                public static func buildExpression<V: View>(_ expression: V) -> RenderedView {
++                    RenderedView()
++                }
++                public static func buildOptional(_ component: RenderedView?) -> RenderedView {
++                    RenderedView()
++                }
++                public static func buildEither(first component: RenderedView) -> RenderedView {
++                    RenderedView()
++                }
++                public static func buildEither(second component: RenderedView) -> RenderedView {
++                    RenderedView()
++                }
++                public static func buildArray(_ components: [RenderedView]) -> RenderedView {
++                    RenderedView()
++                }
++            }
++
++            public struct HorizontalAlignment {
++                public static let leading = HorizontalAlignment()
++                public init() {}
++            }
++
++            public struct Font {
++                public static let caption2 = Font()
++                public init() {}
++            }
++
++            public struct Color {
++                public static let secondary = Color()
++                public static let green = Color()
++                public static let orange = Color()
++                public init() {}
++            }
++
++            public struct VStack: View {
++                public init(
++                    alignment: HorizontalAlignment,
++                    spacing: Double? = nil,
++                    @ViewBuilder content: () -> RenderedView
++                ) {
++                    _ = content()
++                }
++            }
++
++            public struct Text: View {
++                public init(_ value: String) {
++                    RenderLog.lines.append(value)
++                }
++            }
++
++            public struct ForEach<Data: RandomAccessCollection, ID: Hashable>: View {
++                public init(
++                    _ data: Data,
++                    id: KeyPath<Data.Element, ID>,
++                    @ViewBuilder content: (Data.Element) -> RenderedView
++                ) {
++                    for element in data {
++                        _ = content(element)
++                    }
++                }
++            }
++
++            extension View {
++                public func font(_ value: Font?) -> Self { self }
++                public func foregroundColor(_ value: Color?) -> Self { self }
++            }
++            '''
++        ),
++        encoding="utf-8",
++    )
++    _compile_swift_module(swiftui, "SwiftUI", tmp_path)
++
++    content_declarations = []
++    for path in (ROOT / "app/EXO/EXO").rglob("*.swift"):
++        if re.search(r"\bstruct\s+ContentView\s*:\s*View\b", path.read_text(encoding="utf-8")):
++            content_declarations.append(path)
++    assert len(content_declarations) == 1, "the app must have one ContentView implementation"
++    content_path = content_declarations[0]
++    _swift_parse(content_path)
++    content = _active_swift_source(content_path)
++    properties = _swift_view_properties(content)
++    reachable = _reachable_view_properties(properties)
++    environment_objects = dict(
++        re.findall(
++            r"@EnvironmentObject\s+(?:private\s+)?var\s+([A-Za-z_]\w*)\s*:\s*([A-Za-z_]\w*)",
++            content,
++        )
++    )
++    state_names = [name for name, kind in environment_objects.items() if kind == "ClusterStateService"]
++    network_names = [name for name, kind in environment_objects.items() if kind == "NetworkStatusService"]
++    assert len(state_names) == 1 and len(network_names) == 1
++    state_name, network_name = state_names[0], network_names[0]
++    def dependencies(block: str) -> tuple[list[Path], str]:
++        paths: list[Path] = []
++        unresolved = block
++        changed = True
++        while changed:
++            changed = False
++            for path in (ROOT / "app/EXO/EXO").rglob("*.swift"):
++                if path == content_path or path in paths:
++                    continue
++                source = _active_swift_source(path)
++                declarations = re.findall(
++                    r"\b(?:struct|class|enum)\s+([A-Za-z_]\w*)\b", source
++                )
++                if any(
++                    re.search(rf"\b{re.escape(name)}\s*\(", unresolved)
++                    for name in declarations
++                ):
++                    paths.append(path)
++                    unresolved += "\n" + source
++                    changed = True
++        return paths, unresolved
++
++    candidates: dict[str, tuple[str, list[Path]]] = {}
++    for name in reachable:
++        if name not in properties:
++            continue
++        paths, source = dependencies(properties[name])
++        if re.search(r"rdma", source, re.IGNORECASE):
++            candidates[name] = (properties[name], paths)
++    leaves = [
++        name
++        for name, (block, _) in candidates.items()
++        if not any(
++            other != name and re.search(rf"\b{re.escape(other)}\b", block)
++            for other in candidates
++        )
++    ]
++    assert leaves, "a root-reachable view must render RDMA diagnostics"
++    panels = [candidates[name][0] for name in leaves]
++    component_paths = sorted(
++        {path for name in leaves for path in candidates[name][1]}, key=str
++    )
++    panel_properties = "\n".join(
++        f"var sentinelPanel{index}: some View {{\n{panel}\n}}"
++        for index, panel in enumerate(panels)
++    )
++    panel_evaluations = "\n".join(
++        f"_ = view.sentinelPanel{index}" for index in range(len(panels))
++    )
++
++    driver = tmp_path / "main.swift"
++    driver_source = (
++        textwrap.dedent(
++            r'''
++            import Foundation
++            import SwiftUI
++
++            struct NodeRdmaCtlStatus {
++                let enabled: Bool
++            }
++            struct NodeProfile {
++                let friendlyName: String?
++            }
++            typealias NodeIdentity = NodeProfile
++            struct RDMAPort: Equatable {
++                let device: String
++                let port: String
++                let state: String
++            }
++            struct RDMAStatus {
++                let rdmaCtlEnabled: Bool?
++                let devices: [String]
++                let activePorts: [RDMAPort]
++            }
++            struct NetworkStatus {
++                let rdmaStatus: RDMAStatus
++                let localRdmaDevices: [String]
++                let localRdmaActivePorts: [RDMAPort]
++            }
++            struct NetworkStatusService {
++                let status: NetworkStatus
++            }
++            struct Snapshot {
++                let nodeRdmaCtl: [String: NodeRdmaCtlStatus]
++                let nodeProfiles: [String: NodeProfile]
++                let nodeIdentities: [String: NodeIdentity]
++            }
++            struct ClusterStateService {
++                let latestSnapshot: Snapshot?
++                let localNodeId: String?
++            }
++
++            struct SentinelRdmaHarness: View {
++                let __STATE_SERVICE__: ClusterStateService
++                let __NETWORK_SERVICE__: NetworkStatusService
++            '''
++        )
++        + panel_properties
++        + textwrap.dedent(
++            r'''
++            }
++
++            let profiles = [
++                "alpha": NodeProfile(friendlyName: "Alpha"),
++                "beta": NodeProfile(friendlyName: "Beta"),
++            ]
++            func render(
++                _ scenario: String,
++                alphaEnabled: Bool,
++                betaEnabled: Bool,
++                localNodeId: String,
++                device: String,
++                portNumber: String
++            ) {
++                RenderLog.lines = []
++                let port = RDMAPort(device: device, port: portNumber, state: "ACTIVE")
++                let view = SentinelRdmaHarness(
++                    __STATE_SERVICE__: ClusterStateService(
++                        latestSnapshot: Snapshot(
++                            nodeRdmaCtl: [
++                                "alpha": NodeRdmaCtlStatus(enabled: alphaEnabled),
++                                "beta": NodeRdmaCtlStatus(enabled: betaEnabled),
++                            ],
++                            nodeProfiles: profiles,
++                            nodeIdentities: profiles
++                        ),
++                        localNodeId: localNodeId
++                    ),
++                    __NETWORK_SERVICE__: NetworkStatusService(
++                        status: NetworkStatus(
++                            rdmaStatus: RDMAStatus(
++                                rdmaCtlEnabled: nil,
++                                devices: [device],
++                                activePorts: [port]
++                            ),
++                            localRdmaDevices: [device],
++                            localRdmaActivePorts: [port]
++                        )
++                    )
++                )
++                __PANEL_EVALUATIONS__
++                print("SCENARIO:\(scenario)")
++                for line in RenderLog.lines {
++                    print(line)
++                }
++                print("ENDSCENARIO")
++            }
++
++            render("baseline", alphaEnabled: true, betaEnabled: false,
++                   localNodeId: "alpha", device: "mlx5_0", portNumber: "1")
++            render("local-toggle", alphaEnabled: true, betaEnabled: false,
++                   localNodeId: "beta", device: "mlx5_0", portNumber: "1")
++            render("status-toggle", alphaEnabled: false, betaEnabled: true,
++                   localNodeId: "alpha", device: "mlx5_0", portNumber: "1")
++            render("device-toggle", alphaEnabled: true, betaEnabled: false,
++                   localNodeId: "alpha", device: "mlx5_7", portNumber: "1")
++            render("port-toggle", alphaEnabled: true, betaEnabled: false,
++                   localNodeId: "alpha", device: "mlx5_0", portNumber: "9")
++            '''
++        )
++    )
++    driver.write_text(
++        driver_source.replace("__STATE_SERVICE__", state_name)
++        .replace("__NETWORK_SERVICE__", network_name)
++        .replace("__PANEL_EVALUATIONS__", panel_evaluations),
++        encoding="utf-8",
++    )
++    executable = tmp_path / "rdma-view-contract"
++    compile_result = subprocess.run(
++        [
++            "swiftc",
++            "-I",
++            str(tmp_path),
++            "-L",
++            str(tmp_path),
++            "-lSwiftUI",
++            *map(str, component_paths),
++            str(driver),
++            "-o",
++            str(executable),
++        ],
++        text=True,
++        capture_output=True,
++        timeout=90,
++        check=False,
++    )
++    assert compile_result.returncode == 0, compile_result.stdout + "\n" + compile_result.stderr
++    env = os.environ.copy()
++    env["LD_LIBRARY_PATH"] = str(tmp_path)
++    run_result = subprocess.run(
++        [str(executable)],
++        text=True,
++        capture_output=True,
++        timeout=10,
++        check=False,
++        env=env,
++    )
++    assert run_result.returncode == 0, run_result.stdout + "\n" + run_result.stderr
++    scenarios: dict[str, list[str]] = {}
++    active: str | None = None
++    for line in run_result.stdout.splitlines():
++        if line.startswith("SCENARIO:"):
++            active = line.removeprefix("SCENARIO:")
++            scenarios[active] = []
++        elif line == "ENDSCENARIO":
++            active = None
++        elif active is not None:
++            scenarios[active].append(line)
++    assert set(scenarios) == {
++        "baseline",
++        "local-toggle",
++        "status-toggle",
++        "device-toggle",
++        "port-toggle",
++    }
++    return scenarios
++
++
++def _run_network_status_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
++    appkit = tmp_path / "AppKit.swift"
++    appkit.write_text(
++        textwrap.dedent(
++            r'''
++            public protocol ObservableObject: AnyObject {}
++
++            @propertyWrapper
++            public struct Published<Value> {
++                public var wrappedValue: Value
++                public init(wrappedValue: Value) {
++                    self.wrappedValue = wrappedValue
++                }
++            }
++            '''
++        ),
++        encoding="utf-8",
++    )
++    _compile_swift_module(appkit, "AppKit", tmp_path)
++
++    commands = tmp_path / "commands"
++    commands.mkdir()
++    marker = tmp_path / "rdma-ctl-was-called"
++    scripts = {
++        "ibv_devices": "#!/bin/sh\nprintf '%s\\n' 'device node GUID' '----------------' 'mlx5_0 0123'\n",
++        "ibv_devinfo": "#!/bin/sh\nprintf '%s\\n' 'hca_id: mlx5_0' 'port: 1' 'state: PORT_ACTIVE (4)'\n",
++        "ifconfig": "#!/bin/sh\nprintf '%s\\n' 'inet 10.0.0.2' 'status: active'\n",
++        "rdma_ctl": "#!/bin/sh\n: > \"$RDMA_CTL_MARKER\"\nexit 99\n",
++    }
++    for name, script in scripts.items():
++        path = commands / name
++        path.write_text(script, encoding="utf-8")
++        path.chmod(0o755)
++    monkeypatch.setenv("PATH", f"{commands}{os.pathsep}{os.environ.get('PATH', '')}")
++    monkeypatch.setenv("RDMA_CTL_MARKER", str(marker))
++
++    driver = tmp_path / "NetworkStatusDriver.swift"
++    driver.write_text(
++        textwrap.dedent(
++            r'''
++            import Foundation
++
++            enum ThunderboltBridgeDetector {
++                static func findThunderboltBridgeServiceName() -> String? { nil }
++                static func isServiceEnabled(serviceName: String) -> Bool? { nil }
++            }
++
++            func diagnostics(in value: Any, depth: Int = 0) -> ([String], [RDMAPort]) {
++                if depth > 6 { return ([], []) }
++                var devices = value as? [String] ?? []
++                var ports = value as? [RDMAPort] ?? []
++                for child in Mirror(reflecting: value).children {
++                    let nested = diagnostics(in: child.value, depth: depth + 1)
++                    devices.append(contentsOf: nested.0)
++                    ports.append(contentsOf: nested.1)
++                }
++                return (devices, ports)
++            }
++
++            @main
++            struct ContractMain {
++                @MainActor
++                static func main() async {
++                    let service = NetworkStatusService()
++                    await service.refresh()
++                    let (devices, ports) = diagnostics(in: service.status)
++                    guard devices.contains("mlx5_0") else {
++                        fatalError("local RDMA devices were not preserved")
++                    }
++                    guard ports.contains(where: {
++                        $0.device == "mlx5_0" && $0.port == "1" && $0.state.contains("ACTIVE")
++                    }) else {
++                        fatalError("local active RDMA ports were not preserved")
++                    }
++                }
++            }
++            '''
++        ),
++        encoding="utf-8",
++    )
++    executable = tmp_path / "network-status-contract"
++    service_declarations = []
++    for path in (ROOT / "app/EXO/EXO").rglob("*.swift"):
++        if re.search(
++            r"\b(?:final\s+)?class\s+NetworkStatusService\b",
++            _active_swift_source(path),
++        ):
++            service_declarations.append(path)
++    assert len(service_declarations) == 1
++    compile_result = subprocess.run(
++        [
++            "swiftc",
++            "-parse-as-library",
++            "-I",
++            str(tmp_path),
++            "-L",
++            str(tmp_path),
++            "-lAppKit",
++            str(service_declarations[0]),
++            str(driver),
++            "-o",
++            str(executable),
++        ],
++        text=True,
++        capture_output=True,
++        timeout=90,
++        check=False,
++    )
++    assert compile_result.returncode == 0, compile_result.stdout + "\n" + compile_result.stderr
++    env = os.environ.copy()
++    env["LD_LIBRARY_PATH"] = str(tmp_path)
++    run_result = subprocess.run(
++        [str(executable)],
++        text=True,
++        capture_output=True,
++        timeout=20,
++        check=False,
++        env=env,
++    )
++    assert run_result.returncode == 0, run_result.stdout + "\n" + run_result.stderr
++    assert not marker.exists(), "the redundant local rdma_ctl status process still ran"
++
++
 +def test_macos_state_decoder_accepts_missing_and_present_cluster_rdma_state(
 +    tmp_path: Path,
 +) -> None:
 +    _symbols()
-+    source = ROOT / "app/EXO/EXO/Models/ClusterState.swift"
++    declarations = []
++    for path in (ROOT / "app/EXO/EXO").rglob("*.swift"):
++        if re.search(r"\bstruct\s+ClusterState\s*:\s*(?:Decodable|Codable)\b", _active_swift_source(path)):
++            declarations.append(path)
++    assert len(declarations) == 1
++    source = declarations[0]
 +    driver = tmp_path / "main.swift"
 +    driver.write_text(
 +        textwrap.dedent(
@@ -613,24 +1101,33 @@ index 00000000..91b99719
 +    assert run_result.returncode == 0, run_result.stdout + "\n" + run_result.stderr
 +
 +
-+def test_macos_debug_view_uses_cluster_status_and_marks_the_local_node() -> None:
++def test_macos_debug_view_uses_cluster_status_and_marks_the_local_node(
++    tmp_path: Path,
++) -> None:
 +    _symbols()
-+    path = ROOT / "app/EXO/EXO/ContentView.swift"
-+    _swift_parse(path)
-+    source = _active_swift_source(path)
-+    for identifier in ("nodeRdmaCtl", "localNodeId", "friendlyName", "enabled", "ForEach"):
-+        assert identifier in source
++    scenarios = _run_swift_ui_contract(tmp_path)
++    baseline = scenarios["baseline"]
++    assert any("Alpha" in line for line in baseline)
++    assert any("Beta" in line for line in baseline)
++    assert [line for line in baseline if "Alpha" in line or "Beta" in line] != [
++        line
++        for line in scenarios["status-toggle"]
++        if "Alpha" in line or "Beta" in line
++    ]
++    assert [line for line in baseline if "Alpha" in line or "Beta" in line] != [
++        line
++        for line in scenarios["local-toggle"]
++        if "Alpha" in line or "Beta" in line
++    ]
 +
 +
-+def test_macos_keeps_local_devices_and_ports_without_local_rdma_ctl_status() -> None:
++def test_macos_keeps_local_devices_and_ports_without_local_rdma_ctl_status(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
 +    _symbols()
-+    service_path = ROOT / "app/EXO/EXO/Services/NetworkStatusService.swift"
-+    view_path = ROOT / "app/EXO/EXO/ContentView.swift"
-+    _swift_parse(service_path)
-+    _swift_parse(view_path)
-+    service = _active_swift_source(service_path)
-+    view = _active_swift_source(view_path)
-+    assert "rdma_ctl" not in service
-+    assert "ibv_devices" in service and "ibv_devinfo" in service
-+    assert "localRdmaDevices" in service and "localRdmaActivePorts" in service
-+    assert "localRdmaDevices" in view and "localRdmaActivePorts" in view
++    _run_network_status_contract(tmp_path, monkeypatch)
++    scenarios = _run_swift_ui_contract(tmp_path / "view")
++    baseline = scenarios["baseline"]
++    assert any("mlx5_0" in line for line in baseline)
++    assert baseline != scenarios["device-toggle"]
++    assert baseline != scenarios["port-toggle"]
