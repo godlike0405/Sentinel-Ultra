@@ -1,373 +1,415 @@
-diff --git a/web/__tests__/crit-renderer.test.js b/web/__tests__/crit-renderer.test.js
-index 3f0460b..44d27d2 100644
---- a/web/__tests__/crit-renderer.test.js
-+++ b/web/__tests__/crit-renderer.test.js
-@@ -24,11 +24,21 @@ describe('crit-renderer', () => {
-   });
- 
-   it('anchorFromComment with line anchor', () => {
--    const a = renderer.anchorFromComment({ file_path: 'a.go', start_line: 1, end_line: 5 });
-+    const a = renderer.anchorFromComment({ file_path: 'a.go', start_line: 1, end_line: 5, side: 'old', scope: 'line' });
-     assert.equal(a.type, 'line');
-     assert.equal(a.filePath, 'a.go');
-     assert.equal(a.startLine, 1);
-     assert.equal(a.endLine, 5);
-+    assert.equal(a.side, 'old');
-+    assert.equal(a.scope, 'line');
+diff --git a/test/e2e/sentinel.playwright.config.ts b/test/e2e/sentinel.playwright.config.ts
+new file mode 100644
+index 0000000..ab9d167
+--- /dev/null
++++ b/test/e2e/sentinel.playwright.config.ts
+@@ -0,0 +1,32 @@
++import { defineConfig } from '@playwright/test';
++
++const port = process.env.CRIT_TEST_PORT || '3323';
++const chromiumPath = process.env.SENTINEL_CHROMIUM_PATH || '/usr/bin/chromium';
++
++export default defineConfig({
++  testDir: './tests',
++  fullyParallel: false,
++  retries: 0,
++  workers: 1,
++  reporter: 'list',
++  timeout: 45_000,
++  globalTimeout: 180_000,
++  use: {
++    browserName: 'chromium',
++    launchOptions: {
++      executablePath: chromiumPath,
++      args: ['--no-sandbox', '--disable-dev-shm-usage'],
++    },
++    baseURL: `http://localhost:${port}`,
++    screenshot: 'off',
++    trace: 'off',
++    video: 'off',
++  },
++  webServer: {
++    command: `bash setup-fixtures.sh ${port}`,
++    url: `http://localhost:${port}/api/session`,
++    reuseExistingServer: false,
++    timeout: 60_000,
++    stdout: 'pipe',
++  },
++});
+diff --git a/test/e2e/tests/sentinel-story-navigation.spec.ts b/test/e2e/tests/sentinel-story-navigation.spec.ts
+new file mode 100644
+index 0000000..f8b789c
+--- /dev/null
++++ b/test/e2e/tests/sentinel-story-navigation.spec.ts
+@@ -0,0 +1,298 @@
++import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
++import { execFileSync } from 'child_process';
++import * as fs from 'fs';
++import * as os from 'os';
++import * as path from 'path';
++import { clearAllComments, loadPage } from './helpers';
++import { stateFilePath } from './state-file';
++
++type FixtureState = { critBin: string; fixtureDir: string; fakeHome: string };
++
++function readFixtureState(): FixtureState {
++  const raw = fs.readFileSync(stateFilePath(process.env.CRIT_TEST_PORT || '3323'), 'utf8');
++  const values: Record<string, string> = {};
++  for (const line of raw.trim().split('\n')) {
++    const at = line.indexOf('=');
++    if (at >= 0) values[line.slice(0, at)] = line.slice(at + 1);
++  }
++  if (!values.CRIT_BIN || !values.CRIT_FIXTURE_DIR || !values.FAKE_HOME) {
++    throw new Error('fixture state is incomplete');
++  }
++  return { critBin: values.CRIT_BIN, fixtureDir: values.CRIT_FIXTURE_DIR, fakeHome: values.FAKE_HOME };
++}
++
++function story(chapters: object[], supportRefs: object[]) {
++  return {
++    version: 1,
++    agent: 'sentinel-e2e',
++    prologue: {
++      title: 'Coordinate navigation',
++      overview: 'Navigation must retain the coordinate side and raw hunk owner.',
++      key_changes: ['Exercise comments and renderer anchors through the browser.'],
++      risks: ['Merged visual hunks must not merge chapter ownership.'],
++    },
++    chapters,
++    support: [{ hunk_refs: supportRefs, reason: 'Supporting changes' }],
++  };
++}
++
++const SERVER_STORY = story([
++  { id: 'imports', title: 'Imports', summary: 'First server hunk.', hunk_refs: [{ file_path: 'server.go', old_start: 2 }] },
++  { id: 'middleware', title: 'Middleware', summary: 'Second server hunk.', hunk_refs: [{ file_path: 'server.go', old_start: 17 }] },
++], [
++  { file_path: 'server.go', old_start: 39 },
++  { file_path: 'routes.go', old_start: 1 },
++  { file_path: 'routes.go', old_start: 48 },
++  { file_path: 'plan.md', old_start: 0 },
++]);
++
++const ROUTES_STORY = story([
++  { id: 'routes-top', title: 'Route imports', summary: 'First routes hunk.', hunk_refs: [{ file_path: 'routes.go', old_start: 1 }] },
++  { id: 'routes-bottom', title: 'Analytics route', summary: 'Second routes hunk.', hunk_refs: [{ file_path: 'routes.go', old_start: 48 }] },
++], [
++  { file_path: 'server.go', old_start: 2 },
++  { file_path: 'server.go', old_start: 17 },
++  { file_path: 'server.go', old_start: 39 },
++  { file_path: 'plan.md', old_start: 0 },
++]);
++
++const LEGACY_STORY = story([
++  { id: 'legacy', title: 'Legacy replacement', summary: 'Deletion-heavy hunk.', hunk_refs: [{ file_path: 'legacy.go', old_start: 5 }] },
++], [
++  { file_path: 'server.go', old_start: 2 },
++  { file_path: 'server.go', old_start: 17 },
++  { file_path: 'server.go', old_start: 39 },
++  { file_path: 'routes.go', old_start: 1 },
++  { file_path: 'routes.go', old_start: 48 },
++]);
++
++async function ingestStory(state: FixtureState, value: object) {
++  const file = path.join(os.tmpdir(), `sentinel-story-${process.pid}-${Date.now()}.json`);
++  fs.writeFileSync(file, JSON.stringify(value));
++  try {
++    execFileSync(state.critBin, ['story', '--story-file', file], {
++      cwd: state.fixtureDir,
++      timeout: 10_000,
++      env: { ...process.env, HOME: state.fakeHome, USERPROFILE: state.fakeHome },
++      stdio: 'pipe',
++    });
++  } finally {
++    fs.rmSync(file, { force: true });
++  }
++}
++
++async function clearStory(request: APIRequestContext) {
++  await request.delete('/api/story');
++}
++
++async function addComment(request: APIRequestContext, file: string, body: string, options: { line?: number; side?: 'old' | 'new'; scope?: 'file' } = {}) {
++  const data: Record<string, unknown> = { body };
++  if (options.scope === 'file') {
++    data.scope = 'file';
++  } else {
++    data.start_line = options.line;
++    data.end_line = options.line;
++    if (options.side) data.side = options.side;
++  }
++  const response = await request.post(`/api/file/comments?path=${encodeURIComponent(file)}`, { data });
++  expect(response.ok()).toBeTruthy();
++  return response.json();
++}
++
++async function openCommentFromPanel(page: Page, body: string) {
++  await page.keyboard.press('Shift+C');
++  const card = page.locator('#commentsPanel .comment-card', { hasText: body });
++  await expect(card).toBeVisible();
++  await card.click();
++}
++
++async function waitForRenderer(page: Page) {
++  await expect.poll(() => page.evaluate(() => !!(window as any).crit?.renderer?.current())).toBe(true);
++}
++
++async function installScrollProbe(page: Page) {
++  await page.addInitScript(() => {
++    (window as any).__sentinelScrolled = null;
++    Element.prototype.scrollIntoView = function () {
++      const element = this as HTMLElement;
++      (window as any).__sentinelScrolled = {
++        file: element.dataset.diffFilePath || element.dataset.filePath || '',
++        line: element.dataset.diffLineNum || element.dataset.endLine || '',
++        side: element.dataset.diffSide || '',
++        classes: element.className || '',
++      };
++    };
++  });
++}
++
++async function invokeRenderer(page: Page, anchor: object) {
++  await page.evaluate(async value => {
++    (window as any).__sentinelScrolled = null;
++    await (window as any).crit.renderer.current().scrollToAnchor(value);
++  }, anchor);
++}
++
++test.describe('coordinate-safe Story navigation', () => {
++  let state: FixtureState;
++
++  test.beforeAll(async () => {
++    state = readFixtureState();
++  });
++  test.beforeEach(async ({ page, request }) => {
++    await page.route(/^https?:\/\/(?!localhost(?::\d+)?(?:\/|$)|127\.0\.0\.1(?::\d+)?(?:\/|$))/, route => route.abort());
++    await clearAllComments(request);
++    await clearStory(request);
++  });
++  test.afterEach(async ({ request }) => {
++    await clearAllComments(request);
++    await clearStory(request);
 +  });
 +
-+  it('anchorFromComment preserves file scope without inventing a side', () => {
-+    const a = renderer.anchorFromComment({ file_path: 'a.go', start_line: 0, end_line: 0, scope: 'file' });
-+    assert.equal(a.type, 'line');
-+    assert.equal(a.filePath, 'a.go');
-+    assert.equal(a.scope, 'file');
-+    assert.equal(a.side, undefined);
-   });
- 
-   it('anchorFromComment with DOM anchor', () => {
-diff --git a/web/__tests__/story-line-navigation.test.js b/web/__tests__/story-line-navigation.test.js
++  const mergedCases = [
++    { title: 'automatic merge routes a new-side line to the second chapter', line: 24, side: 'new' as const, page: 'middleware' },
++    { title: 'automatic merge routes an old-side line to the second chapter', line: 21, side: 'old' as const, page: 'middleware' },
++  ];
++
++  for (const scenario of mergedCases) {
++    test(scenario.title, async ({ page, request }) => {
++      if (scenario.side === 'old') await installScrollProbe(page);
++      await ingestStory(state, SERVER_STORY);
++      const body = `${scenario.side} line ${scenario.line}`;
++      if (scenario.side === 'new') {
++        await addComment(request, 'server.go', body, { line: scenario.line, side: scenario.side });
++      }
++      await loadPage(page);
++      if (scenario.side === 'old') {
++        await waitForRenderer(page);
++        await invokeRenderer(page, {
++          type: 'line', filePath: 'server.go', startLine: scenario.line,
++          endLine: scenario.line, side: scenario.side, scope: 'line',
++        });
++      } else {
++        await openCommentFromPanel(page, body);
++      }
++      await expect(page).toHaveURL(new RegExp(`#story/${scenario.page}$`));
++    });
++  }
++
++  test('renderer honors an old-side collision and scrolls the deleted row', async ({ page }) => {
++    await installScrollProbe(page);
++    await ingestStory(state, SERVER_STORY);
++    await loadPage(page);
++    await waitForRenderer(page);
++    await invokeRenderer(page, { type: 'line', filePath: 'server.go', startLine: 42, endLine: 42, side: 'old', scope: 'line' });
++    await expect(page).toHaveURL(/#story\/support$/);
++    await expect.poll(() => page.evaluate(() => (window as any).__sentinelScrolled)).toMatchObject({
++      file: 'server.go', line: '42', side: 'old',
++    });
++  });
++
++  test('renderer keeps a colliding new-side line in the second chapter', async ({ page }) => {
++    await installScrollProbe(page);
++    await ingestStory(state, SERVER_STORY);
++    await loadPage(page);
++    await waitForRenderer(page);
++    await invokeRenderer(page, { type: 'line', filePath: 'server.go', startLine: 42, endLine: 42, side: 'new', scope: 'line' });
++    await expect(page).toHaveURL(/#story\/middleware$/);
++    await expect.poll(() => page.evaluate(() => (window as any).__sentinelScrolled)).toMatchObject({
++      file: 'server.go', line: '42', side: '',
++    });
++  });
++
++  test('renderer explicit new-side miss stays on the current Story page', async ({ page }) => {
++    await installScrollProbe(page);
++    await ingestStory(state, LEGACY_STORY);
++    await loadPage(page);
++    await waitForRenderer(page);
++    await invokeRenderer(page, { type: 'line', filePath: 'legacy.go', startLine: 17, endLine: 17, side: 'new', scope: 'line' });
++    await expect(page.locator('#crit-story-view-overview')).toBeVisible();
++    expect(await page.evaluate(() => (window as any).__sentinelScrolled)).toBeNull();
++  });
++
++  test('renderer keeps a colliding new-side row on the rendered new side', async ({ page }) => {
++    await installScrollProbe(page);
++    await ingestStory(state, LEGACY_STORY);
++    await loadPage(page);
++    await waitForRenderer(page);
++    await invokeRenderer(page, { type: 'line', filePath: 'legacy.go', startLine: 13, endLine: 13, side: 'new', scope: 'line' });
++    await expect(page).toHaveURL(/#story\/legacy$/);
++    await expect.poll(() => page.evaluate(() => (window as any).__sentinelScrolled)).toMatchObject({
++      file: 'legacy.go', line: '13', side: '',
++    });
++  });
++
++  test('renderer maps unified old context to the displayed new-side row', async ({ page }) => {
++    await installScrollProbe(page);
++    await ingestStory(state, LEGACY_STORY);
++    await loadPage(page);
++    await page.locator('#diffModeToggle .toggle-btn[data-mode="unified"]').click();
++    await waitForRenderer(page);
++    await invokeRenderer(page, { type: 'line', filePath: 'legacy.go', startLine: 21, endLine: 21, side: 'old', scope: 'line' });
++    await expect(page).toHaveURL(/#story\/legacy$/);
++    await expect.poll(() => page.evaluate(() => (window as any).__sentinelScrolled)).toMatchObject({
++      file: 'legacy.go', line: '13', side: '',
++    });
++  });
++
++  test('scope reload replaces same-hash Story clones', async ({ page }) => {
++    let replacement = false;
++    await page.route('**/api/file/diff?**', async route => {
++      const url = new URL(route.request().url());
++      if (!replacement || url.searchParams.get('path') !== 'server.go') {
++        await route.continue();
++        return;
++      }
++      const response = await route.fetch();
++      const json = await response.json();
++      json.hunks = (json.hunks || []).filter((hunk: { OldStart: number }) => hunk.OldStart === 39);
++      await route.fulfill({ response, json });
++    });
++    await ingestStory(state, SERVER_STORY);
++    await loadPage(page);
++    await page.locator('.crit-story-row[data-story-target="imports"]').click();
++    const group = page.locator('#crit-story-view-imports .crit-story-file-group[data-story-file="server.go"]');
++    await expect(group).toContainText('respondJSON writes');
++    replacement = true;
++    await page.locator('#storyViewToggle .toggle-btn[data-story-view="diff"]').click();
++    await expect(page.locator('body')).toHaveClass(/crit-story-hidden/);
++    await page.locator('#storyViewToggle .toggle-btn[data-story-view="story"]').click();
++    await expect(page.locator('body')).toHaveClass(/crit-story-active/);
++    await page.locator('.crit-story-row[data-story-target="imports"]').click();
++    await expect(group.locator('.crit-story-file-group__empty')).toContainText('no longer in the diff');
++  });
++
++  test('file-scoped comment opens the first chapter containing its file', async ({ page, request }) => {
++    await ingestStory(state, ROUTES_STORY);
++    await addComment(request, 'routes.go', 'whole routes file', { scope: 'file' });
++    await loadPage(page);
++    await openCommentFromPanel(page, 'whole routes file');
++    await expect(page).toHaveURL(/#story\/routes-top$/);
++  });
++
++  test('file-scoped renderer anchor opens the first chapter containing its file', async ({ page }) => {
++    await ingestStory(state, ROUTES_STORY);
++    await loadPage(page);
++    await waitForRenderer(page);
++    await invokeRenderer(page, { type: 'line', filePath: 'routes.go', startLine: 0, endLine: 0, scope: 'file' });
++    await expect(page).toHaveURL(/#story\/routes-top$/);
++  });
++
++  test('split renderer preserves the old-side row', async ({ page }) => {
++    await installScrollProbe(page);
++    await ingestStory(state, LEGACY_STORY);
++    await loadPage(page);
++    await waitForRenderer(page);
++    await invokeRenderer(page, { type: 'line', filePath: 'legacy.go', startLine: 21, endLine: 21, side: 'old', scope: 'line' });
++    await expect.poll(() => page.evaluate(() => (window as any).__sentinelScrolled)).toMatchObject({
++      file: 'legacy.go', line: '21', side: 'old',
++    });
++  });
++
++  test('flat renderer navigation remains compatible', async ({ page }) => {
++    await loadPage(page);
++    await waitForRenderer(page);
++    await invokeRenderer(page, { type: 'line', filePath: 'server.go', startLine: 67, endLine: 67 });
++    await expect(page.locator('#file-section-server\\.go')).toHaveAttribute('open', '');
++    await expect(page.locator('body')).not.toHaveClass(/crit-story-active/);
++  });
++});
+diff --git a/web/__tests__/sentinel-story-navigation.test.js b/web/__tests__/sentinel-story-navigation.test.js
 new file mode 100644
-index 0000000..24ed9ae
+index 0000000..034bf4a
 --- /dev/null
-+++ b/web/__tests__/story-line-navigation.test.js
-@@ -0,0 +1,340 @@
++++ b/web/__tests__/sentinel-story-navigation.test.js
+@@ -0,0 +1,67 @@
 +'use strict';
 +
 +const { test } = require('node:test');
 +const assert = require('node:assert/strict');
++const crypto = require('node:crypto');
 +const fs = require('node:fs');
 +const path = require('node:path');
 +
-+const appJs = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
++const workspace = process.env.SENTINEL_WORKSPACE || path.join(__dirname, '..', '..');
 +
-+function extractFunction(name) {
-+  const start = appJs.indexOf(`function ${name}(`);
-+  assert.notEqual(start, -1, `${name} must exist`);
-+  const bodyStart = appJs.indexOf('{', start);
-+  let depth = 0;
-+  for (let i = bodyStart; i < appJs.length; i++) {
-+    if (appJs[i] === '{') depth++;
-+    if (appJs[i] === '}') {
-+      depth--;
-+      if (depth === 0) return appJs.slice(start, i + 1);
-+    }
-+  }
-+  throw new Error(`could not extract ${name}`);
-+}
-+
-+const source = [
-+  extractFunction('storyRawHunks'),
-+  extractFunction('storyRawHunksWithTrailingContext'),
-+  extractFunction('buildContextLines'),
-+  extractFunction('expandHunksForComments'),
-+  'function buildHunkHeader() { return "@@"; }',
-+  extractFunction('autoExpandSmallGaps'),
-+  extractFunction('storyRawHunkForLine'),
-+  extractFunction('storyDisplayAnchorForLine'),
-+  'return { expandHunksForComments, autoExpandSmallGaps, storyRawHunkForLine, storyDisplayAnchorForLine };',
-+].join('\n');
-+const {
-+  expandHunksForComments,
-+  autoExpandSmallGaps,
-+  storyRawHunkForLine,
-+  storyDisplayAnchorForLine,
-+} = new Function(source)();
-+
-+const fileNavigationSource = [
-+  'let storyState = null;',
-+  'let storyView = "overview";',
-+  'let shown = null;',
-+  'function storyPageId(page) { return page.id; }',
-+  'function showStory(id) { shown = id; storyView = id; }',
-+  extractFunction('storyPageForFile'),
-+  extractFunction('storyActivatePageForFile'),
-+  'return {',
-+  '  setState: function (state) { storyState = state; },',
-+  '  setView: function (view) { storyView = view; },',
-+  '  shown: function () { return shown; },',
-+  '  storyPageForFile,',
-+  '  storyActivatePageForFile,',
-+  '};',
-+].join('\n');
-+const fileNavigation = new Function(fileNavigationSource)();
-+
-+function line(Type, OldNum, NewNum) {
-+  return { Type, OldNum, NewNum };
-+}
-+
-+test('new-side line wins over an old-side collision after a net deletion', () => {
-+  const first = {
-+    OldStart: 7,
-+    Lines: [
-+      line('context', 7, 7),
-+      line('del', 17, 0),
-+      line('del', 18, 0),
-+      line('context', 22, 12),
-+    ],
-+  };
-+  const second = {
-+    OldStart: 24,
-+    Lines: [
-+      line('context', 24, 14),
-+      line('add', 0, 17),
-+      line('context', 30, 20),
-+    ],
-+  };
-+
-+  const match = storyRawHunkForLine([first, second], 17, 'new');
-+  assert.equal(match.rawHunk.OldStart, 24);
-+});
-+
-+test('old-side line wins over a new-side collision', () => {
-+  const deleted = {
-+    OldStart: 7,
-+    Lines: [
-+      line('context', 7, 7),
-+      line('del', 17, 0),
-+    ],
-+  };
-+  const later = {
-+    OldStart: 24,
-+    Lines: [
-+      line('context', 24, 14),
-+      line('add', 0, 17),
-+    ],
-+  };
-+
-+  const match = storyRawHunkForLine([deleted, later], 17, 'old');
-+  assert.equal(match.rawHunk.OldStart, 7);
-+});
-+
-+test('merged visual hunk preserves raw ownership for both sides', () => {
-+  const first = {
-+    OldStart: 7,
-+    OldCount: 16,
-+    NewStart: 7,
-+    NewCount: 6,
-+    Header: '@@ -7,16 +7,6 @@',
-+    Lines: [line('context', 7, 7), line('del', 17, 0), line('context', 22, 12)],
-+  };
-+  const second = {
-+    OldStart: 24,
-+    OldCount: 7,
-+    NewStart: 14,
-+    NewCount: 7,
-+    Header: '@@ -24,7 +14,7 @@',
-+    Lines: [line('context', 24, 14), line('add', 0, 17), line('context', 30, 20)],
-+  };
-+  const file = {
-+    content: Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join('\n'),
-+    diffHunks: [first, second],
-+  };
-+  autoExpandSmallGaps(file);
-+
-+  assert.equal(file.diffHunks.length, 1);
-+  const newMatch = storyRawHunkForLine(file.diffHunks, 17, 'new');
-+  const oldMatch = storyRawHunkForLine(file.diffHunks, 17, 'old');
-+  assert.equal(newMatch.rawHunk.OldStart, 24);
-+  assert.equal(oldMatch.rawHunk.OldStart, 7);
-+});
-+
-+test('comment-gap expansion preserves the later raw hunk owner', () => {
-+  const first = {
-+    OldStart: 10,
-+    OldCount: 2,
-+    NewStart: 10,
-+    NewCount: 2,
-+    Header: '@@ -10,2 +10,2 @@',
-+    Lines: [line('context', 10, 10), line('context', 11, 11)],
-+  };
-+  const second = {
-+    OldStart: 20,
-+    OldCount: 2,
-+    NewStart: 20,
-+    NewCount: 2,
-+    Header: '@@ -20,2 +20,2 @@',
-+    Lines: [line('context', 20, 20), line('add', 0, 21)],
-+  };
-+  const file = {
-+    content: Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join('\n'),
-+    comments: [{ scope: 'line', side: 'new', end_line: 15 }],
-+    diffHunks: [first, second],
-+  };
-+
-+  expandHunksForComments(file);
-+
-+  assert.equal(file.diffHunks.length, 1);
-+  const gapMatch = storyRawHunkForLine(file.diffHunks, 15, 'new');
-+  assert.equal(gapMatch.rawHunk.OldStart, 10, 'synthesized gap context belongs to the preceding raw hunk');
-+  const match = storyRawHunkForLine(file.diffHunks, 21, 'new');
-+  assert.equal(match.rawHunk.OldStart, 20);
-+});
-+
-+test('automatic small-gap expansion preserves synthesized context ownership', () => {
-+  const first = {
-+    OldStart: 10,
-+    OldCount: 2,
-+    NewStart: 10,
-+    NewCount: 2,
-+    Header: '@@ -10,2 +10,2 @@',
-+    Lines: [line('context', 10, 10), line('context', 11, 11)],
-+  };
-+  const second = {
-+    OldStart: 15,
-+    OldCount: 2,
-+    NewStart: 15,
-+    NewCount: 2,
-+    Header: '@@ -15,2 +15,2 @@',
-+    Lines: [line('context', 15, 15), line('add', 0, 16)],
-+  };
-+  const file = {
-+    content: Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join('\n'),
-+    diffHunks: [first, second],
-+  };
-+
-+  autoExpandSmallGaps(file);
-+
-+  const gapMatch = storyRawHunkForLine(file.diffHunks, 13, 'new');
-+  assert.equal(gapMatch.rawHunk.OldStart, 10);
-+  const laterMatch = storyRawHunkForLine(file.diffHunks, 16, 'new');
-+  assert.equal(laterMatch.rawHunk.OldStart, 15);
-+});
-+
-+test('existing insertion mapping still selects its new-side hunk', () => {
-+  const first = {
-+    OldStart: 10,
-+    Lines: [line('context', 10, 10), line('add', 0, 11)],
-+  };
-+  const second = {
-+    OldStart: 20,
-+    Lines: [line('context', 20, 21), line('add', 0, 22)],
-+  };
-+
-+  const match = storyRawHunkForLine([first, second], 22, 'new');
-+  assert.equal(match.rawHunk.OldStart, 20);
-+});
-+
-+test('deleted lines fall back to their old-side raw hunk', () => {
-+  const deleted = {
-+    OldStart: 30,
-+    Lines: [line('del', 31, 0)],
-+  };
-+
-+  const match = storyRawHunkForLine([deleted], 31, 'old');
-+  assert.equal(match.rawHunk.OldStart, 30);
-+});
-+
-+test('side-less legacy lookup keeps new-then-old fallback', () => {
-+  const deleted = {
-+    OldStart: 7,
-+    Lines: [line('del', 17, 0)],
-+  };
-+  const added = {
-+    OldStart: 24,
-+    Lines: [line('add', 0, 17)],
-+  };
-+
-+  const match = storyRawHunkForLine([deleted, added], 17);
-+  assert.equal(match.rawHunk.OldStart, 24);
-+});
-+
-+test('side-less legacy display mapping follows the matched coordinate side', () => {
-+  const deleted = {
-+    OldStart: 7,
-+    Lines: [line('del', 17, 0)],
-+  };
-+
-+  assert.deepEqual(
-+    storyDisplayAnchorForLine([deleted], 17, undefined, 'unified'),
-+    { line: 17, side: 'old' }
-+  );
-+});
-+
-+test('file-level navigation activates the first chapter containing the file', () => {
-+  fileNavigation.setState({
-+    pages: [{ id: 'chapter-1' }, { id: 'chapter-2' }],
-+    fileChapters: new Map([['src/a.go', new Set([1])]]),
++function contract(name, fn) {
++  if (process.env.SENTINEL_CASE && process.env.SENTINEL_CASE !== name) return;
++  test(name, async () => {
++    await fn();
++    const completion = process.env.SENTINEL_COMPLETION_FILE;
++    const token = process.env.SENTINEL_COMPLETION_TOKEN;
++    if (completion && token) fs.writeFileSync(completion, token, { encoding: 'utf8', mode: 0o600 });
 +  });
-+  fileNavigation.setView('overview');
++}
 +
-+  assert.equal(fileNavigation.storyPageForFile('src/a.go'), 'chapter-2');
-+  assert.equal(fileNavigation.storyActivatePageForFile('src/a.go'), true);
-+  assert.equal(fileNavigation.shown(), 'chapter-2');
-+  assert.equal(fileNavigation.storyActivatePageForFile('missing.go'), false);
++function digest(file) {
++  return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
++}
++
++contract('line comment anchor preserves side and scope', () => {
++  const renderer = require(path.join(workspace, 'web', 'crit-renderer.js'));
++  assert.deepEqual(renderer.anchorFromComment({
++    file_path: 'a.go', start_line: 1, end_line: 5, side: 'old', scope: 'line',
++  }), {
++    type: 'line', filePath: 'a.go', startLine: 1, endLine: 5, side: 'old', scope: 'line',
++  });
 +});
 +
-+test('display mapping preserves route side while matching split and unified DOM semantics', () => {
-+  const hunk = {
-+    OldStart: 20,
-+    Lines: [
-+      line('context', 24, 14),
-+      line('del', 25, 0),
-+      line('add', 0, 15),
-+      line('context', 26, 16),
-+    ],
-+  };
-+
-+  assert.deepEqual(
-+    storyDisplayAnchorForLine([hunk], 24, 'old', 'unified'),
-+    { line: 14, side: '' },
-+    'unified old-side context maps to its single new-side context row'
-+  );
-+  assert.deepEqual(
-+    storyDisplayAnchorForLine([hunk], 25, 'old', 'unified'),
-+    { line: 25, side: 'old' },
-+    'unified old-side deletion keeps its old-side deleted row'
-+  );
-+  assert.deepEqual(
-+    storyDisplayAnchorForLine([hunk], 15, 'new', 'unified'),
-+    { line: 15, side: '' },
-+    'unified new-side addition keeps its new-side row'
-+  );
-+  assert.deepEqual(
-+    storyDisplayAnchorForLine([hunk], 16, 'new', 'unified'),
-+    { line: 16, side: '' },
-+    'unified new-side context keeps its new-side row'
-+  );
-+  assert.deepEqual(
-+    storyDisplayAnchorForLine([hunk], 24, 'old', 'split'),
-+    { line: 24, side: 'old' },
-+    'split old-side context keeps its distinct left-side row'
-+  );
++contract('file comment anchor preserves scope without a side', () => {
++  const renderer = require(path.join(workspace, 'web', 'crit-renderer.js'));
++  const anchor = renderer.anchorFromComment({
++    file_path: 'a.go', start_line: 0, end_line: 0, scope: 'file',
++  });
++  assert.equal(anchor.type, 'line');
++  assert.equal(anchor.filePath, 'a.go');
++  assert.equal(anchor.startLine, 0);
++  assert.equal(anchor.endLine, 0);
++  assert.equal(anchor.scope, 'file');
++  assert.equal(anchor.side, undefined);
 +});
 +
-+test('production Story callers thread side and display mapping into scroll routing', () => {
-+  assert.match(
-+    appJs,
-+    /storyActivatePageForLine\(filePath,\s*line,\s*side\)/,
-+    'comment-card navigation must preserve the comment side'
-+  );
-+  assert.match(
-+    appJs,
-+    /fileScope\s*\?\s*storyActivatePageForFile\(filePath\)/,
-+    'file-level comments must navigate by file ownership instead of a fake line'
-+  );
-+  assert.match(
-+    appJs,
-+    /storyActivatePageForLine\(anchor\.filePath,\s*anchor\.endLine,\s*side\)/,
-+    'renderer anchor navigation must preserve the anchor side'
-+  );
-+  assert.match(
-+    appJs,
-+    /storyDisplayAnchorForLine\(file\.diffHunks,\s*anchor\.endLine,\s*side,\s*diffMode\)/,
-+    'renderer scrolling must translate route coordinates into renderer coordinates'
-+  );
-+  assert.match(
-+    appJs,
-+    /data-diff-side="['"]\s*\+\s*displayAnchor\.side/,
-+    'Story scroll target must use the translated display side'
-+  );
-+  assert.match(
-+    appJs,
-+    /anchor\.scope\s*===\s*['"]file['"]/,
-+    'renderer file anchors must use file-level Story navigation'
-+  );
-+  const reloadStart = appJs.indexOf('async function reloadForScope()');
-+  const reloadEnd = appJs.indexOf('function storyPageById', reloadStart);
-+  const reloadSource = appJs.slice(reloadStart, reloadEnd);
-+  assert.match(
-+    reloadSource,
-+    /storyExpandedFileCache\.clear\(\)[\s\S]*loadAllFileData/,
-+    'scope reloads must invalidate Story clones before loading replacement hunks'
-+  );
++contract('npm and Bun lockfiles select markdown-it 14.3.0 and mermaid 11.16.0', () => {
++  const npmLock = JSON.parse(fs.readFileSync(path.join(workspace, 'package-lock.json'), 'utf8'));
++  const bunLock = fs.readFileSync(path.join(workspace, 'bun.lock'), 'utf8');
++  const expected = { 'markdown-it': '14.3.0', mermaid: '11.16.0' };
++  for (const [dependency, version] of Object.entries(expected)) {
++    assert.equal(npmLock.packages[`node_modules/${dependency}`].version, version);
++    assert.ok(bunLock.includes(`"${dependency}": ["${dependency}@${version}"`));
++  }
++});
++
++contract('embedded markdown runtime matches markdown-it 14.3.0', () => {
++  const expected = process.env.SENTINEL_MARKDOWN_EXPECTED;
++  assert.ok(expected, 'verifier must provide the markdown-it 14.3.0 distribution artifact');
++  assert.equal(digest(path.join(workspace, 'web', 'markdown-it.min.js')), digest(expected));
++});
++
++contract('embedded diagram runtime matches mermaid 11.16.0', () => {
++  const expected = process.env.SENTINEL_MERMAID_EXPECTED;
++  assert.ok(expected, 'verifier must provide the mermaid 11.16.0 distribution artifact');
++  assert.equal(digest(path.join(workspace, 'web', 'mermaid.min.js')), digest(expected));
 +});

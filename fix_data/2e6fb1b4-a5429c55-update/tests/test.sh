@@ -1,541 +1,387 @@
 #!/usr/bin/env bash
-# Compact verifier entrypoint — SELF-CONTAINED (generic; shipped per task).
-#
-# Resolves the workspace, applies the eval tests (tests/tests.patch) at verify
-# time, runs the configured test command(s), then grades via an EMBEDDED copy of
-# grade.py (inlined at materialize time at the grader marker below — no sibling
-# grade.py ships). Reads tests/config.json = {execution, grading, artifacts}.
-# A fallback trap guarantees reward.txt exists.
 set -uo pipefail
 
-CONFIG="/tests/config.json"
-LOG_DIR="/logs/verifier"
-STDOUT_LOG="$LOG_DIR/test-stdout.txt"
-STDERR_LOG="$LOG_DIR/test-stderr.txt"
+CONFIG=${SENTINEL_CONFIG:-/tests/config.json}
+PATCH=${SENTINEL_TEST_PATCH:-/tests/tests.patch}
+LOG_DIR=${SENTINEL_LOG_DIR:-/logs/verifier}
+REWARD="$LOG_DIR/reward.txt"
 REPORT="$LOG_DIR/report.json"
 OUTPUT="$LOG_DIR/output.json"
-REWARD="$LOG_DIR/reward.txt"
+STDOUT_LOG="$LOG_DIR/test-stdout.txt"
+STDERR_LOG="$LOG_DIR/test-stderr.txt"
+BASE_SHA=2b64673acb2d3db65dfc5cc2f988454bfd46000c
+NODE_REL=web/__tests__/sentinel-story-navigation.test.js
+P2P_REL=web/__tests__/crit-renderer.test.js
+E2E_SPEC_REL=test/e2e/tests/sentinel-story-navigation.spec.ts
+E2E_CONFIG_REL=test/e2e/sentinel.playwright.config.ts
+MARKDOWN_REF=${SENTINEL_MARKDOWN_REF:-/opt/crit-deps/markdown-it.min.js}
+MERMAID_REF=${SENTINEL_MERMAID_REF:-/opt/crit-deps/mermaid.min.js}
+MARKDOWN_SHA=70fe17bd06c7fa819f03a1ed10957904318103624198845dc893b309bf495e28
+MERMAID_SHA=74d7c46dabca328c2294733910a8aa1ed0c37451776e8d5295da38a2b758fb9b
 
 mkdir -p "$LOG_DIR"
+find "$LOG_DIR" -mindepth 1 -maxdepth 1 -type f -delete 2>/dev/null || true
+printf '0\n' > "$REWARD"
+: > "$STDOUT_LOG"
+: > "$STDERR_LOG"
 
-# Safety net: if we crash before the grader writes the reward, write 0.
-write_zero_reward_if_missing() {
-  if [ ! -f "$REWARD" ]; then echo "0" > "$REWARD"; fi
-}
-trap write_zero_reward_if_missing EXIT
-
-if [ ! -f "$CONFIG" ]; then
-  echo "ERROR: missing $CONFIG" | tee "$STDERR_LOG"
-  echo '{"success": false, "infrastructure_error": "missing config.json", "reward": 0.0}' > "$REPORT"
-  echo "0" > "$REWARD"
+infra_fail() {
+  local message=$1
+  printf 'ERROR: %s\n' "$message" | tee -a "$STDERR_LOG" >&2
+  python3 - "$message" "$REPORT" "$OUTPUT" <<'PY'
+import json, sys
+message, report_path, output_path = sys.argv[1:]
+with open(output_path, "w", encoding="utf-8") as fh:
+    json.dump({"tests": []}, fh, indent=2)
+with open(report_path, "w", encoding="utf-8") as fh:
+    json.dump({"success": False, "reward": 0.0, "infrastructure_error": message}, fh, indent=2)
+PY
   exit 2
-fi
+}
 
-# Resolve the workspace from hardcoded fallbacks (config carries no workspace).
-WORKSPACE=""
-for p in /app /testbed /workspace; do
-  if [ -d "$p" ]; then WORKSPACE="$p"; break; fi
-done
+[ -r "$CONFIG" ] || infra_fail "missing config.json"
+[ -r "$PATCH" ] || infra_fail "missing tests.patch"
+command -v node >/dev/null 2>&1 || infra_fail "node runtime is unavailable"
+command -v python3 >/dev/null 2>&1 || infra_fail "python3 runtime is unavailable"
+command -v go >/dev/null 2>&1 || infra_fail "Go runtime is unavailable"
+
+WORKSPACE=${SENTINEL_WORKSPACE:-}
 if [ -z "$WORKSPACE" ]; then
-  echo "ERROR: could not resolve workspace" | tee "$STDERR_LOG"
-  echo '{"success": false, "infrastructure_error": "missing workspace", "reward": 0.0}' > "$REPORT"
-  echo "0" > "$REWARD"
-  exit 2
-fi
-cd "$WORKSPACE" || exit 2
-
-# Export configured env vars (execution.env).
-python3 - <<'PY' > /tmp/verifier_env.sh
-import json, shlex
-cfg = json.load(open("/tests/config.json"))
-env = (cfg.get("execution") or {}).get("env", {})
-if isinstance(env, dict):
-    for k, v in env.items():
-        if isinstance(k, str):
-            print(f"export {k}={shlex.quote(str(v))}")
-PY
-# shellcheck disable=SC1091
-source /tmp/verifier_env.sh
-
-# Apply the eval tests at VERIFY time. They ship as tests/tests.patch (NOT in
-# repo/), so the solving agent never saw them. git apply (plain, then 3-way for
-# agent edits to neighbouring files) when git exists; otherwise fall back to
-# patch(1), which patch_dockerfile injects into every task image — a slim/alpine
-# base without git must not zero the reward. A hard failure means we cannot
-# grade -> infra error, reward 0.
-if [ -f /tests/tests.patch ]; then
-  APPLIED=0
-  if command -v git >/dev/null 2>&1; then
-    if git apply /tests/tests.patch 2>>"$STDERR_LOG" \
-       || git apply --3way /tests/tests.patch 2>>"$STDERR_LOG"; then
-      APPLIED=1
+  for candidate in /testbed /workspace /app; do
+    if [ -f "$candidate/package.json" ] && [ -f "$candidate/web/app.js" ]; then
+      WORKSPACE=$candidate
+      break
     fi
-  fi
-  if [ "$APPLIED" != "1" ] && command -v patch >/dev/null 2>&1; then
-    if patch -p1 --forward < /tests/tests.patch >>"$STDERR_LOG" 2>&1; then
-      APPLIED=1
-    fi
-  fi
-  if [ "$APPLIED" != "1" ]; then
-    echo "ERROR: failed to apply tests/tests.patch" | tee -a "$STDERR_LOG"
-    echo '{"success": false, "infrastructure_error": "tests.patch did not apply", "reward": 0.0}' > "$REPORT"
-    echo "0" > "$REWARD"
-    exit 2
-  fi
+  done
+fi
+[ -n "$WORKSPACE" ] || infra_fail "could not locate the mounted crit workspace"
+
+GIT_WORKTREE=0
+WORKSPACE_ROOT=$(cd "$WORKSPACE" && pwd -P)
+if command -v git >/dev/null 2>&1 \
+  && [ "$(git -c safe.directory="$WORKSPACE" -C "$WORKSPACE" rev-parse --is-inside-work-tree 2>/dev/null || true)" = true ] \
+  && GIT_TOP=$(git -c safe.directory="$WORKSPACE" -C "$WORKSPACE" rev-parse --show-toplevel 2>/dev/null) \
+  && [ "$(cd "$GIT_TOP" 2>/dev/null && pwd -P)" = "$WORKSPACE_ROOT" ] \
+  && actual_head=$(git -c safe.directory="$WORKSPACE" -C "$WORKSPACE" rev-parse HEAD 2>/dev/null); then
+  GIT_WORKTREE=1
+  [ "$actual_head" = "$BASE_SHA" ] || infra_fail "workspace HEAD does not match the declared base"
 fi
 
-# Build the test command(s) from config (expands ${TEST_FILES}; language default
-# from grading.parser.framework when execution.commands is empty).
-python3 - <<'PY' > /tmp/run_tests.sh
-import ast, json, shlex
-cfg = json.load(open("/tests/config.json"))
-execution = cfg.get("execution", {}) or {}
+# The browser suite uses genuine upstream fixture helpers. Fail closed if a
+# candidate changes any helper or dependency lock that controls the harness.
+printf '%s  %s\n' \
+  '7ee929c0852f412e6d08e0a195e196b42fc9d98754cde5eb329a2dbb155378ff' "$WORKSPACE/test/e2e/setup-fixtures.sh" \
+  'c74d90e1d55ac22e791570f217a838c9cb3203f26b847394e9a4038c642463ac' "$WORKSPACE/test/e2e/lib.sh" \
+  'a6e2834463f0d0ac99536ec846d967157bd74c12563031eb32282105f94c8e09' "$WORKSPACE/test/e2e/tests/helpers.ts" \
+  'c6d267962f4515e57816dad217dc35813062d92845c80a84bed13774c24db5ab' "$WORKSPACE/test/e2e/tests/state-file.ts" \
+  '4dd440c0b5639eec1723b35feaaeb11f4bf8e8a52827d5d9d4c32127d5d8c549' "$WORKSPACE/test/e2e/package.json" \
+  '12f273a1137de6d318f635ac80dd7e0480ad46eb5a907fc789308c6302570b49' "$WORKSPACE/test/e2e/package-lock.json" \
+  | sha256sum -c - >>"$STDERR_LOG" 2>&1 \
+  || infra_fail "upstream browser fixture infrastructure was modified"
 
-def parse_list(value):
-    if isinstance(value, list):
-        return value
-    if isinstance(value, str) and value.strip():
-        for p in (json.loads, ast.literal_eval):
-            try:
-                v = p(value)
-                if isinstance(v, list):
-                    return v
-            except Exception:
-                pass
-    return []
-
-test_files = parse_list(execution.get("selected_test_files_to_run") or [])
-commands = execution.get("commands", [])
-if isinstance(commands, str):
-    commands = [commands]
-if not commands:
-    fw = ((cfg.get("grading") or {}).get("parser") or {}).get("framework", "").lower()
-    # Output MUST be parseable by grade.py: pytest -v (per-test lines),
-    # jest/go JSON modes. `pytest -q` prints no per-test lines -> reward 0.
-    if fw == "pytest":
-        commands = ["python -m pytest -v ${TEST_FILES}"]
-    elif fw == "jest":
-        commands = ["npx jest --json ${TEST_FILES}"]
-    elif fw == "go-test":
-        commands = ["go test -json ./..."]
-    else:
-        raise SystemExit("No execution.commands configured and no framework default")
-
-files_arg = " ".join(shlex.quote(str(x)) for x in test_files)
-for cmd in commands:
-    print(cmd.replace("${TEST_FILES}", files_arg))
+# Restore the genuine upstream renderer regression file from a verifier-owned
+# snapshot so candidate edits cannot weaken pass-to-pass protection.
+P2P_GZ_B64='H4sIAAAAAAACA6VUTWvcMBC951cM9CAvuF5yyGVDCiFtaaGhoeRWyqKVp7ZaWUqk2YZi9r939OHNZndTUnqwjfXevDd6I1s5GwhGaDEor1dYgybYwAV4vF9rj5WwrsUFYSAxOz9RiS5DQE8HpLw8D+S1SuxC92hb9Oh3C5pmzn70esKaHyFVTH1U4gksaqhmcPEGxhPgDivhsdOBWFPaFtTaM5GekACy+eDUTzbOSwCs7oy5dZdW9c4vSsGNd4MO2HgMzvzCalYXeq+73vBFL+Qrg9J/mIom+riZcGcvrXUkSTv70RI3PXH2mR3SdQy1ACJNYAfMDd3+vnukGG2xUDbn6bFNd4qrinHMMpjH1eRxvbtfS1Nt+SVR3hjsVGzheC+C/yZm18akik0c9t4oqffuIXBGwOEGbTsYkHrX7s21WGV2lZHDjY4btptfuRTyl+kEFuH5fg8ypfmex3rlhoEr4EFTDzFRyNjRwyXTkS7WBxrVCN+1weWdpH4BQjadY5VA0tMyKi/gtAauLi9nqaGdHWKKUTbEQ67LeI8zos0Nu9TF5TgrOX9ilRpOjzO4mYyfvTCgt5+v/yuf1g1LWT6tEWJQVg6chZizngphGdCgogiLVyuyvEqyW6pearuAr2K1JnJWfONf1t/DY6NnUplM62j6THClibo0sQ0nXn8AJfdHVUIFAAA='
+python3 - "$WORKSPACE/$P2P_REL" "$P2P_GZ_B64" <<'PY' || infra_fail "could not restore upstream regression test"
+import base64, gzip, os, sys, tempfile
+target, encoded = sys.argv[1:]
+data = gzip.decompress(base64.b64decode(encoded))
+os.makedirs(os.path.dirname(target), exist_ok=True)
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(target))
+try:
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(data)
+    os.replace(tmp, target)
+finally:
+    if os.path.exists(tmp):
+        os.unlink(tmp)
 PY
-chmod +x /tmp/run_tests.sh
 
-# Wrap with timeout(1) if available + configured.
-TIMEOUT_SEC="$(python3 -c "import json;print((json.load(open('/tests/config.json')).get('execution') or {}).get('timeout_sec',''))" 2>/dev/null || true)"
-RUNNER=(bash /tmp/run_tests.sh)
-if [ -n "${TIMEOUT_SEC:-}" ] && command -v timeout >/dev/null 2>&1; then
-  RUNNER=(timeout "${TIMEOUT_SEC}" bash /tmp/run_tests.sh)
+actual_p2p=$(sha256sum "$WORKSPACE/$P2P_REL" | awk '{print $1}')
+[ "$actual_p2p" = 63a73ae7b60d08c341626d1ef19cc6565956a0e177d02481d800b379f6ab71bb ] \
+  || infra_fail "upstream regression snapshot failed integrity validation"
+
+# Remove only the verifier-owned paths before applying the hidden patch.
+for rel in "$NODE_REL" "$E2E_SPEC_REL" "$E2E_CONFIG_REL"; do
+  target="$WORKSPACE/$rel"
+  if [ -L "$target" ]; then
+    unlink "$target" || infra_fail "could not remove a verifier path symlink"
+  elif [ -f "$target" ]; then
+    find "$target" -maxdepth 0 -type f -delete || infra_fail "could not remove a verifier path collision"
+  elif [ -e "$target" ]; then
+    infra_fail "verifier path collision is not a regular file"
+  fi
+done
+
+if [ "$GIT_WORKTREE" -eq 1 ]; then
+  git -c safe.directory="$WORKSPACE" -C "$WORKSPACE" apply --check "$PATCH" 2>>"$STDERR_LOG" \
+    || infra_fail "tests.patch does not apply cleanly"
+  git -c safe.directory="$WORKSPACE" -C "$WORKSPACE" apply "$PATCH" 2>>"$STDERR_LOG" \
+    || infra_fail "tests.patch application failed"
+elif command -v patch >/dev/null 2>&1; then
+  (cd "$WORKSPACE" && patch -p1 --forward < "$PATCH") >>"$STDERR_LOG" 2>&1 \
+    || infra_fail "tests.patch application failed without Git metadata"
+else
+  infra_fail "neither git nor patch is available"
 fi
 
-set +e
-"${RUNNER[@]}" > "$STDOUT_LOG" 2> "$STDERR_LOG"
-TEST_EXIT_CODE=$?
-set -e
+printf '%s  %s\n' "$MARKDOWN_SHA" "$MARKDOWN_REF" | sha256sum -c - >>"$STDERR_LOG" 2>&1 \
+  || infra_fail "pinned Markdown reference is missing or corrupt"
+printf '%s  %s\n' "$MERMAID_SHA" "$MERMAID_REF" | sha256sum -c - >>"$STDERR_LOG" 2>&1 \
+  || infra_fail "pinned diagram reference is missing or corrupt"
 
-# Grade via the embedded grader (grade.py inlined at the marker below; written to
-# /tmp at runtime and invoked with the same CLI it has always used).
-cat > /tmp/grade.py <<'GRADE_PY_EOF'
-#!/usr/bin/env python3
-"""Compact SWE-bench/Harborized verifier — parser + evaluator (`grade.py`).
+TRUSTED_E2E=${SENTINEL_E2E_NODE_MODULES:-/opt/crit-e2e/node_modules}
+[ -f "$TRUSTED_E2E/@playwright/test/cli.js" ] || infra_fail "trusted Playwright runtime is unavailable"
+workspace_modules="$WORKSPACE/test/e2e/node_modules"
+if [ -L "$workspace_modules" ]; then
+  unlink "$workspace_modules" || infra_fail "could not replace browser dependencies"
+elif [ -d "$workspace_modules" ]; then
+  find "$workspace_modules" -depth -delete || infra_fail "could not replace browser dependencies"
+elif [ -e "$workspace_modules" ]; then
+  infra_fail "browser dependency path is not a directory"
+fi
+ln -s "$TRUSTED_E2E" "$workspace_modules" || infra_fail "could not mount trusted browser dependencies"
 
-This is a **generic, task-agnostic** grader and the single source of grading
-truth (see ``agents/difflection`` TEST_DESIGN.md). It is NOT shipped as its own
-``tests/`` file: ``config_builder.assemble_test_sh`` embeds this file's source
-into the self-contained ``test.sh`` at materialize time. It does NOT run the
-tests — ``test.sh`` runs them + captures logs; this grader only parses those logs
-against ``config.json``'s required-test lists and writes the reward.
+export SENTINEL_WORKSPACE="$WORKSPACE"
+export SENTINEL_MARKDOWN_EXPECTED="$MARKDOWN_REF"
+export SENTINEL_MERMAID_EXPECTED="$MERMAID_REF"
+export SENTINEL_PLAYWRIGHT_CLI="$TRUSTED_E2E/@playwright/test/cli.js"
 
-Division of responsibility (compact = config.json + tests.patch + test.sh):
-    config.json = declarative {execution, grading, artifacts} metadata (per-task)
-    tests.patch = the eval tests, applied by test.sh at verify time (per-task)
-    test.sh     = self-contained verifier (runs tests + this grader, embedded)
+# Build the candidate server once before Playwright starts either fixture.
+# Leaving this to webServer makes both browser groups pay the cold Go compile
+# under Playwright's shorter startup deadline. Keep compiler scratch space on
+# the verifier artifact volume rather than assuming /tmp has enough capacity.
+E2E_TMP="$LOG_DIR/e2e-tmp"
+E2E_EXEC_ROOT=${SENTINEL_EXEC_ROOT:-/opt/crit-verifier}
+if [ ! -d "$E2E_EXEC_ROOT" ] || [ ! -w "$E2E_EXEC_ROOT" ] || [ ! -x "$E2E_EXEC_ROOT" ]; then
+  E2E_EXEC_ROOT="$WORKSPACE/test/e2e"
+fi
+E2E_EXEC_DIR=$(mktemp -d -p "$E2E_EXEC_ROOT" sentinel-bin.XXXXXXXX) \
+  || infra_fail "could not create executable verifier storage"
+E2E_BIN="$E2E_EXEC_DIR/crit-e2e"
+cleanup_e2e_exec() {
+  if [ -d "$E2E_EXEC_DIR" ]; then
+    find "$E2E_EXEC_DIR" -depth -delete 2>/dev/null || true
+  fi
+}
+trap cleanup_e2e_exec EXIT
+if [ -e "$E2E_TMP" ]; then
+  find "$E2E_TMP" -depth -delete || infra_fail "could not reset browser temporary storage"
+fi
+mkdir -p "$E2E_TMP" || infra_fail "could not create browser temporary storage"
+export TMPDIR="$E2E_TMP"
+export GOTMPDIR="$E2E_TMP"
+export CRIT_BIN="$E2E_BIN"
+if ! (cd "$WORKSPACE" && timeout 180 go build -buildvcs=false -o "$E2E_BIN" ./cmd/crit) >>"$STDOUT_LOG" 2>>"$STDERR_LOG"; then
+  # A submission that cannot build must receive ordinary failed browser
+  # results, not be mislabeled as verifier infrastructure failure.
+  if [ -e "$E2E_BIN" ]; then
+    find "$E2E_BIN" -maxdepth 0 -type f -delete 2>/dev/null || true
+  fi
+fi
 
-CLI (called by test.sh)::
-
-    python3 /tests/grade.py \
-      --config /tests/config.json \
-      --stdout /logs/verifier/test-stdout.txt \
-      --stderr /logs/verifier/test-stderr.txt \
-      --raw-exit-code <int> \
-      --output /logs/verifier/output.json \
-      --report /logs/verifier/report.json \
-      --reward /logs/verifier/reward.txt
-
-Exit codes: 0 = success (reward 1), 1 = grading failure (reward 0),
-2 = infrastructure/parser error (reward 0). reward.txt is ALWAYS written.
-"""
-
-from __future__ import annotations
-
-import argparse
-import ast
+python3 - "$CONFIG" "$WORKSPACE/$NODE_REL" "$WORKSPACE/$P2P_REL" \
+  "$WORKSPACE/$E2E_SPEC_REL" "$WORKSPACE/$E2E_CONFIG_REL" \
+  "$OUTPUT" "$REPORT" "$REWARD" "$STDOUT_LOG" "$STDERR_LOG" <<'PY'
 import json
+import os
 import re
+import secrets
+import socket
+import subprocess
 import sys
-from typing import Any
+import tempfile
 
-# Normalized statuses; only exact PASSED counts as passed for grading.
-PASSED, FAILED, ERROR, SKIPPED, UNKNOWN = (
-    "PASSED",
-    "FAILED",
-    "ERROR",
-    "SKIPPED",
-    "UNKNOWN",
-)
+(config_path, node_file, p2p_file, e2e_file, e2e_config,
+ output_path, report_path, reward_path, stdout_path, stderr_path) = sys.argv[1:]
+with open(config_path, encoding="utf-8") as fh:
+    config = json.load(fh)
+grading = config.get("grading") or {}
+f2p = grading.get("fail_to_pass") or []
+p2p = grading.get("pass_to_pass") or []
+declared = [*f2p, *p2p]
 
-
-# ---------------------------------------------------------------------------
-# Robust helpers
-# ---------------------------------------------------------------------------
-def parse_list(value: Any) -> list[str]:
-    """Coerce a JSON array OR a string-encoded list into ``list[str]``.
-
-    SWE-bench-style datasets often store list fields as strings, e.g.
-    ``'["a", "b"]'`` or ``"['a', 'b']"``. All forms normalize to the same list.
-    """
-    if isinstance(value, list):
-        return [str(x) for x in value]
-    if isinstance(value, str):
-        value = value.strip()
-        if not value:
-            return []
-        for parser in (json.loads, ast.literal_eval):
-            try:
-                parsed = parser(value)
-                if isinstance(parsed, list):
-                    return [str(x) for x in parsed]
-            except Exception:
-                pass
-    return []
-
-
-def normalize_name(name: str) -> str:
-    """Backslash→slash, collapse duplicate slashes, strip leading ./ and space."""
-    n = name.strip().replace("\\", "/")
-    n = re.sub(r"/+", "/", n)
-    if n.startswith("./"):
-        n = n[2:]
-    return n
-
-
-def _read(path: str | None) -> str:
-    if not path:
-        return ""
-    try:
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            return fh.read()
-    except OSError:
-        return ""
-
-
-# ---------------------------------------------------------------------------
-# Framework parsers — text/JSON logs → [{name, status, raw_name, source}]
-# ---------------------------------------------------------------------------
-_PYTEST_RE = re.compile(
-    r"^(?P<name>[\w./\-\[\]]+::[^\s]+)\s+(?P<status>PASSED|FAILED|ERROR|SKIPPED)",
-    re.MULTILINE,
-)
-# unittest verbose: "test_name (module.TestClass) ... ok|FAIL|ERROR|skipped"
-_UNITTEST_RE = re.compile(
-    r"^(?P<test>\w+)\s+\((?P<cls>[\w.]+)\)\s+\.\.\.\s+"
-    r"(?P<status>ok|FAIL|ERROR|skipped)",
-    re.MULTILINE,
-)
-_STATUS_MAP = {
-    "passed": PASSED,
-    "pass": PASSED,
-    "ok": PASSED,
-    "failed": FAILED,
-    "fail": FAILED,
-    "error": ERROR,
-    "skipped": SKIPPED,
-    "skip": SKIPPED,
+node_f2p = {
+    "line comment anchor preserves side and scope",
+    "file comment anchor preserves scope without a side",
+    "npm and Bun lockfiles select markdown-it 14.3.0 and mermaid 11.16.0",
+    "embedded markdown runtime matches markdown-it 14.3.0",
+    "embedded diagram runtime matches mermaid 11.16.0",
+}
+node_p2p = {
+    "register and current",
+    "register throws on missing method",
+    "anchorFromComment with line anchor",
+    "anchorFromComment with DOM anchor",
 }
 
+def infrastructure(message):
+    with open(output_path, "w", encoding="utf-8") as fh:
+        json.dump({"tests": []}, fh, indent=2)
+    with open(report_path, "w", encoding="utf-8") as fh:
+        json.dump({"success": False, "reward": 0.0, "infrastructure_error": message}, fh, indent=2)
+    with open(reward_path, "w", encoding="utf-8") as fh:
+        fh.write("0\n")
+    raise SystemExit(2)
 
-def _entry(name: str, status: str, source: str) -> dict[str, str]:
-    return {
-        "name": normalize_name(name),
-        "status": status,
-        "raw_name": name,
-        "source": source,
-    }
+if not isinstance(f2p, list) or not isinstance(p2p, list):
+    infrastructure("graded test lists must be JSON arrays")
+if not 10 <= len(f2p) <= 20:
+    infrastructure("fail_to_pass count must be between 10 and 20")
+if len(set(declared)) != len(declared):
+    infrastructure("graded test IDs must be unique")
+if grading.get("allow_extra_failures") is not False:
+    infrastructure("allow_extra_failures must be false")
+if not node_f2p.issubset(set(f2p)) or not node_p2p.issubset(set(p2p)):
+    infrastructure("graded Node inventory does not match the verifier")
 
+browser_f2p = [name for name in f2p if name not in node_f2p]
+browser_p2p = [name for name in p2p if name not in node_p2p]
+browser_declared = [*browser_f2p, *browser_p2p]
+if not browser_declared:
+    infrastructure("browser test inventory is empty")
 
-def parse_pytest(stdout: str, stderr: str) -> list[dict[str, str]]:
-    out: list[dict[str, str]] = []
-    for m in _PYTEST_RE.finditer(stdout + "\n" + stderr):
-        out.append(_entry(m.group("name"), m.group("status").upper(), "pytest"))
-    return out
+result_map = {}
+all_stdout = []
+all_stderr = []
+completion_dir = tempfile.mkdtemp(prefix="sentinel-completions-", dir=os.path.dirname(output_path))
 
-
-def parse_unittest(stdout: str, stderr: str) -> list[dict[str, str]]:
-    # unittest writes verbose results to stderr by default.
-    out: list[dict[str, str]] = []
-    for m in _UNITTEST_RE.finditer(stdout + "\n" + stderr):
-        status = _STATUS_MAP.get(m.group("status").lower(), UNKNOWN)
-        out.append(_entry(f"{m.group('cls')}.{m.group('test')}", status, "unittest"))
-    return out
-
-
-def _find_json(text: str) -> Any:
-    """Best-effort: parse the largest JSON object/array embedded in *text*."""
-    text = text.strip()
+def invoke_node(name, test_file, env_extra, pattern=None):
+    token = secrets.token_hex(32)
+    completion = os.path.join(completion_dir, secrets.token_hex(16))
+    env = os.environ.copy()
+    env.update(env_extra)
+    env["SENTINEL_COMPLETION_FILE"] = completion
+    env["SENTINEL_COMPLETION_TOKEN"] = token
+    cmd = ["node", "--test", "--test-reporter=tap"]
+    if pattern is not None:
+        cmd.append(f"--test-name-pattern=^{re.escape(pattern)}$")
+    cmd.append(test_file)
     try:
-        return json.loads(text)
-    except Exception:
-        pass
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end > start:
+        proc = subprocess.run(cmd, env=env, text=True, capture_output=True, timeout=15)
+        completed = False
         try:
-            return json.loads(text[start : end + 1])
-        except Exception:
-            return None
-    return None
+            with open(completion, encoding="utf-8") as fh:
+                completed = secrets.compare_digest(fh.read(), token)
+        except OSError:
+            pass
+        passed = proc.returncode == 0 and completed
+        all_stdout.append(f"===== {name} =====\n{proc.stdout}")
+        all_stderr.append(f"===== {name} =====\n{proc.stderr}")
+        result_map[name] = {"name": name, "status": "PASSED" if passed else "FAILED", "exit_code": proc.returncode, "completed": completed}
+    except subprocess.TimeoutExpired as exc:
+        all_stdout.append(f"===== {name} =====\n{exc.stdout or ''}")
+        all_stderr.append(f"===== {name} =====\nTIMEOUT\n{exc.stderr or ''}")
+        result_map[name] = {"name": name, "status": "FAILED", "exit_code": 124, "completed": False}
 
+for name in f2p:
+    if name in node_f2p:
+        invoke_node(name, node_file, {"SENTINEL_CASE": name})
 
-def parse_jest(stdout: str, stderr: str) -> list[dict[str, str]]:
-    data = _find_json(stdout) or _find_json(stderr)
-    out: list[dict[str, str]] = []
-    if not isinstance(data, dict):
-        return out
-    for suite in data.get("testResults", []):
-        for a in suite.get("assertionResults", []):
-            status = _STATUS_MAP.get(str(a.get("status", "")).lower(), UNKNOWN)
-            title = a.get("fullName") or a.get("title") or ""
-            out.append(_entry(title, status, "jest"))
-    return out
+wrapper = os.path.join(completion_dir, "p2p-wrapper.js")
+with open(wrapper, "w", encoding="utf-8") as fh:
+    fh.write("const { after } = require('node:test');\n")
+    fh.write("const fs = require('node:fs');\n")
+    fh.write("after(() => fs.writeFileSync(process.env.SENTINEL_COMPLETION_FILE, process.env.SENTINEL_COMPLETION_TOKEN));\n")
+    fh.write("require(process.env.SENTINEL_P2P_FILE);\n")
+for name in p2p:
+    if name in node_p2p:
+        invoke_node(name, wrapper, {"SENTINEL_P2P_FILE": p2p_file}, pattern=name)
 
-
-def parse_mocha(stdout: str, stderr: str) -> list[dict[str, str]]:
-    data = _find_json(stdout) or _find_json(stderr)
-    out: list[dict[str, str]] = []
-    if not isinstance(data, dict):
-        return out
-    for key, status in (("passes", PASSED), ("failures", FAILED), ("pending", SKIPPED)):
-        for t in data.get(key, []):
-            title = t.get("fullTitle") or t.get("title") or ""
-            out.append(_entry(title, status, "mocha"))
-    return out
-
-
-def parse_go_test(stdout: str, stderr: str) -> list[dict[str, str]]:
-    # `go test -json` emits one JSON object per line with Action/Test/Package.
-    out: list[dict[str, str]] = []
-    for line in (stdout + "\n" + stderr).splitlines():
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            ev = json.loads(line)
-        except Exception:
-            continue
-        test = ev.get("Test")
-        action = ev.get("Action")
-        if not test or action not in ("pass", "fail", "skip"):
-            continue
-        status = {"pass": PASSED, "fail": FAILED, "skip": SKIPPED}[action]
-        out.append(_entry(f"{ev.get('Package', '')}::{test}", status, "go-test"))
-    return out
-
-
-def parse_custom(stdout: str, stderr: str, parser_cfg: dict) -> list[dict[str, str]]:
-    out: list[dict[str, str]] = []
-    text = stdout + "\n" + stderr
-    pass_re = parser_cfg.get("pass_regex")
-    fail_re = parser_cfg.get("fail_regex")
-    for rx, status in ((pass_re, PASSED), (fail_re, FAILED)):
-        if not rx:
-            continue
-        for m in re.finditer(rx, text, re.MULTILINE):
-            name = m.groupdict().get("name") or (m.group(1) if m.groups() else "")
-            if name:
-                out.append(_entry(name, status, "custom"))
-    return out
-
-
-_PARSERS = {
-    "pytest": parse_pytest,
-    "unittest": parse_unittest,
-    "jest": parse_jest,
-    "mocha": parse_mocha,
-    "go-test": parse_go_test,
-}
-
-
-def parse_results(
-    framework: str, stdout: str, stderr: str, parser_cfg: dict
-) -> list[dict[str, str]]:
-    if framework == "custom":
-        return parse_custom(stdout, stderr, parser_cfg)
-    fn = _PARSERS.get(framework)
-    return fn(stdout, stderr) if fn else []
-
-
-# ---------------------------------------------------------------------------
-# Matching: required name → parsed result (controlled, no broad fuzzy match)
-# ---------------------------------------------------------------------------
-def matched_passed(required: str, results: list[dict[str, str]]) -> bool:
-    """True iff *required* maps to a parsed test whose status is exactly PASSED."""
-    req = normalize_name(required)
-    by_name: dict[str, str] = {}
-    for r in results:
-        # Last status wins; an exact PASSED is what we ultimately check.
-        by_name[r["name"]] = r["status"]
-    # 1) exact / whitespace / path-normalized (all folded into normalize_name).
-    if req in by_name:
-        return by_name[req] == PASSED
-    # 2) unambiguous suffix match only.
-    suffix_hits = [
-        name
-        for name in by_name
-        if name.endswith("/" + req) or name.endswith("::" + req.split("::")[-1])
+def run_browser(names, label):
+    if not names:
+        return 0, {}, True
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = str(sock.getsockname()[1])
+    env = os.environ.copy()
+    env["CRIT_TEST_PORT"] = port
+    title_filter = "|".join(re.escape(name) for name in names)
+    cmd = [
+        "node", os.environ["SENTINEL_PLAYWRIGHT_CLI"], "test",
+        os.path.basename(e2e_file), "--config", os.path.basename(e2e_config),
+        "--reporter=json", "--grep", title_filter,
     ]
-    if len(set(suffix_hits)) == 1:
-        return by_name[suffix_hits[0]] == PASSED
-    return False
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-def _write(path: str, content: str) -> None:
+    status = 1
+    stdout = ""
+    stderr = ""
     try:
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(content)
-    except OSError as exc:  # pragma: no cover - disk failure
-        sys.stderr.write(f"grade.py: could not write {path}: {exc}\n")
-
-
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Compact verifier grader")
-    ap.add_argument("--config", required=True)
-    ap.add_argument("--stdout", default="")
-    ap.add_argument("--stderr", default="")
-    ap.add_argument("--raw-exit-code", type=int, default=0)
-    ap.add_argument("--output", required=True)
-    ap.add_argument("--report", required=True)
-    ap.add_argument("--reward", required=True)
-    args = ap.parse_args(argv)
-
-    def finish(reward: float, report: dict, exit_code: int) -> int:
-        report.setdefault("reward", reward)
-        _write(args.output, json.dumps({"tests": report.pop("_tests", [])}, indent=2))
-        _write(args.report, json.dumps(report, indent=2))
-        _write(args.reward, f"{1 if reward >= 1.0 else 0}\n")
-        return exit_code
-
-    # --- load config (infra error if unreadable) ---
-    try:
-        with open(args.config, encoding="utf-8") as fh:
-            cfg = json.load(fh)
-    except (OSError, json.JSONDecodeError) as exc:
-        return finish(
-            0.0,
-            {
-                "success": False,
-                "infrastructure_error": f"could not read config.json: {exc}",
-                "raw_exit_code": args.raw_exit_code,
-            },
-            2,
+        proc = subprocess.run(
+            cmd, cwd=os.path.dirname(e2e_config), env=env, text=True,
+            capture_output=True, timeout=200,
         )
+        status = proc.returncode
+        stdout = proc.stdout
+        stderr = proc.stderr
+    except subprocess.TimeoutExpired as exc:
+        status = 124
+        stdout = exc.stdout or ""
+        stderr = f"TIMEOUT\n{exc.stderr or ''}"
+    all_stdout.append(f"===== browser {label} =====\n{stdout}")
+    all_stderr.append(f"===== browser {label} =====\n{stderr}")
+    observed = {}
+    try:
+        payload = json.loads(stdout)
+        def visit(suite):
+            for spec in suite.get("specs", []):
+                tests = spec.get("tests", [])
+                runs = [run for test in tests for run in test.get("results", [])]
+                passed = bool(spec.get("ok")) and bool(runs) and all(run.get("status") == "passed" for run in runs)
+                if runs:
+                    observed[spec.get("title", "")] = passed
+            for child in suite.get("suites", []):
+                visit(child)
+        for suite in payload.get("suites", []):
+            visit(suite)
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        pass
+    return status, observed, set(observed) == set(names)
 
-    instance_id = (cfg.get("instance") or {}).get("instance_id", "")
-    grading = cfg.get("grading") or {}
-    parser_cfg = grading.get("parser") or {}
-    framework = (parser_cfg.get("framework") or "").lower()
-
-    # --- required tests: required_pass, else fail_to_pass ∪ pass_to_pass ---
-    f2p = parse_list(grading.get("fail_to_pass"))
-    p2p = parse_list(grading.get("pass_to_pass"))
-    required_explicit = parse_list(grading.get("required_pass"))
-    required = required_explicit if required_explicit else [*f2p, *p2p]
-    # De-dup, preserve order.
-    seen: set[str] = set()
-    required = [r for r in required if not (r in seen or seen.add(r))]
-
-    stdout, stderr = _read(args.stdout), _read(args.stderr)
-    results = parse_results(framework, stdout, stderr, parser_cfg)
-
-    base_report: dict[str, Any] = {
-        "instance_id": instance_id,
-        "raw_exit_code": args.raw_exit_code,
-        "parser_framework": framework or "unknown",
-        "infrastructure_error": None,
-        "_tests": results,
+# Run genuine regressions first in a fresh fixture server. Expected F2P
+# failures cannot contaminate their browser pages or daemon state.
+p2p_browser_status, p2p_browser_observed, p2p_browser_inventory_ok = run_browser(browser_p2p, "pass-to-pass")
+f2p_browser_status, f2p_browser_observed, f2p_browser_inventory_ok = run_browser(browser_f2p, "fail-to-pass")
+browser_observed = {**f2p_browser_observed, **p2p_browser_observed}
+browser_inventory_ok = p2p_browser_inventory_ok and f2p_browser_inventory_ok
+browser_group_inventory_ok = {
+    **{name: f2p_browser_inventory_ok for name in browser_f2p},
+    **{name: p2p_browser_inventory_ok for name in browser_p2p},
+}
+browser_status = {
+    **{name: f2p_browser_status for name in browser_f2p},
+    **{name: p2p_browser_status for name in browser_p2p},
+}
+for name in browser_declared:
+    passed = browser_group_inventory_ok[name] and browser_observed.get(name, False)
+    result_map[name] = {
+        "name": name,
+        "status": "PASSED" if passed else "FAILED",
+        "exit_code": browser_status[name],
+        "completed": name in browser_observed,
     }
 
-    # Fail closed when no required tests are configured.
-    if not required:
-        return finish(
-            0.0,
-            {
-                **base_report,
-                "success": False,
-                "infrastructure_error": "no required tests configured",
-                "required_tests_count": 0,
-                "passed_tests_count": 0,
-                "required_tests": [],
-                "passed_required_tests": [],
-                "missing_required_tests": [],
-                "unexpected_failures": [],
-            },
-            2,
-        )
+with open(stdout_path, "a", encoding="utf-8") as fh:
+    fh.write("\n".join(all_stdout))
+with open(stderr_path, "a", encoding="utf-8") as fh:
+    fh.write("\n".join(all_stderr))
 
-    passed_required = [r for r in required if matched_passed(r, results)]
-    missing_required = [r for r in required if r not in passed_required]
-
-    allow_extra = bool(grading.get("allow_extra_failures", True))
-    unexpected: list[str] = []
-    if not allow_extra:
-        req_norm = {normalize_name(r) for r in required}
-        unexpected = [
-            r["name"]
-            for r in results
-            if r["status"] in (FAILED, ERROR) and r["name"] not in req_norm
-        ]
-
-    success = not missing_required and not unexpected
-    reward = 1.0 if success else 0.0
-    return finish(
-        reward,
-        {
-            **base_report,
-            "success": success,
-            "required_tests_count": len(required),
-            "passed_tests_count": len(passed_required),
-            "required_tests": required,
-            "passed_required_tests": passed_required,
-            "missing_required_tests": missing_required,
-            "unexpected_failures": unexpected,
-        },
-        0 if success else 1,
-    )
-
-
-if __name__ == "__main__":  # pragma: no cover
-    sys.exit(main())
-
-GRADE_PY_EOF
-
-python3 /tmp/grade.py \
-  --config "$CONFIG" \
-  --stdout "$STDOUT_LOG" \
-  --stderr "$STDERR_LOG" \
-  --raw-exit-code "$TEST_EXIT_CODE" \
-  --output "$OUTPUT" \
-  --report "$REPORT" \
-  --reward "$REWARD"
-GRADE_EXIT_CODE=$?
-
-write_zero_reward_if_missing
-exit "$GRADE_EXIT_CODE"
+results = [result_map.get(name, {"name": name, "status": "FAILED", "exit_code": 125, "completed": False}) for name in declared]
+inventory_ok = set(result_map) == set(declared) and browser_inventory_ok
+browser_raw_ok = p2p_browser_status == 0 and f2p_browser_status == 0
+success = inventory_ok and browser_raw_ok and all(item["status"] == "PASSED" for item in results)
+with open(output_path, "w", encoding="utf-8") as fh:
+    json.dump({"tests": results}, fh, indent=2)
+with open(report_path, "w", encoding="utf-8") as fh:
+    json.dump({
+        "success": success,
+        "reward": 1.0 if success else 0.0,
+        "infrastructure_error": None,
+        "required_tests_count": len(declared),
+        "observed_tests_count": len(result_map),
+        "inventory_exact": inventory_ok,
+        "failed_tests": [item["name"] for item in results if item["status"] != "PASSED"],
+    }, fh, indent=2)
+with open(reward_path, "w", encoding="utf-8") as fh:
+    fh.write("1\n" if success else "0\n")
+raise SystemExit(0 if success else 1)
+PY

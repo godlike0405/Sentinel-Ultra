@@ -2,40 +2,49 @@
   "schema_version": "compact-swebench-harborized-v1",
   "execution": {
     "commands": [
-      "node --test --test-reporter=tap ${TEST_FILES}"
+      "node --test web/__tests__/sentinel-story-navigation.test.js",
+      "playwright test test/e2e/tests/sentinel-story-navigation.spec.ts"
     ],
     "selected_test_files_to_run": [
+      "web/__tests__/sentinel-story-navigation.test.js",
       "web/__tests__/crit-renderer.test.js",
-      "web/__tests__/story-line-navigation.test.js"
+      "test/e2e/tests/sentinel-story-navigation.spec.ts",
+      "test/e2e/sentinel.playwright.config.ts"
     ],
     "env": {},
-    "timeout_sec": 1800
+    "timeout_sec": 600
   },
   "grading": {
     "fail_to_pass": [
-      "new-side line wins over an old-side collision after a net deletion",
-      "old-side line wins over a new-side collision",
-      "merged visual hunk preserves raw ownership for both sides",
-      "comment-gap expansion preserves the later raw hunk owner",
-      "automatic small-gap expansion preserves synthesized context ownership",
-      "existing insertion mapping still selects its new-side hunk",
-      "deleted lines fall back to their old-side raw hunk",
-      "side-less legacy lookup keeps new-then-old fallback",
-      "side-less legacy display mapping follows the matched coordinate side",
-      "file-level navigation activates the first chapter containing the file",
-      "display mapping preserves route side while matching split and unified DOM semantics",
-      "production Story callers thread side and display mapping into scroll routing",
-      "anchorFromComment with line anchor",
-      "anchorFromComment preserves file scope without inventing a side"
+      "line comment anchor preserves side and scope",
+      "file comment anchor preserves scope without a side",
+      "npm and Bun lockfiles select markdown-it 14.3.0 and mermaid 11.16.0",
+      "embedded markdown runtime matches markdown-it 14.3.0",
+      "embedded diagram runtime matches mermaid 11.16.0",
+      "renderer honors an old-side collision and scrolls the deleted row",
+      "renderer keeps a colliding new-side line in the second chapter",
+      "renderer explicit new-side miss stays on the current Story page",
+      "renderer keeps a colliding new-side row on the rendered new side",
+      "renderer maps unified old context to the displayed new-side row",
+      "scope reload replaces same-hash Story clones"
     ],
-    "pass_to_pass": [],
+    "pass_to_pass": [
+      "register and current",
+      "register throws on missing method",
+      "anchorFromComment with line anchor",
+      "anchorFromComment with DOM anchor",
+      "automatic merge routes a new-side line to the second chapter",
+      "automatic merge routes an old-side line to the second chapter",
+      "file-scoped comment opens the first chapter containing its file",
+      "file-scoped renderer anchor opens the first chapter containing its file",
+      "split renderer preserves the old-side row",
+      "flat renderer navigation remains compatible"
+    ],
     "required_pass": [],
-    "allow_extra_failures": true,
+    "allow_extra_failures": false,
     "parser": {
-      "framework": "custom",
-      "result_source": "stdout_stderr",
-      "pass_regex": "^\\s*ok \\d+ - (?P<name>.+?)\\s*$",
-      "fail_regex": "^\\s*not ok \\d+ - (?P<name>.+?)\\s*$"
+      "framework": "verifier-owned-node-and-playwright-status",
+      "result_source": "verifier_owned"
     }
   },
   "artifacts": {

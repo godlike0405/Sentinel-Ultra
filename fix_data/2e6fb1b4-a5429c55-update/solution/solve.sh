@@ -1,10 +1,54 @@
 #!/usr/bin/env bash
-set -e
-cd /app
-if git apply -p1 --whitespace=nowarn /solution/golden.patch 2>/dev/null; then
-  :
-elif git apply -p1 --3way --whitespace=nowarn /solution/golden.patch 2>/dev/null; then
-  :
-else
-  git apply -p1 -R --whitespace=nowarn /solution/golden.patch
+set -euo pipefail
+
+PATCH_FILE=${SENTINEL_GOLDEN_PATCH:-/solution/golden.patch}
+WORKSPACE=${SENTINEL_WORKSPACE:-}
+if [ -z "$WORKSPACE" ]; then
+  for candidate in /testbed /workspace /app; do
+    if [ -f "$candidate/package.json" ] && [ -f "$candidate/web/app.js" ]; then
+      WORKSPACE=$candidate
+      break
+    fi
+  done
 fi
+[ -n "$WORKSPACE" ] || { echo "solve.sh: could not locate the mounted crit workspace" >&2; exit 2; }
+[ -r "$PATCH_FILE" ] || { echo "solve.sh: missing $PATCH_FILE" >&2; exit 2; }
+
+cd "$WORKSPACE"
+GIT_WORKTREE=0
+WORKSPACE_ROOT=$(pwd -P)
+if command -v git >/dev/null 2>&1 \
+  && [ "$(git -c safe.directory="$WORKSPACE" rev-parse --is-inside-work-tree 2>/dev/null || true)" = true ] \
+  && GIT_TOP=$(git -c safe.directory="$WORKSPACE" rev-parse --show-toplevel 2>/dev/null) \
+  && [ "$(cd "$GIT_TOP" 2>/dev/null && pwd -P)" = "$WORKSPACE_ROOT" ] \
+  && git -c safe.directory="$WORKSPACE" rev-parse HEAD >/dev/null 2>&1; then
+  GIT_WORKTREE=1
+fi
+
+if [ "$GIT_WORKTREE" -eq 1 ]; then
+  if git -c safe.directory="$WORKSPACE" apply -p1 --reverse --check "$PATCH_FILE" >/dev/null 2>&1; then
+    echo "solve.sh: golden patch is already applied" >&2
+  elif git -c safe.directory="$WORKSPACE" apply -p1 --check "$PATCH_FILE" >/dev/null 2>&1; then
+    git -c safe.directory="$WORKSPACE" apply -p1 --whitespace=nowarn "$PATCH_FILE"
+  else
+    echo "solve.sh: golden patch is neither cleanly applicable nor already applied" >&2
+    exit 2
+  fi
+elif command -v patch >/dev/null 2>&1; then
+  if patch -p1 --dry-run --forward < "$PATCH_FILE" >/dev/null 2>&1; then
+    patch -p1 --forward < "$PATCH_FILE"
+  elif patch -p1 --dry-run --reverse --forward < "$PATCH_FILE" >/dev/null 2>&1; then
+    echo "solve.sh: golden patch is already applied" >&2
+  else
+    echo "solve.sh: golden patch cannot be applied without Git metadata" >&2
+    exit 2
+  fi
+else
+  echo "solve.sh: neither git nor patch is available" >&2
+  exit 2
+fi
+
+printf '%s  %s\n' \
+  '70fe17bd06c7fa819f03a1ed10957904318103624198845dc893b309bf495e28' 'web/markdown-it.min.js' \
+  '74d7c46dabca328c2294733910a8aa1ed0c37451776e8d5295da38a2b758fb9b' 'web/mermaid.min.js' \
+  | sha256sum -c - >/dev/null
