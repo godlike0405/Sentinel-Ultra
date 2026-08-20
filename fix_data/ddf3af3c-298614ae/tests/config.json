@@ -2,7 +2,7 @@
   "schema_version": "compact-swebench-harborized-v1",
   "execution": {
     "commands": [
-      "cd \"${VERIFIER_HARNESS_DIR}\" && dotnet restore --ignore-failed-sources -v quiet && dotnet build -c Release --no-restore -v quiet && dotnet bin/Release/net8.0/Harness.dll"
+      "cd \"${VERIFIER_HARNESS_DIR}\" && dotnet restore --ignore-failed-sources -v quiet && dotnet build -c Release --no-restore -v quiet && python3 RunSelectedTests.py bin/Release/net8.0/Harness.dll test-results.json config.json"
     ],
     "selected_test_files_to_run": [],
     "env": {
@@ -27,7 +27,14 @@
       "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.SortByNameArrayUsesNaturalOrdering",
       "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.SortByNameListUsesNaturalOrdering",
       "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.SortByNameOtherIListUsesNaturalOrdering",
-      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareEqualNumericSuffixesUsesInstanceIdTieBreaker"
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareEqualNumericSuffixesUsesInstanceIdTieBreaker",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareFullWidthDigitsAreNotTrailingNumbers",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareHyphenBeforeDigitsIsTextNotSign",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareDotSeparatedDigitsCompareAsWholeNumbers",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareEqualTrailingNumbersAcrossCaseFallThroughToTieBreakers",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.SortByNameListWithNullElementsPlacesNullsFirst",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.SortByNameMixedListProducesDeterministicNaturalOrder",
+      "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareTracksMutationsAndIsConcurrentWithinThroughputTarget"
     ],
     "pass_to_pass": [
       "WallstopStudios.UnityHelpers.Tests.Utils.UnityObjectNameComparerNaturalSortTests.CompareOrdersZeroPaddedTrailingNumbersNaturally",

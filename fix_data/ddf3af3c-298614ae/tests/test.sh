@@ -76,128 +76,198 @@ cat > "$VERIFIER_ROOT/harness/Harness.csproj" <<'HARNESS_CSPROJ_EOF'
     <Compile Include="../app/Runtime/Core/Extension/IListExtensions.cs" />
     <Compile Include="../injected/Tests/VerifierOnly/UnityObjectNameComparerNaturalSortTests.cs" />
   </ItemGroup>
+  <Import Project="SubmissionSources.props" />
 </Project>
 HARNESS_CSPROJ_EOF
 cat > "$VERIFIER_ROOT/harness/Runner.cs" <<'HARNESS_RUNNER_EOF'
 using System;
-using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Text.Json;
 using NUnit.Framework;
 
 internal static class Runner
 {
-    private sealed class TestResult
+    private static int Main(string[] args)
     {
-        public string Name { get; set; }
-        public string Status { get; set; }
-    }
-
-    private static int Main()
-    {
-        string resultPath = Environment.GetEnvironmentVariable("VERIFIER_RESULTS_PATH");
-        if (string.IsNullOrWhiteSpace(resultPath))
+        if (args.Length != 1 || string.IsNullOrWhiteSpace(args[0]))
         {
-            Console.Error.WriteLine("VERIFIER_RESULTS_PATH is not configured");
+            Console.Error.WriteLine("Exactly one fully-qualified test name is required");
             return 2;
         }
 
-        int failures = 0;
-        var observedNames = new HashSet<string>(StringComparer.Ordinal);
-        var results = new List<TestResult>();
+        string requestedName = args[0];
+        var candidates = (
+            from fixture in Assembly.GetExecutingAssembly().GetTypes()
+            where fixture.GetCustomAttribute<TestFixtureAttribute>() != null
+            from test in fixture.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            where test.GetCustomAttribute<TestAttribute>() != null
+            let name = fixture.FullName + "." + test.Name
+            where string.Equals(name, requestedName, StringComparison.Ordinal)
+            select new { Fixture = fixture, Test = test }
+        ).ToArray();
 
-        foreach (Type fixture in Assembly.GetExecutingAssembly().GetTypes())
+        if (candidates.Length != 1)
         {
-            if (fixture.GetCustomAttribute<TestFixtureAttribute>() == null)
+            Console.Error.WriteLine(
+                $"{requestedName}: expected exactly one matching test, found {candidates.Length}"
+            );
+            return 2;
+        }
+
+        Type fixtureType = candidates[0].Fixture;
+        MethodInfo testMethod = candidates[0].Test;
+        MethodInfo[] methods = fixtureType.GetMethods(BindingFlags.Public | BindingFlags.Instance);
+        MethodInfo[] setUps = methods
+            .Where(method => method.GetCustomAttribute<SetUpAttribute>() != null)
+            .ToArray();
+        MethodInfo[] tearDowns = methods
+            .Where(method => method.GetCustomAttribute<TearDownAttribute>() != null)
+            .ToArray();
+        object instance = Activator.CreateInstance(fixtureType);
+        bool passed = true;
+
+        try
+        {
+            foreach (MethodInfo setUp in setUps)
             {
-                continue;
+                setUp.Invoke(instance, null);
             }
-
-            MethodInfo[] methods = fixture.GetMethods(BindingFlags.Public | BindingFlags.Instance);
-            MethodInfo[] setUps = methods
-                .Where(method => method.GetCustomAttribute<SetUpAttribute>() != null)
-                .ToArray();
-            MethodInfo[] tearDowns = methods
-                .Where(method => method.GetCustomAttribute<TearDownAttribute>() != null)
-                .ToArray();
-
-            foreach (
-                MethodInfo test in methods.Where(
-                    method => method.GetCustomAttribute<TestAttribute>() != null
-                )
-            )
+            testMethod.Invoke(instance, null);
+        }
+        catch (Exception ex)
+        {
+            Exception cause = (ex as TargetInvocationException)?.InnerException ?? ex;
+            Console.Error.WriteLine(
+                $"{requestedName}: {cause.GetType().Name}: {cause.Message}"
+            );
+            passed = false;
+        }
+        finally
+        {
+            foreach (MethodInfo tearDown in tearDowns)
             {
-                string name = fixture.FullName + "." + test.Name;
-                if (!observedNames.Add(name))
-                {
-                    Console.Error.WriteLine(name + ": duplicate test identifier");
-                    results.Add(new TestResult { Name = name, Status = "FAILED" });
-                    failures++;
-                    continue;
-                }
-
-                object instance = Activator.CreateInstance(fixture);
-                string status = "PASSED";
-
                 try
                 {
-                    foreach (MethodInfo setUp in setUps)
-                    {
-                        setUp.Invoke(instance, null);
-                    }
-
-                    test.Invoke(instance, null);
+                    tearDown.Invoke(instance, null);
                 }
                 catch (Exception ex)
                 {
                     Exception cause = (ex as TargetInvocationException)?.InnerException ?? ex;
                     Console.Error.WriteLine(
-                        $"{name}: {cause.GetType().Name}: {cause.Message}"
+                        $"{requestedName}: teardown {cause.GetType().Name}: {cause.Message}"
                     );
-                    status = "FAILED";
-                    failures++;
+                    passed = false;
                 }
-                finally
-                {
-                    foreach (MethodInfo tearDown in tearDowns)
-                    {
-                        try
-                        {
-                            tearDown.Invoke(instance, null);
-                        }
-                        catch (Exception ex)
-                        {
-                            Exception cause =
-                                (ex as TargetInvocationException)?.InnerException ?? ex;
-                            Console.Error.WriteLine(
-                                $"{name}: teardown {cause.GetType().Name}: {cause.Message}"
-                            );
-                            status = "FAILED";
-                            failures++;
-                        }
-                    }
-                }
-
-                results.Add(new TestResult { Name = name, Status = status });
-                Console.WriteLine(status + " " + name);
             }
         }
 
-        string temporaryResultPath = resultPath + ".tmp";
-        File.WriteAllText(temporaryResultPath, JsonSerializer.Serialize(results));
-        File.Move(temporaryResultPath, resultPath, true);
-        return failures == 0 ? 0 : 1;
+        if (!passed)
+        {
+            return 1;
+        }
+
+        // The controlling verifier sends its unpredictable challenge only after
+        // this marker, which is emitted strictly after the test and teardown return.
+        Console.WriteLine("VERIFIER_READY");
+        Console.Out.Flush();
+        string challenge = Console.ReadLine();
+        if (string.IsNullOrEmpty(challenge))
+        {
+            return 2;
+        }
+        Console.WriteLine("VERIFIER_COMPLETE " + challenge);
+        Console.Out.Flush();
+        return 0;
     }
 }
 HARNESS_RUNNER_EOF
+cat > "$VERIFIER_ROOT/harness/RunSelectedTests.py" <<'HARNESS_CONTROLLER_EOF'
+#!/usr/bin/env python3
+import json
+import os
+import secrets
+import select
+import subprocess
+import sys
+import time
+
+if len(sys.argv) != 4:
+    raise SystemExit("usage: RunSelectedTests.py HARNESS RESULTS CONFIG")
+
+harness, result_path, config_path = sys.argv[1:]
+with open(config_path, encoding="utf-8") as stream:
+    grading = (json.load(stream).get("grading") or {})
+
+required = []
+for key in ("fail_to_pass", "pass_to_pass"):
+    for name in grading.get(key, []):
+        if name not in required:
+            required.append(name)
+
+
+def read_line(stream, deadline):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return None
+    readable, _, _ = select.select([stream], [], [], remaining)
+    return stream.readline() if readable else None
+
+
+results = []
+failed = False
+for name in required:
+    process = subprocess.Popen(
+        ["dotnet", harness, name],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env={key: value for key, value in os.environ.items() if key != "VERIFIER_RESULTS_PATH"},
+    )
+    deadline = time.monotonic() + 30
+    ready = read_line(process.stdout, deadline)
+    completed = False
+    challenge = secrets.token_hex(32)
+    if ready == "VERIFIER_READY\n":
+        try:
+            process.stdin.write(challenge + "\n")
+            process.stdin.flush()
+            response = read_line(process.stdout, deadline)
+            completed = response == "VERIFIER_COMPLETE " + challenge + "\n"
+        except (BrokenPipeError, OSError):
+            completed = False
+
+    try:
+        exit_code = process.wait(timeout=max(0.1, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        process.kill()
+        exit_code = process.wait()
+    diagnostics = process.stderr.read()
+    passed = completed and exit_code == 0
+    results.append({"Name": name, "Status": "PASSED" if passed else "FAILED"})
+    if not passed:
+        failed = True
+        detail = diagnostics.strip() or "missing verifier-owned completion handshake"
+        observed = "" if ready is None else ready.rstrip("\n")
+        print(name + ": " + detail + "; first stdout line=" + repr(observed), file=sys.stderr)
+
+temporary_path = result_path + ".tmp"
+with open(temporary_path, "w", encoding="utf-8") as stream:
+    json.dump(results, stream)
+os.replace(temporary_path, result_path)
+raise SystemExit(1 if failed else 0)
+HARNESS_CONTROLLER_EOF
 cat > "$VERIFIER_ROOT/harness/Shims.cs" <<'HARNESS_SHIMS_EOF'
 using System;
 using System.Collections.Generic;
 
 namespace UnityEngine
 {
+    public static class Mathf
+    {
+        public static int Min(int left, int right) => left < right ? left : right;
+    }
+
     public class Object
     {
         private static int _nextId = 1000;
@@ -235,6 +305,14 @@ namespace WallstopStudios.UnityHelpers.Core.Helper
             int result = value % modulus;
             return result < 0 ? result + modulus : result;
         }
+    }
+}
+
+namespace WallstopStudios.UnityHelpers.Core.Serialization
+{
+    public static class Serializer
+    {
+        public static string JsonStringify<T>(T value) => string.Empty;
     }
 }
 
@@ -325,12 +403,64 @@ namespace NUnit.Framework
     }
 }
 HARNESS_SHIMS_EOF
+
+# Compile production sources added or changed by the solution as well as the
+# established comparer and collection entry points above. This permits normal
+# helper extraction without pulling the entire Unity package (which requires a
+# Unity compiler and assemblies unavailable in this standalone verifier).
+python3 - "$VERIFIER_ROOT/app" "$VERIFIER_ROOT/harness/SubmissionSources.props" <<'PY'
+import html
+import pathlib
+import subprocess
+import sys
+
+workspace = pathlib.Path(sys.argv[1]).resolve()
+output = pathlib.Path(sys.argv[2])
+base_commit = "17f447af072e1a9f85d646139d2179933fc39001"
+
+
+def git_paths(*args):
+    completed = subprocess.run(
+        ["git", "-C", str(workspace), *args],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    return completed.stdout.splitlines()
+
+
+paths = set(
+    git_paths("diff", "--name-only", "--diff-filter=ACMR", base_commit, "--", "*.cs")
+)
+paths.update(git_paths("ls-files", "--others", "--exclude-standard", "--", "*.cs"))
+
+always_compiled = {
+    "Runtime/Utils/UnityObjectNameComparer.cs",
+    "Runtime/Core/Extension/IListExtensions.cs",
+}
+compile_items = []
+for relative in sorted(paths - always_compiled):
+    candidate = pathlib.PurePosixPath(relative)
+    if candidate.is_absolute() or ".." in candidate.parts or "Tests" in candidate.parts:
+        continue
+    source = workspace.joinpath(*candidate.parts)
+    if source.is_file() and not source.is_symlink():
+        compile_items.append(source)
+
+lines = ["<Project>", "  <ItemGroup>"]
+for source in compile_items:
+    escaped = html.escape(str(source), quote=True)
+    lines.append(f'    <Compile Include="{escaped}" />')
+lines.extend(["  </ItemGroup>", "</Project>", ""])
+output.write_text("\n".join(lines), encoding="utf-8")
+PY
 mkdir -p "$VERIFIER_ROOT/injected" || exit 2
 
 WORKSPACE="$VERIFIER_ROOT/app"
 export VERIFIER_HARNESS_DIR="$VERIFIER_ROOT/harness"
-RESULTS_JSON="$VERIFIER_ROOT/test-results.json"
-export VERIFIER_RESULTS_PATH="$RESULTS_JSON"
+RESULTS_JSON="$VERIFIER_ROOT/harness/test-results.json"
+cp -- "$CONFIG" "$VERIFIER_ROOT/harness/config.json" || exit 2
 cd "$WORKSPACE" || exit 2
 
 # Export configured env vars (execution.env).

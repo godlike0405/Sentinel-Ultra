@@ -2,11 +2,12 @@ FROM node:22-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172
 
 # Harbor/Terminus runtime tools for terminal recording (cached early).
 ARG DEBIAN_SNAPSHOT=20260803T000000Z
-RUN sed -i \
+RUN echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99snapshot-validity \
+    && sed -i \
       -e "s|http://deb.debian.org/debian-security|http://snapshot.debian.org/archive/debian-security/${DEBIAN_SNAPSHOT}|" \
       -e "s|http://deb.debian.org/debian|http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT}|" \
       /etc/apt/sources.list.d/debian.sources \
-    && apt-get -o Acquire::Check-Valid-Until=false update \
+    && apt-get update \
     && apt-get install -y --no-install-recommends git tmux asciinema curl ca-certificates patch \
     && rm -rf /var/lib/apt/lists/* \
     && command -v tmux && command -v asciinema

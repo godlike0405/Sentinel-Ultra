@@ -1,28 +1,8 @@
 diff --git a/Runtime/Utils/UnityObjectNameComparer.cs b/Runtime/Utils/UnityObjectNameComparer.cs
-index 921e35c..5679a5a 100644
+index 921e35c..762cf86 100644
 --- a/Runtime/Utils/UnityObjectNameComparer.cs
 +++ b/Runtime/Utils/UnityObjectNameComparer.cs
-@@ -2,6 +2,7 @@
- {
-     using System;
-     using System.Collections.Generic;
-+    using System.Text.RegularExpressions;
- #if UNITY_EDITOR
-     using UnityEditor;
- #endif
-@@ -11,6 +12,11 @@
-     {
-         public static readonly UnityObjectNameComparer<T> Instance = new();
- 
-+        private static readonly Regex TrailingNumberRegex = new(
-+            @"^(.*?)(\d+)$",
-+            RegexOptions.Compiled
-+        );
-+
-         private UnityObjectNameComparer() { }
- 
-         public int Compare(T x, T y)
-@@ -30,7 +36,7 @@
+@@ -30,7 +30,7 @@
                  return -1;
              }
  
@@ -31,7 +11,7 @@ index 921e35c..5679a5a 100644
              if (comparison != 0)
              {
                  return comparison;
-@@ -50,5 +56,79 @@
+@@ -50,5 +50,102 @@
  
              return comparison;
          }
@@ -43,34 +23,39 @@ index 921e35c..5679a5a 100644
 +                return string.Compare(left, right, StringComparison.OrdinalIgnoreCase);
 +            }
 +
-+            Match leftMatch = TrailingNumberRegex.Match(left);
-+            Match rightMatch = TrailingNumberRegex.Match(right);
++            int leftNumberStart = FindTrailingNumberStart(left);
++            int rightNumberStart = FindTrailingNumberStart(right);
++            bool leftHasNumber = leftNumberStart < left.Length;
++            bool rightHasNumber = rightNumberStart < right.Length;
 +
-+            if (leftMatch.Success && rightMatch.Success)
++            if (leftHasNumber && rightHasNumber)
 +            {
-+                int prefix = string.Compare(
-+                    leftMatch.Groups[1].Value,
-+                    rightMatch.Groups[1].Value,
-+                    StringComparison.OrdinalIgnoreCase
-+                );
++                int prefix = left
++                    .AsSpan(0, leftNumberStart)
++                    .CompareTo(
++                        right.AsSpan(0, rightNumberStart),
++                        StringComparison.OrdinalIgnoreCase
++                    );
 +                if (prefix != 0)
 +                {
 +                    return prefix;
 +                }
 +
 +                return CompareTrailingNumbers(
-+                    leftMatch.Groups[2].Value,
-+                    rightMatch.Groups[2].Value
++                    left,
++                    leftNumberStart,
++                    right,
++                    rightNumberStart
 +                );
 +            }
 +
 +            // A name without a trailing number sorts ahead of one that has it.
-+            if (leftMatch.Success)
++            if (leftHasNumber)
 +            {
 +                return 1;
 +            }
 +
-+            if (rightMatch.Success)
++            if (rightHasNumber)
 +            {
 +                return -1;
 +            }
@@ -78,15 +63,33 @@ index 921e35c..5679a5a 100644
 +            return string.Compare(left, right, StringComparison.OrdinalIgnoreCase);
 +        }
 +
-+        private static int CompareTrailingNumbers(string left, string right)
++        private static int FindTrailingNumberStart(string value)
 +        {
-+            int leftStart = 0;
++            int start = value.Length;
++            while (0 < start)
++            {
++                char current = value[start - 1];
++                if (current < '0' || '9' < current)
++                {
++                    break;
++                }
++                --start;
++            }
++            return start;
++        }
++
++        private static int CompareTrailingNumbers(
++            string left,
++            int leftStart,
++            string right,
++            int rightStart
++        )
++        {
 +            while (leftStart < left.Length && left[leftStart] == '0')
 +            {
 +                ++leftStart;
 +            }
 +
-+            int rightStart = 0;
 +            while (rightStart < right.Length && right[rightStart] == '0')
 +            {
 +                ++rightStart;
