@@ -235,7 +235,7 @@ index 0000000..2d5aaff
 +pub use v1::*;
 diff --git a/specta-tags/src/v1.rs b/specta-tags/src/v1.rs
 new file mode 100644
-index 0000000..51cf462
+index 0000000..c59e212
 --- /dev/null
 +++ b/specta-tags/src/v1.rs
 @@ -0,0 +1,755 @@
@@ -773,7 +773,7 @@ index 0000000..51cf462
 +];
 +"#;
 +
-+const TRANSFORM_FN_PREFIX_TS: &str = "function __TS_transform<T>(value: T, spec: __TS_TransformSpec): any {\n    if (spec == null || spec === 0) return value;\n\n    const rawValue = value as any;\n    const op = Array.isArray(spec) ? spec[0] : spec;\n\n    switch (op) {\n";
++const TRANSFORM_FN_PREFIX_TS: &str = "function __TS_transform<T>(value: T, inputSpec: __TS_TransformSpec): any {\n    if (inputSpec == null || inputSpec === 0) return value;\n\n    const rawValue = value as any;\n    const spec: any = inputSpec;\n    const op = Array.isArray(spec) ? spec[0] : spec;\n\n    switch (op) {\n";
 +const TRANSFORM_FN_PREFIX_JS: &str = "function __TS_transform(value, spec) {\n    if (spec == null || spec === 0) return value;\n\n    const rawValue = value;\n    const op = Array.isArray(spec) ? spec[0] : spec;\n\n    switch (op) {\n";
 +
 +const CASE_BIGINT: &str = r#"        case 1:

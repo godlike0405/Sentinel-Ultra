@@ -1,0 +1,5 @@
+{
+  "success": false,
+  "infrastructure_error": "executed test inventory did not exactly match config.json",
+  "reward": 0.0
+}

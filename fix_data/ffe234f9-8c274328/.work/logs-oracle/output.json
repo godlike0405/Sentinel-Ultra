@@ -1,0 +1,221 @@
+{
+  "results": [
+    {
+      "group": "fail_to_pass",
+      "name": "org.apache.commons.lang3.ArrayFillRangeTest::testClearRangeContract",
+      "status": "FAILED",
+      "raw_exit_code": 1,
+      "completed": false
+    },
+    {
+      "group": "fail_to_pass",
+      "name": "org.apache.commons.lang3.ArrayFillRangeTest::testFillRangeContract",
+      "status": "FAILED",
+      "raw_exit_code": 1,
+      "completed": false
+    },
+    {
+      "group": "fail_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testConsecutiveShrinksClearEntireDiscardedRegion",
+      "status": "FAILED",
+      "raw_exit_code": 1,
+      "completed": false
+    },
+    {
+      "group": "fail_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testSerializedFormDoesNotContainDiscardedSecret",
+      "status": "FAILED",
+      "raw_exit_code": 1,
+      "completed": false
+    },
+    {
+      "group": "fail_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testShrinkClearsEveryVacatedPosition",
+      "status": "FAILED",
+      "raw_exit_code": 1,
+      "completed": false
+    },
+    {
+      "group": "fail_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testShrinkThenPartialGrowDoesNotRevealOlderTail",
+      "status": "FAILED",
+      "raw_exit_code": 1,
+      "completed": false
+    },
+    {
+      "group": "fail_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testShrinkToZeroClearsFormerLogicalContent",
+      "status": "FAILED",
+      "raw_exit_code": 1,
+      "completed": false
+    },
+    {
+      "group": "fail_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testGenericReadableCannotAccessReusableBuilderStorage",
+      "status": "FAILED",
+      "raw_exit_code": 1,
+      "completed": false
+    },
+    {
+      "group": "fail_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testReaderCannotAccessReusableBuilderStorage",
+      "status": "FAILED",
+      "raw_exit_code": 1,
+      "completed": false
+    },
+    {
+      "group": "fail_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testShrinkingReplacementAndMatcherIsolationContract",
+      "status": "FAILED",
+      "raw_exit_code": 1,
+      "completed": false
+    },
+    {
+      "group": "fail_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testMatcherReplacementFailureAtomicityContract",
+      "status": "FAILED",
+      "raw_exit_code": 1,
+      "completed": false
+    },
+    {
+      "group": "fail_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testBoundedReaderAcceptsExactLimitAndPreservesPrefix",
+      "status": "FAILED",
+      "raw_exit_code": 1,
+      "completed": false
+    },
+    {
+      "group": "fail_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testBoundedGenericReadableSupportsChunksAndZeroProgress",
+      "status": "FAILED",
+      "raw_exit_code": 1,
+      "completed": false
+    },
+    {
+      "group": "fail_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testBoundedCharBufferChecksLimitBeforeAdvancing",
+      "status": "FAILED",
+      "raw_exit_code": 1,
+      "completed": false
+    },
+    {
+      "group": "fail_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testBoundedZeroLimitDistinguishesEmptyAndNonEmptyInput",
+      "status": "FAILED",
+      "raw_exit_code": 1,
+      "completed": false
+    },
+    {
+      "group": "fail_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testBoundedReadRejectsInvalidArguments",
+      "status": "FAILED",
+      "raw_exit_code": 1,
+      "completed": false
+    },
+    {
+      "group": "fail_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testBoundedOverflowIsAtomicForReaderAndReadable",
+      "status": "FAILED",
+      "raw_exit_code": 1,
+      "completed": false
+    },
+    {
+      "group": "fail_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testReadFailureIsAtomicForBoundedAndUnboundedOperations",
+      "status": "FAILED",
+      "raw_exit_code": 1,
+      "completed": false
+    },
+    {
+      "group": "fail_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testInvalidReadCountsAreRejectedAtomically",
+      "status": "FAILED",
+      "raw_exit_code": 1,
+      "completed": false
+    },
+    {
+      "group": "fail_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testTemporaryInputStorageIsClearedOnSuccessAndFailure",
+      "status": "FAILED",
+      "raw_exit_code": 1,
+      "completed": false
+    },
+    {
+      "group": "pass_to_pass",
+      "name": "org.apache.commons.lang3.ArrayFillTest::testClearCharArray",
+      "status": "FAILED",
+      "raw_exit_code": 0,
+      "completed": false
+    },
+    {
+      "group": "pass_to_pass",
+      "name": "org.apache.commons.lang3.ArrayFillTest::testFillCharArray",
+      "status": "FAILED",
+      "raw_exit_code": 0,
+      "completed": false
+    },
+    {
+      "group": "pass_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderClearTest::testReadFromReaderDoesNotExposeStaleInternalBuffer",
+      "status": "FAILED",
+      "raw_exit_code": 0,
+      "completed": false
+    },
+    {
+      "group": "pass_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderClearTest::testStaleCharsNotLeakedAfterClear",
+      "status": "FAILED",
+      "raw_exit_code": 0,
+      "completed": false
+    },
+    {
+      "group": "pass_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderClearTest::testStaleCharsNotLeakedAfterTruncate",
+      "status": "FAILED",
+      "raw_exit_code": 0,
+      "completed": false
+    },
+    {
+      "group": "pass_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderTest::testCapacityAndLength",
+      "status": "FAILED",
+      "raw_exit_code": 0,
+      "completed": false
+    },
+    {
+      "group": "pass_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderTest::testChaining",
+      "status": "FAILED",
+      "raw_exit_code": 0,
+      "completed": false
+    },
+    {
+      "group": "pass_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderTest::testReadFromCharBufferAppendsToEnd",
+      "status": "FAILED",
+      "raw_exit_code": 0,
+      "completed": false
+    },
+    {
+      "group": "pass_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderTest::testReadFromReadableAppendsToEnd",
+      "status": "FAILED",
+      "raw_exit_code": 0,
+      "completed": false
+    },
+    {
+      "group": "pass_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderTest::testReadFromReaderAppendsToEnd",
+      "status": "FAILED",
+      "raw_exit_code": 0,
+      "completed": false
+    },
+    {
+      "group": "pass_to_pass",
+      "name": "org.apache.commons.lang3.text.StrBuilderTest::testReplaceAll_StrMatcher_String",
+      "status": "FAILED",
+      "raw_exit_code": 0,
+      "completed": false
+    }
+  ]
+}

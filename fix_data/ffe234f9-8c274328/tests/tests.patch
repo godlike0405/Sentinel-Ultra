@@ -1,0 +1,890 @@
+diff --git a/src/test/java/org/apache/commons/lang3/ArrayFillRangeTest.java b/src/test/java/org/apache/commons/lang3/ArrayFillRangeTest.java
+new file mode 100644
+index 000000000..67f696e00
+--- /dev/null
++++ b/src/test/java/org/apache/commons/lang3/ArrayFillRangeTest.java
+@@ -0,0 +1,160 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements. See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License. You may obtain a copy of the License at
++ *
++ *      https://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.commons.lang3;
++
++import static org.junit.jupiter.api.Assertions.assertArrayEquals;
++import static org.junit.jupiter.api.Assertions.assertNull;
++import static org.junit.jupiter.api.Assertions.assertSame;
++import static org.junit.jupiter.api.Assertions.assertThrows;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++import static org.junit.jupiter.api.Assertions.fail;
++
++import java.lang.reflect.InvocationTargetException;
++import java.lang.reflect.Method;
++import java.lang.reflect.Modifier;
++
++import org.junit.jupiter.api.Test;
++
++class ArrayFillRangeTest {
++
++    private static char[] clear(final char[] array, final int fromIndex, final int toIndex) {
++        return invoke("clear", new Class<?>[] {char[].class, int.class, int.class}, array, fromIndex, toIndex);
++    }
++
++    private static char[] fill(final char[] array, final int fromIndex, final int toIndex, final char value) {
++        return invoke("fill", new Class<?>[] {char[].class, int.class, int.class, char.class}, array, fromIndex, toIndex, value);
++    }
++
++    private static char[] invoke(final String name, final Class<?>[] parameterTypes, final Object... arguments) {
++        final Method method;
++        try {
++            method = ArrayFill.class.getMethod(name, parameterTypes);
++        } catch (final NoSuchMethodException exception) {
++            return fail("Missing documented public ArrayFill." + name + " range overload", exception);
++        }
++        assertTrue(Modifier.isPublic(method.getModifiers()));
++        assertTrue(Modifier.isStatic(method.getModifiers()));
++        try {
++            return (char[]) method.invoke(null, arguments);
++        } catch (final InvocationTargetException exception) {
++            final Throwable cause = exception.getCause();
++            if (cause instanceof RuntimeException) {
++                throw (RuntimeException) cause;
++            }
++            if (cause instanceof Error) {
++                throw (Error) cause;
++            }
++            return fail("Unexpected checked exception from ArrayFill." + name, cause);
++        } catch (final ReflectiveOperationException exception) {
++            return fail("Could not invoke documented ArrayFill." + name + " range overload", exception);
++        }
++    }
++
++    void testClearEmptyRangeIsNoOp() {
++        final char[] array = {'A', 'B', 'C'};
++        assertSame(array, clear(array, 1, 1));
++        assertArrayEquals(new char[] {'A', 'B', 'C'}, array);
++    }
++
++    void testClearFromGreaterThanToThrows() {
++        final char[] array = {'A', 'B', 'C'};
++        assertThrows(IllegalArgumentException.class, () -> clear(array, 2, 1));
++        assertThrows(ArrayIndexOutOfBoundsException.class, () -> clear(array, 0, 4));
++    }
++
++    void testClearFullArray() {
++        final char[] array = {'A', 'B', 'C'};
++        assertSame(array, clear(array, 0, array.length));
++        assertArrayEquals(new char[] {'\0', '\0', '\0'}, array);
++    }
++
++    void testClearNegativeFromThrows() {
++        final char[] array = {'A', 'B', 'C'};
++        assertThrows(ArrayIndexOutOfBoundsException.class, () -> clear(array, -1, 2));
++    }
++
++    void testClearNullArray() {
++        assertNull(clear(null, -100, 100));
++    }
++
++    void testClearRangeChangesOnlyRequestedSlice() {
++        final char[] array = {'A', 'B', 'C', 'D', 'E'};
++        assertSame(array, clear(array, 1, 4));
++        assertArrayEquals(new char[] {'A', '\0', '\0', '\0', 'E'}, array);
++    }
++
++    void testFillEmptyRangeIsNoOp() {
++        final char[] array = {'A', 'B', 'C'};
++        assertSame(array, fill(array, 2, 2, 'Z'));
++        assertArrayEquals(new char[] {'A', 'B', 'C'}, array);
++    }
++
++    void testFillFullArray() {
++        final char[] array = {'A', 'B', 'C'};
++        assertSame(array, fill(array, 0, array.length, 'Z'));
++        assertArrayEquals(new char[] {'Z', 'Z', 'Z'}, array);
++    }
++
++    void testFillNullArray() {
++        assertNull(fill(null, -100, 100, 'Z'));
++    }
++
++    void testFillPastEndThrows() {
++        final char[] array = {'A', 'B', 'C'};
++        assertThrows(ArrayIndexOutOfBoundsException.class, () -> fill(array, 1, 4, 'Z'));
++        assertThrows(ArrayIndexOutOfBoundsException.class, () -> fill(array, -1, 2, 'Z'));
++        assertThrows(IllegalArgumentException.class, () -> fill(array, 2, 1, 'Z'));
++    }
++
++    void testFillRangeChangesOnlyRequestedSlice() {
++        final char[] array = {'A', 'B', 'C', 'D', 'E'};
++        assertSame(array, fill(array, 1, 4, 'Z'));
++        assertArrayEquals(new char[] {'A', 'Z', 'Z', 'Z', 'E'}, array);
++    }
++
++    @Test
++    void testClearRangeContract() {
++        testClearEmptyRangeIsNoOp();
++        testClearFromGreaterThanToThrows();
++        testClearFullArray();
++        testClearNegativeFromThrows();
++        testClearNullArray();
++        testClearRangeChangesOnlyRequestedSlice();
++    }
++
++    @Test
++    void testFillRangeContract() {
++        testFillEmptyRangeIsNoOp();
++        testFillFullArray();
++        testFillNullArray();
++        testFillPastEndThrows();
++        testFillRangeChangesOnlyRequestedSlice();
++    }
++
++    @Test
++    void testExistingWholeArrayOperationsRemainCompatible() {
++        final char[] cleared = {'A', 'B', 'C'};
++        assertSame(cleared, ArrayFill.clear(cleared));
++        assertArrayEquals(new char[] {'\0', '\0', '\0'}, cleared);
++        assertNull(ArrayFill.clear((char[]) null));
++
++        final char[] filled = {'A', 'B', 'C'};
++        assertSame(filled, ArrayFill.fill(filled, 'Z'));
++        assertArrayEquals(new char[] {'Z', 'Z', 'Z'}, filled);
++        assertNull(ArrayFill.fill((char[]) null, 'Z'));
++    }
++}
+diff --git a/src/test/java/org/apache/commons/lang3/text/StrBuilderReadFromSecurityTest.java b/src/test/java/org/apache/commons/lang3/text/StrBuilderReadFromSecurityTest.java
+new file mode 100644
+index 000000000..9fcb2c0fa
+--- /dev/null
++++ b/src/test/java/org/apache/commons/lang3/text/StrBuilderReadFromSecurityTest.java
+@@ -0,0 +1,305 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements. See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License. You may obtain a copy of the License at
++ *
++ *      https://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.commons.lang3.text;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertThrows;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++import static org.junit.jupiter.api.Assertions.fail;
++
++import java.io.IOException;
++import java.io.Reader;
++import java.io.StringReader;
++import java.lang.reflect.InvocationTargetException;
++import java.lang.reflect.Method;
++import java.nio.CharBuffer;
++import java.util.ArrayList;
++import java.util.List;
++
++import org.junit.jupiter.api.Test;
++
++@SuppressWarnings("deprecation")
++class StrBuilderReadFromSecurityTest {
++
++    private static class CapturingReader extends Reader {
++
++        private final String content;
++        private final boolean failAfterContent;
++        private final List<char[]> received = new ArrayList<>();
++        private int offset;
++
++        CapturingReader(final String content, final boolean failAfterContent) {
++            this.content = content;
++            this.failAfterContent = failAfterContent;
++        }
++
++        @Override
++        public void close() {
++            // Nothing to close.
++        }
++
++        @Override
++        public int read(final char[] target, final int targetOffset, final int length) throws IOException {
++            received.add(target);
++            if (offset == content.length()) {
++                if (failAfterContent) {
++                    throw new IOException("deliberate failure");
++                }
++                return -1;
++            }
++            final int count = Math.min(length, content.length() - offset);
++            content.getChars(offset, offset + count, target, targetOffset);
++            offset += count;
++            return count;
++        }
++    }
++
++    private static class CapturingReadable implements Readable {
++
++        private final String content;
++        private final boolean failAfterContent;
++        private final boolean zeroFirst;
++        private final List<CharBuffer> received = new ArrayList<>();
++        private int offset;
++        private boolean returnedZero;
++
++        CapturingReadable(final String content, final boolean failAfterContent, final boolean zeroFirst) {
++            this.content = content;
++            this.failAfterContent = failAfterContent;
++            this.zeroFirst = zeroFirst;
++        }
++
++        @Override
++        public int read(final CharBuffer target) throws IOException {
++            received.add(target.duplicate());
++            if (zeroFirst && !returnedZero) {
++                returnedZero = true;
++                return 0;
++            }
++            if (offset == content.length()) {
++                if (failAfterContent) {
++                    throw new IOException("deliberate failure");
++                }
++                return -1;
++            }
++            final int count = Math.min(Math.min(2, target.remaining()), content.length() - offset);
++            target.put(content, offset, offset + count);
++            offset += count;
++            return count;
++        }
++    }
++
++    private static class RuntimeFailingReadable implements Readable {
++
++        private final List<CharBuffer> received = new ArrayList<>();
++        private boolean supplied;
++
++        @Override
++        public int read(final CharBuffer target) {
++            received.add(target.duplicate());
++            if (supplied) {
++                throw new IllegalStateException("deliberate failure");
++            }
++            supplied = true;
++            target.put("secret");
++            return 6;
++        }
++    }
++
++    private static void assertArraysCleared(final List<char[]> arrays) {
++        for (final char[] array : arrays) {
++            for (final char value : array) {
++                assertEquals('\0', value, "Temporary input storage retained character data");
++            }
++        }
++    }
++
++    private static void assertBuffersCleared(final List<CharBuffer> buffers) {
++        assertTrue(!buffers.isEmpty());
++        for (final CharBuffer buffer : buffers) {
++            for (int index = 0; index < buffer.limit(); index++) {
++                assertEquals('\0', buffer.get(index), "Input retained ingested character data");
++            }
++        }
++    }
++
++    private static int readBounded(final StrBuilder builder, final Readable readable, final int maxChars) throws IOException {
++        final Method method;
++        try {
++            method = StrBuilder.class.getMethod("readFrom", Readable.class, int.class);
++        } catch (final NoSuchMethodException exception) {
++            return fail("Missing public StrBuilder.readFrom(Readable, int)", exception);
++        }
++        try {
++            return (Integer) method.invoke(builder, readable, maxChars);
++        } catch (final InvocationTargetException exception) {
++            final Throwable cause = exception.getCause();
++            if (cause instanceof IOException) {
++                throw (IOException) cause;
++            }
++            if (cause instanceof RuntimeException) {
++                throw (RuntimeException) cause;
++            }
++            if (cause instanceof Error) {
++                throw (Error) cause;
++            }
++            return fail("Unexpected checked exception from bounded readFrom", cause);
++        } catch (final ReflectiveOperationException exception) {
++            return fail("Could not invoke public StrBuilder.readFrom(Readable, int)", exception);
++        }
++    }
++
++    @Test
++    void testBoundedReaderAcceptsExactLimitAndPreservesPrefix() throws Exception {
++        final StrBuilder builder = new StrBuilder("prefix:");
++        assertEquals(6, readBounded(builder, new StringReader("secret"), 6));
++        assertEquals("prefix:secret", builder.toString());
++
++        final StrBuilder zeroLimit = new StrBuilder("prefix:");
++        assertEquals(0, readBounded(zeroLimit, new StringReader(""), 0));
++        assertThrows(IOException.class, () -> readBounded(zeroLimit, new StringReader("x"), 0));
++        assertEquals("prefix:", zeroLimit.toString());
++    }
++
++    @Test
++    void testBoundedGenericReadableSupportsChunksAndZeroProgress() throws Exception {
++        final StrBuilder builder = new StrBuilder("prefix:");
++        assertEquals(6, readBounded(builder, new CapturingReadable("secret", false, true), 6));
++        assertEquals("prefix:secret", builder.toString());
++    }
++
++    @Test
++    void testBoundedCharBufferChecksLimitBeforeAdvancing() throws Exception {
++        final StrBuilder builder = new StrBuilder("prefix:");
++        final CharBuffer tooLong = CharBuffer.wrap("secret");
++        assertThrows(IOException.class, () -> readBounded(builder, tooLong, 5));
++        assertEquals("prefix:", builder.toString());
++
++        final CharBuffer exact = CharBuffer.wrap("secret");
++        assertEquals(6, readBounded(builder, exact, 6));
++        assertEquals(exact.limit(), exact.position());
++        assertEquals("prefix:secret", builder.toString());
++    }
++
++    @Test
++    void testBoundedReadRejectsInvalidArguments() {
++        final StrBuilder builder = new StrBuilder("prefix:");
++        assertThrows(IllegalArgumentException.class, () -> readBounded(builder, new StringReader(""), -1));
++        assertThrows(NullPointerException.class, () -> readBounded(builder, null, 1));
++        assertEquals("prefix:", builder.toString());
++    }
++
++    @Test
++    void testBoundedOverflowIsAtomicForReaderAndReadable() {
++        final StrBuilder readerBuilder = new StrBuilder("prefix:");
++        assertThrows(IOException.class, () -> readBounded(readerBuilder, new StringReader("secret"), 5));
++        assertEquals("prefix:", readerBuilder.toString());
++
++        final StrBuilder readableBuilder = new StrBuilder("prefix:");
++        assertThrows(IOException.class, () -> readBounded(readableBuilder, new CapturingReadable("secret", false, false), 5));
++        assertEquals("prefix:", readableBuilder.toString());
++    }
++
++    @Test
++    void testReadFailureIsAtomicForBoundedAndUnboundedOperations() {
++        final StrBuilder unbounded = new StrBuilder("prefix:");
++        assertThrows(IOException.class, () -> unbounded.readFrom(new CapturingReader("secret", true)));
++        assertEquals("prefix:", unbounded.toString());
++
++        final StrBuilder bounded = new StrBuilder("prefix:");
++        assertThrows(IOException.class, () -> readBounded(bounded, new CapturingReadable("secret", true, false), 20));
++        assertEquals("prefix:", bounded.toString());
++
++        final StrBuilder runtimeFailure = new StrBuilder("prefix:");
++        assertThrows(IllegalStateException.class, () -> runtimeFailure.readFrom(new RuntimeFailingReadable()));
++        assertEquals("prefix:", runtimeFailure.toString());
++    }
++
++    @Test
++    void testInvalidReadCountsAreRejectedAtomically() {
++        final Reader invalidReader = new Reader() {
++            @Override
++            public void close() {
++                // Nothing to close.
++            }
++
++            @Override
++            public int read(final char[] target, final int offset, final int length) {
++                return length + 1;
++            }
++        };
++        final StrBuilder readerBuilder = new StrBuilder("prefix:");
++        assertThrows(IOException.class, () -> readBounded(readerBuilder, invalidReader, 8));
++        assertEquals("prefix:", readerBuilder.toString());
++
++        final Readable invalidReadable = target -> {
++            target.put('x');
++            return 0;
++        };
++        final StrBuilder readableBuilder = new StrBuilder("prefix:");
++        assertThrows(IOException.class, () -> readableBuilder.readFrom(invalidReadable));
++        assertEquals("prefix:", readableBuilder.toString());
++
++        final Readable invalidEndOfInput = target -> {
++            target.put('x');
++            return -1;
++        };
++        assertThrows(IOException.class, () -> readBounded(new StrBuilder(), invalidEndOfInput, 1));
++    }
++
++    @Test
++    void testTemporaryInputStorageIsClearedOnSuccessAndFailure() throws Exception {
++        final CapturingReader successfulReader = new CapturingReader("secret", false);
++        assertEquals(6, new StrBuilder().readFrom(successfulReader));
++        assertTrue(!successfulReader.received.isEmpty());
++        assertArraysCleared(successfulReader.received);
++
++        final CapturingReader failingReader = new CapturingReader("secret", true);
++        assertThrows(IOException.class, () -> readBounded(new StrBuilder(), failingReader, 20));
++        assertTrue(!failingReader.received.isEmpty());
++        assertArraysCleared(failingReader.received);
++
++        final CapturingReadable successfulReadable = new CapturingReadable("secret", false, false);
++        assertEquals(6, readBounded(new StrBuilder(), successfulReadable, 6));
++        assertBuffersCleared(successfulReadable.received);
++
++        final CapturingReadable failingReadable = new CapturingReadable("secret", true, false);
++        assertThrows(IOException.class, () -> new StrBuilder().readFrom(failingReadable));
++        assertBuffersCleared(failingReadable.received);
++
++        final RuntimeFailingReadable runtimeFailingReadable = new RuntimeFailingReadable();
++        assertThrows(IllegalStateException.class, () -> new StrBuilder().readFrom(runtimeFailingReadable));
++        assertBuffersCleared(runtimeFailingReadable.received);
++    }
++
++    @Test
++    void testExistingUnboundedReadFromVariantsRemainCompatible() throws Exception {
++        final StrBuilder fromReader = new StrBuilder("prefix:");
++        assertEquals(2, fromReader.readFrom(new StringReader("ab")));
++        assertEquals("prefix:ab", fromReader.toString());
++
++        final StrBuilder fromReadable = new StrBuilder("prefix:");
++        assertEquals(2, fromReadable.readFrom(new CapturingReadable("cd", false, false)));
++        assertEquals("prefix:cd", fromReadable.toString());
++
++        final CharBuffer input = CharBuffer.wrap("ef");
++        final StrBuilder fromBuffer = new StrBuilder("prefix:");
++        assertEquals(2, fromBuffer.readFrom(input));
++        assertEquals(input.limit(), input.position());
++        assertEquals("prefix:ef", fromBuffer.toString());
++    }
++}
+diff --git a/src/test/java/org/apache/commons/lang3/text/StrBuilderSetLengthSecurityTest.java b/src/test/java/org/apache/commons/lang3/text/StrBuilderSetLengthSecurityTest.java
+new file mode 100644
+index 000000000..67d3a159b
+--- /dev/null
++++ b/src/test/java/org/apache/commons/lang3/text/StrBuilderSetLengthSecurityTest.java
+@@ -0,0 +1,241 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements. See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License. You may obtain a copy of the License at
++ *
++ *      https://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.commons.lang3.text;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertFalse;
++import static org.junit.jupiter.api.Assertions.assertSame;
++
++import java.io.Reader;
++import java.nio.CharBuffer;
++import java.nio.charset.StandardCharsets;
++
++import org.apache.commons.lang3.SerializationUtils;
++import org.junit.jupiter.api.Test;
++
++@SuppressWarnings("deprecation")
++class StrBuilderSetLengthSecurityTest {
++
++    private static final class HostileReadable implements Readable {
++
++        private boolean read;
++
++        @Override
++        public int read(final CharBuffer target) {
++            if (read) {
++                return -1;
++            }
++            read = true;
++            if (target.position() > 0) {
++                target.put(0, 'X');
++            }
++            target.put('!');
++            return 1;
++        }
++    }
++
++    private static final class HostileReader extends Reader {
++
++        private boolean read;
++
++        @Override
++        public void close() {
++            // Nothing to close.
++        }
++
++        @Override
++        public int read(final char[] target, final int offset, final int length) {
++            if (read) {
++                return -1;
++            }
++            read = true;
++            if (offset > 0) {
++                target[0] = 'X';
++            }
++            target[offset] = '!';
++            return 1;
++        }
++    }
++
++    private static boolean containsUtf16Be(final byte[] haystack, final String needle) {
++        final byte[] needleBytes = needle.getBytes(StandardCharsets.UTF_16BE);
++        outer: for (int index = 0; index <= haystack.length - needleBytes.length; index++) {
++            for (int offset = 0; offset < needleBytes.length; offset++) {
++                if (haystack[index + offset] != needleBytes[offset]) {
++                    continue outer;
++                }
++            }
++            return true;
++        }
++        return false;
++    }
++
++    private static String nuls(final int count) {
++        return new String(new char[count]);
++    }
++
++    private static void assertSerializedDoesNotContain(final StrBuilder builder, final String discarded) {
++        assertFalse(containsUtf16Be(SerializationUtils.serialize(builder), discarded),
++                "Serialized builder retained discarded content: " + discarded);
++    }
++
++    @Test
++    void testConsecutiveShrinksClearEntireDiscardedRegion() {
++        final StrBuilder builder = new StrBuilder("ABCDEFGHIJ");
++        builder.setLength(7);
++        builder.setLength(3);
++        assertEquals("ABC", builder.toString());
++        assertSerializedDoesNotContain(builder, "DEFGHIJ");
++        builder.setLength(10);
++        assertEquals("ABC" + nuls(7), builder.toString());
++    }
++
++    @Test
++    void testShrinkClearsEveryVacatedPosition() {
++        final String original = "CONFIDENTIAL_TOKEN_VALUE";
++        final StrBuilder builder = new StrBuilder(original);
++        assertSame(builder, builder.setLength(5));
++        assertEquals("CONFI", builder.toString());
++        assertSerializedDoesNotContain(builder, "DENTIAL_TOKEN_VALUE");
++        builder.setLength(original.length());
++        assertEquals("CONFI" + nuls(original.length() - 5), builder.toString());
++
++        final StrBuilder serializedShrink = new StrBuilder("prefix-password123-secret");
++        serializedShrink.setLength(6);
++        final byte[] serialized = SerializationUtils.serialize(serializedShrink);
++        assertFalse(containsUtf16Be(serialized, "password123-secret"));
++
++        final String wiped = "TOP_SECRET_KEY_MATERIAL";
++        final StrBuilder toZero = new StrBuilder(wiped);
++        toZero.setLength(0);
++        assertEquals(0, toZero.length());
++        assertEquals(0, toZero.size());
++        assertEquals("", toZero.toString());
++        assertSerializedDoesNotContain(toZero, wiped);
++        toZero.setLength(wiped.length());
++        assertEquals(nuls(wiped.length()), toZero.toString());
++    }
++
++    @Test
++    void testShrinkPreservesCapacityAndPrefix() {
++        final StrBuilder builder = new StrBuilder(64).append("keep-this-secret-tail");
++        final int capacity = builder.capacity();
++        builder.setLength(4);
++        assertEquals(capacity, builder.capacity());
++        assertEquals(4, builder.length());
++        assertEquals(4, builder.size());
++        assertEquals("keep", builder.toString());
++        assertEquals('k', builder.charAt(0));
++        assertEquals('e', builder.charAt(1));
++        assertEquals('e', builder.charAt(2));
++        assertEquals('p', builder.charAt(3));
++    }
++
++    @Test
++    void testShrinkThenPartialGrowDoesNotRevealOlderTail() {
++        final String original = "SECRET_MATERIAL";
++        final StrBuilder builder = new StrBuilder(original);
++        builder.setLength(3);
++        builder.setLength(8);
++        assertEquals("SEC\0\0\0\0\0", builder.toString());
++        assertSerializedDoesNotContain(builder, "ATERIAL");
++        builder.setLength(original.length());
++        assertEquals("SEC" + nuls(original.length() - 3), builder.toString());
++    }
++
++    @Test
++    void testHostileInputsCannotAccessReusableBuilderStorage() throws Exception {
++        final StrBuilder fromReadable = new StrBuilder(64).append("trusted:");
++        final HostileReadable readable = new HostileReadable();
++        assertEquals(1, fromReadable.readFrom(readable));
++        assertEquals("trusted:!", fromReadable.toString());
++
++        final StrBuilder fromReader = new StrBuilder(64).append("trusted:");
++        final HostileReader reader = new HostileReader();
++        assertEquals(1, fromReader.readFrom(reader));
++        assertEquals("trusted:!", fromReader.toString());
++    }
++
++    @Test
++    void testShrinkingReplacementClearsTailAcrossPublicVariants() {
++        final StrBuilder direct = new StrBuilder("prefix-SECRET");
++        final int directOldSize = direct.length();
++        direct.replace(7, direct.length(), "x");
++        assertEquals("prefix-x", direct.toString());
++        assertSerializedDoesNotContain(direct, "ECRET");
++        direct.setLength(directOldSize);
++        assertEquals("prefix-x" + nuls(directOldSize - 8), direct.toString());
++
++        final StrBuilder first = new StrBuilder("KEEP-SECRET");
++        final int firstOldSize = first.length();
++        first.replaceFirst("SECRET", "x");
++        assertEquals("KEEP-x", first.toString());
++        assertSerializedDoesNotContain(first, "ECRET");
++        first.setLength(firstOldSize);
++        assertEquals("KEEP-x" + nuls(firstOldSize - 6), first.toString());
++
++        final StrBuilder all = new StrBuilder("SECRET-one-ENDSECRET");
++        final int allOldSize = all.length();
++        all.replaceAll("SECRET", "x");
++        assertEquals("x-one-ENDx", all.toString());
++        assertSerializedDoesNotContain(all, "ECRET");
++        all.setLength(allOldSize);
++        assertEquals("x-one-ENDx" + nuls(allOldSize - 10), all.toString());
++
++        final StrBuilder matcher = new StrBuilder("SECRET-one-ENDSECRET");
++        final int matcherOldSize = matcher.length();
++        matcher.replaceAll(StrMatcher.stringMatcher("SECRET"), "x");
++        assertEquals("x-one-ENDx", matcher.toString());
++        assertSerializedDoesNotContain(matcher, "ECRET");
++        matcher.setLength(matcherOldSize);
++        assertEquals("x-one-ENDx" + nuls(matcherOldSize - 10), matcher.toString());
++    }
++
++    @Test
++    void testShrinkingReplacementDoesNotLeakThroughSerializationOrRegrowth() throws Exception {
++        final String secret = "TOP_SECRET_MATERIAL";
++        final StrBuilder builder = new StrBuilder("safe-prefix-" + secret);
++        final int oldSize = builder.length();
++        builder.replace(12, oldSize, "x");
++        assertEquals("safe-prefix-x", builder.toString());
++        assertSerializedDoesNotContain(builder, "OP_SECRET_MATERIAL");
++        builder.setLength(oldSize);
++        assertEquals("safe-prefix-x" + nuls(oldSize - 13), builder.toString());
++    }
++
++    @Test
++    void testExistingLengthAndReplacementContractsRemainCompatible() {
++        final StrBuilder builder = new StrBuilder("abc");
++        assertSame(builder, builder.setLength(builder.length()));
++        builder.setLength(5);
++        assertEquals("abc\0\0", builder.toString());
++        assertEquals(5, builder.length());
++        assertEquals(5, builder.size());
++
++        final StrBuilder direct = new StrBuilder("abc-def");
++        assertSame(direct, direct.replace(4, 7, "XYZ"));
++        assertEquals("abc-XYZ", direct.toString());
++
++        final StrBuilder first = new StrBuilder("one-one");
++        assertSame(first, first.replaceFirst("one", "two"));
++        assertEquals("two-one", first.toString());
++
++        final StrBuilder all = new StrBuilder("one-one");
++        assertSame(all, all.replaceAll("one", "two"));
++        assertEquals("two-two", all.toString());
++    }
++}
+diff --git a/src/test/java/org/apache/commons/lang3/text/StrBuilderStorageLifecycleTest.java b/src/test/java/org/apache/commons/lang3/text/StrBuilderStorageLifecycleTest.java
+new file mode 100644
+index 000000000..94273a588
+--- /dev/null
++++ b/src/test/java/org/apache/commons/lang3/text/StrBuilderStorageLifecycleTest.java
+@@ -0,0 +1,160 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements. See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License. You may obtain a copy of the License at
++ *
++ *      https://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.commons.lang3.text;
++
++import static org.junit.jupiter.api.Assertions.assertArrayEquals;
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertNotSame;
++import static org.junit.jupiter.api.Assertions.assertSame;
++
++import java.io.StringReader;
++
++import org.apache.commons.lang3.SerializationUtils;
++import org.junit.jupiter.api.Test;
++
++@SuppressWarnings("deprecation")
++class StrBuilderStorageLifecycleTest {
++
++    private static final class ExposingStrBuilder extends StrBuilder {
++
++        private static final long serialVersionUID = 1L;
++
++        ExposingStrBuilder(final int initialCapacity) {
++            super(initialCapacity);
++        }
++
++        char[] storage() {
++            return buffer;
++        }
++    }
++
++    private static void assertScrubbed(final char[] abandoned) {
++        for (int index = 0; index < abandoned.length; index++) {
++            assertEquals('\0', abandoned[index],
++                    "Abandoned storage retained character data at index " + index);
++        }
++    }
++
++    private static String nuls(final int count) {
++        return new String(new char[count]);
++    }
++
++    @Test
++    void testCapacityGrowthScrubsAbandonedStorage() throws Exception {
++        final ExposingStrBuilder direct = new ExposingStrBuilder(8);
++        direct.append("SECRET42");
++        final char[] directOld = direct.storage();
++        direct.ensureCapacity(9);
++        assertNotSame(directOld, direct.storage());
++        assertScrubbed(directOld);
++        assertEquals("SECRET42", direct.toString());
++
++        final ExposingStrBuilder appended = new ExposingStrBuilder(4);
++        appended.append("KEY1");
++        final char[] appendedOld = appended.storage();
++        appended.append("MORE");
++        assertNotSame(appendedOld, appended.storage());
++        assertScrubbed(appendedOld);
++        assertEquals("KEY1MORE", appended.toString());
++
++        final ExposingStrBuilder inserted = new ExposingStrBuilder(4);
++        inserted.append("pin1");
++        final char[] insertedOld = inserted.storage();
++        inserted.insert(0, "XX");
++        assertNotSame(insertedOld, inserted.storage());
++        assertScrubbed(insertedOld);
++        assertEquals("XXpin1", inserted.toString());
++
++        final ExposingStrBuilder grown = new ExposingStrBuilder(3);
++        grown.append("abc");
++        final char[] grownOld = grown.storage();
++        grown.setLength(10);
++        assertNotSame(grownOld, grown.storage());
++        assertScrubbed(grownOld);
++        assertEquals("abc" + nuls(7), grown.toString());
++
++        final ExposingStrBuilder read = new ExposingStrBuilder(6);
++        read.append("token,");
++        final char[] readOld = read.storage();
++        assertEquals(10, read.readFrom(new StringReader("extra-data")));
++        assertNotSame(readOld, read.storage());
++        assertScrubbed(readOld);
++        assertEquals("token,extra-data", read.toString());
++
++        final ExposingStrBuilder untouched = new ExposingStrBuilder(32);
++        untouched.append("live");
++        final char[] kept = untouched.storage();
++        untouched.ensureCapacity(10);
++        assertSame(kept, untouched.storage());
++        assertEquals("live", untouched.toString());
++    }
++
++    @Test
++    void testMinimizeCapacityScrubsAbandonedStorage() {
++        final ExposingStrBuilder builder = new ExposingStrBuilder(64);
++        builder.append("token-XYZ");
++        final char[] old = builder.storage();
++        builder.minimizeCapacity();
++        assertNotSame(old, builder.storage());
++        assertScrubbed(old);
++        assertEquals("token-XYZ", builder.toString());
++        assertEquals(builder.length(), builder.capacity());
++
++        final char[] minimized = builder.storage();
++        builder.minimizeCapacity();
++        assertSame(minimized, builder.storage());
++        assertEquals("token-XYZ", builder.toString());
++    }
++
++    @Test
++    void testSerializedFormIsCapacityIndependent() {
++        final StrBuilder grownToFit = new StrBuilder(1).append("payload");
++        final StrBuilder oversized = new StrBuilder(512).append("payload");
++        final StrBuilder shrunk = new StrBuilder("payload-SECRETSUFFIX");
++        shrunk.setLength("payload".length());
++
++        final byte[] grownBytes = SerializationUtils.serialize(grownToFit);
++        assertArrayEquals(grownBytes, SerializationUtils.serialize(oversized));
++        assertArrayEquals(grownBytes, SerializationUtils.serialize(shrunk));
++
++        assertArrayEquals(SerializationUtils.serialize(new StrBuilder(128)),
++                SerializationUtils.serialize(new StrBuilder()));
++    }
++
++    @Test
++    void testDeserializedBuilderIsCompactAndFullyFunctional() throws Exception {
++        final StrBuilder original = new StrBuilder(256).append("credential-material");
++        final StrBuilder copy = SerializationUtils.clone(original);
++        assertEquals(original.toString(), copy.toString());
++        assertEquals(original.length(), copy.length());
++        assertEquals(copy.length(), copy.capacity());
++        assertArrayEquals(SerializationUtils.serialize(original), SerializationUtils.serialize(copy));
++
++        copy.append("-suffix");
++        assertEquals("credential-material-suffix", copy.toString());
++        copy.setLength("credential".length());
++        assertEquals("credential", copy.toString());
++        assertEquals(4, copy.readFrom(new StringReader("-abc")));
++        assertEquals("credential-abc", copy.toString());
++
++        final StrBuilder emptyCopy = SerializationUtils.clone(new StrBuilder(64));
++        assertEquals(0, emptyCopy.length());
++        assertEquals(0, emptyCopy.capacity());
++        emptyCopy.append('x');
++        assertEquals("x", emptyCopy.toString());
++    }
++}

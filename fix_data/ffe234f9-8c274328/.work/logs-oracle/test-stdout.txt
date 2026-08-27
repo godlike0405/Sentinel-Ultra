@@ -1,0 +1,202 @@
+
+[fail_to_pass] org.apache.commons.lang3.ArrayFillRangeTest::testClearRangeContract stdout
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.5:test (default-cli) on project commons-lang3: No tests matching pattern "ArrayFillRangeTest#testClearRangeContract" were executed! (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.) -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+
+[fail_to_pass] org.apache.commons.lang3.ArrayFillRangeTest::testFillRangeContract stdout
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.5:test (default-cli) on project commons-lang3: No tests matching pattern "ArrayFillRangeTest#testFillRangeContract" were executed! (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.) -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testConsecutiveShrinksClearEntireDiscardedRegion stdout
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.5:test (default-cli) on project commons-lang3: No tests matching pattern "StrBuilderSetLengthSecurityTest#testConsecutiveShrinksClearEntireDiscardedRegion" were executed! (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.) -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testSerializedFormDoesNotContainDiscardedSecret stdout
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.5:test (default-cli) on project commons-lang3: No tests matching pattern "StrBuilderSetLengthSecurityTest#testSerializedFormDoesNotContainDiscardedSecret" were executed! (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.) -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testShrinkClearsEveryVacatedPosition stdout
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.5:test (default-cli) on project commons-lang3: No tests matching pattern "StrBuilderSetLengthSecurityTest#testShrinkClearsEveryVacatedPosition" were executed! (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.) -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testShrinkThenPartialGrowDoesNotRevealOlderTail stdout
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.5:test (default-cli) on project commons-lang3: No tests matching pattern "StrBuilderSetLengthSecurityTest#testShrinkThenPartialGrowDoesNotRevealOlderTail" were executed! (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.) -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testShrinkToZeroClearsFormerLogicalContent stdout
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.5:test (default-cli) on project commons-lang3: No tests matching pattern "StrBuilderSetLengthSecurityTest#testShrinkToZeroClearsFormerLogicalContent" were executed! (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.) -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testGenericReadableCannotAccessReusableBuilderStorage stdout
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.5:test (default-cli) on project commons-lang3: No tests matching pattern "StrBuilderSetLengthSecurityTest#testGenericReadableCannotAccessReusableBuilderStorage" were executed! (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.) -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testReaderCannotAccessReusableBuilderStorage stdout
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.5:test (default-cli) on project commons-lang3: No tests matching pattern "StrBuilderSetLengthSecurityTest#testReaderCannotAccessReusableBuilderStorage" were executed! (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.) -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testShrinkingReplacementAndMatcherIsolationContract stdout
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.5:test (default-cli) on project commons-lang3: No tests matching pattern "StrBuilderSetLengthSecurityTest#testShrinkingReplacementAndMatcherIsolationContract" were executed! (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.) -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testMatcherReplacementFailureAtomicityContract stdout
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.5:test (default-cli) on project commons-lang3: No tests matching pattern "StrBuilderSetLengthSecurityTest#testMatcherReplacementFailureAtomicityContract" were executed! (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.) -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testBoundedReaderAcceptsExactLimitAndPreservesPrefix stdout
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.5:test (default-cli) on project commons-lang3: No tests matching pattern "StrBuilderReadFromSecurityTest#testBoundedReaderAcceptsExactLimitAndPreservesPrefix" were executed! (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.) -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testBoundedGenericReadableSupportsChunksAndZeroProgress stdout
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.5:test (default-cli) on project commons-lang3: No tests matching pattern "StrBuilderReadFromSecurityTest#testBoundedGenericReadableSupportsChunksAndZeroProgress" were executed! (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.) -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testBoundedCharBufferChecksLimitBeforeAdvancing stdout
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.5:test (default-cli) on project commons-lang3: No tests matching pattern "StrBuilderReadFromSecurityTest#testBoundedCharBufferChecksLimitBeforeAdvancing" were executed! (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.) -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testBoundedZeroLimitDistinguishesEmptyAndNonEmptyInput stdout
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.5:test (default-cli) on project commons-lang3: No tests matching pattern "StrBuilderReadFromSecurityTest#testBoundedZeroLimitDistinguishesEmptyAndNonEmptyInput" were executed! (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.) -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testBoundedReadRejectsInvalidArguments stdout
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.5:test (default-cli) on project commons-lang3: No tests matching pattern "StrBuilderReadFromSecurityTest#testBoundedReadRejectsInvalidArguments" were executed! (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.) -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testBoundedOverflowIsAtomicForReaderAndReadable stdout
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.5:test (default-cli) on project commons-lang3: No tests matching pattern "StrBuilderReadFromSecurityTest#testBoundedOverflowIsAtomicForReaderAndReadable" were executed! (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.) -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testReadFailureIsAtomicForBoundedAndUnboundedOperations stdout
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.5:test (default-cli) on project commons-lang3: No tests matching pattern "StrBuilderReadFromSecurityTest#testReadFailureIsAtomicForBoundedAndUnboundedOperations" were executed! (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.) -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testInvalidReadCountsAreRejectedAtomically stdout
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.5:test (default-cli) on project commons-lang3: No tests matching pattern "StrBuilderReadFromSecurityTest#testInvalidReadCountsAreRejectedAtomically" were executed! (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.) -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testTemporaryInputStorageIsClearedOnSuccessAndFailure stdout
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.5:test (default-cli) on project commons-lang3: No tests matching pattern "StrBuilderReadFromSecurityTest#testTemporaryInputStorageIsClearedOnSuccessAndFailure" were executed! (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.) -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+
+[pass_to_pass] org.apache.commons.lang3.ArrayFillTest::testClearCharArray stdout
+
+[pass_to_pass] org.apache.commons.lang3.ArrayFillTest::testFillCharArray stdout
+
+[pass_to_pass] org.apache.commons.lang3.text.StrBuilderClearTest::testReadFromReaderDoesNotExposeStaleInternalBuffer stdout
+
+[pass_to_pass] org.apache.commons.lang3.text.StrBuilderClearTest::testStaleCharsNotLeakedAfterClear stdout
+
+[pass_to_pass] org.apache.commons.lang3.text.StrBuilderClearTest::testStaleCharsNotLeakedAfterTruncate stdout
+
+[pass_to_pass] org.apache.commons.lang3.text.StrBuilderTest::testCapacityAndLength stdout
+
+[pass_to_pass] org.apache.commons.lang3.text.StrBuilderTest::testChaining stdout
+
+[pass_to_pass] org.apache.commons.lang3.text.StrBuilderTest::testReadFromCharBufferAppendsToEnd stdout
+
+[pass_to_pass] org.apache.commons.lang3.text.StrBuilderTest::testReadFromReadableAppendsToEnd stdout
+
+[pass_to_pass] org.apache.commons.lang3.text.StrBuilderTest::testReadFromReaderAppendsToEnd stdout
+
+[pass_to_pass] org.apache.commons.lang3.text.StrBuilderTest::testReplaceAll_StrMatcher_String stdout

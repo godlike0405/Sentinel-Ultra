@@ -1,0 +1,67 @@
+{
+  "schema_version": "compact-swebench-harborized-v1",
+  "execution": {
+    "commands": [
+      "rm -rf target/surefire-reports && mkdir -p target/surefire-reports",
+      "write_maven_settings; mvn -s /tmp/verifier-settings.xml -o -q -DskipTests=false -Dmaven.test.skip=false -DfailIfNoTests=true -Dsurefire.failIfNoSpecifiedTests=true -Dtest='ArrayFillRangeTest#testExistingWholeArrayOperationsRemainCompatible,StrBuilderReadFromSecurityTest#testExistingUnboundedReadFromVariantsRemainCompatible,StrBuilderSetLengthSecurityTest#testShrinkPreservesCapacityAndPrefix+testExistingLengthAndReplacementContractsRemainCompatible' test",
+      "emit_surefire_results",
+      "rm -rf target/surefire-reports && mkdir -p target/surefire-reports",
+      "HIDDEN_TEST_EXIT=0; write_maven_settings; mvn -s /tmp/verifier-settings.xml -o -q -DskipTests=false -Dmaven.test.skip=false -DfailIfNoTests=true -Dsurefire.failIfNoSpecifiedTests=true -Dtest=ArrayFillRangeTest,StrBuilderSetLengthSecurityTest,StrBuilderReadFromSecurityTest,StrBuilderStorageLifecycleTest test || HIDDEN_TEST_EXIT=$?",
+      "emit_surefire_results",
+      "exit \"$HIDDEN_TEST_EXIT\""
+    ],
+    "selected_test_files_to_run": [
+      "src/test/java/org/apache/commons/lang3/ArrayFillRangeTest.java",
+      "src/test/java/org/apache/commons/lang3/text/StrBuilderSetLengthSecurityTest.java",
+      "src/test/java/org/apache/commons/lang3/text/StrBuilderReadFromSecurityTest.java",
+      "src/test/java/org/apache/commons/lang3/text/StrBuilderStorageLifecycleTest.java"
+    ],
+    "env": {},
+    "timeout_sec": 600
+  },
+  "grading": {
+    "fail_to_pass": [
+      "org.apache.commons.lang3.ArrayFillRangeTest::testClearRangeContract",
+      "org.apache.commons.lang3.ArrayFillRangeTest::testFillRangeContract",
+      "org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testConsecutiveShrinksClearEntireDiscardedRegion",
+      "org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testShrinkClearsEveryVacatedPosition",
+      "org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testShrinkThenPartialGrowDoesNotRevealOlderTail",
+      "org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testHostileInputsCannotAccessReusableBuilderStorage",
+      "org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testShrinkingReplacementClearsTailAcrossPublicVariants",
+      "org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testShrinkingReplacementDoesNotLeakThroughSerializationOrRegrowth",
+      "org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testBoundedReaderAcceptsExactLimitAndPreservesPrefix",
+      "org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testBoundedGenericReadableSupportsChunksAndZeroProgress",
+      "org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testBoundedCharBufferChecksLimitBeforeAdvancing",
+      "org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testBoundedReadRejectsInvalidArguments",
+      "org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testBoundedOverflowIsAtomicForReaderAndReadable",
+      "org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testReadFailureIsAtomicForBoundedAndUnboundedOperations",
+      "org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testInvalidReadCountsAreRejectedAtomically",
+      "org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testTemporaryInputStorageIsClearedOnSuccessAndFailure",
+      "org.apache.commons.lang3.text.StrBuilderStorageLifecycleTest::testCapacityGrowthScrubsAbandonedStorage",
+      "org.apache.commons.lang3.text.StrBuilderStorageLifecycleTest::testMinimizeCapacityScrubsAbandonedStorage",
+      "org.apache.commons.lang3.text.StrBuilderStorageLifecycleTest::testSerializedFormIsCapacityIndependent",
+      "org.apache.commons.lang3.text.StrBuilderStorageLifecycleTest::testDeserializedBuilderIsCompactAndFullyFunctional"
+    ],
+    "pass_to_pass": [
+      "org.apache.commons.lang3.ArrayFillRangeTest::testExistingWholeArrayOperationsRemainCompatible",
+      "org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testExistingUnboundedReadFromVariantsRemainCompatible",
+      "org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testShrinkPreservesCapacityAndPrefix",
+      "org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testExistingLengthAndReplacementContractsRemainCompatible"
+    ],
+    "required_pass": [],
+    "allow_extra_failures": false,
+    "parser": {
+      "framework": "custom",
+      "result_source": "stdout_stderr",
+      "pass_regex": "^RESULT (?P<name>\\S+) PASSED$",
+      "fail_regex": "^RESULT (?P<name>\\S+) FAILED$"
+    }
+  },
+  "artifacts": {
+    "stdout_log": "/logs/verifier/test-stdout.txt",
+    "stderr_log": "/logs/verifier/test-stderr.txt",
+    "parsed_results": "/logs/verifier/output.json",
+    "report": "/logs/verifier/report.json",
+    "reward": "/logs/verifier/reward.txt"
+  }
+}

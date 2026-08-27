@@ -1,0 +1,62 @@
+
+[fail_to_pass] org.apache.commons.lang3.ArrayFillRangeTest::testClearRangeContract stderr
+
+[fail_to_pass] org.apache.commons.lang3.ArrayFillRangeTest::testFillRangeContract stderr
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testConsecutiveShrinksClearEntireDiscardedRegion stderr
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testSerializedFormDoesNotContainDiscardedSecret stderr
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testShrinkClearsEveryVacatedPosition stderr
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testShrinkThenPartialGrowDoesNotRevealOlderTail stderr
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testShrinkToZeroClearsFormerLogicalContent stderr
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testGenericReadableCannotAccessReusableBuilderStorage stderr
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testReaderCannotAccessReusableBuilderStorage stderr
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testShrinkingReplacementAndMatcherIsolationContract stderr
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderSetLengthSecurityTest::testMatcherReplacementFailureAtomicityContract stderr
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testBoundedReaderAcceptsExactLimitAndPreservesPrefix stderr
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testBoundedGenericReadableSupportsChunksAndZeroProgress stderr
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testBoundedCharBufferChecksLimitBeforeAdvancing stderr
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testBoundedZeroLimitDistinguishesEmptyAndNonEmptyInput stderr
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testBoundedReadRejectsInvalidArguments stderr
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testBoundedOverflowIsAtomicForReaderAndReadable stderr
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testReadFailureIsAtomicForBoundedAndUnboundedOperations stderr
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testInvalidReadCountsAreRejectedAtomically stderr
+
+[fail_to_pass] org.apache.commons.lang3.text.StrBuilderReadFromSecurityTest::testTemporaryInputStorageIsClearedOnSuccessAndFailure stderr
+
+[pass_to_pass] org.apache.commons.lang3.ArrayFillTest::testClearCharArray stderr
+
+[pass_to_pass] org.apache.commons.lang3.ArrayFillTest::testFillCharArray stderr
+
+[pass_to_pass] org.apache.commons.lang3.text.StrBuilderClearTest::testReadFromReaderDoesNotExposeStaleInternalBuffer stderr
+
+[pass_to_pass] org.apache.commons.lang3.text.StrBuilderClearTest::testStaleCharsNotLeakedAfterClear stderr
+
+[pass_to_pass] org.apache.commons.lang3.text.StrBuilderClearTest::testStaleCharsNotLeakedAfterTruncate stderr
+
+[pass_to_pass] org.apache.commons.lang3.text.StrBuilderTest::testCapacityAndLength stderr
+
+[pass_to_pass] org.apache.commons.lang3.text.StrBuilderTest::testChaining stderr
+
+[pass_to_pass] org.apache.commons.lang3.text.StrBuilderTest::testReadFromCharBufferAppendsToEnd stderr
+
+[pass_to_pass] org.apache.commons.lang3.text.StrBuilderTest::testReadFromReadableAppendsToEnd stderr
+
+[pass_to_pass] org.apache.commons.lang3.text.StrBuilderTest::testReadFromReaderAppendsToEnd stderr
+
+[pass_to_pass] org.apache.commons.lang3.text.StrBuilderTest::testReplaceAll_StrMatcher_String stderr

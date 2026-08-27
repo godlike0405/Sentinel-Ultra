@@ -1,0 +1,358 @@
+diff --git a/src/main/java/org/apache/commons/lang3/ArrayFill.java b/src/main/java/org/apache/commons/lang3/ArrayFill.java
+index 7b9617e63..e6b9d95e5 100644
+--- a/src/main/java/org/apache/commons/lang3/ArrayFill.java
++++ b/src/main/java/org/apache/commons/lang3/ArrayFill.java
+@@ -29,6 +29,22 @@
+  */
+ public final class ArrayFill {
+ 
++    /**
++     * Fills and returns the given array, assigning {@code 0} to each element of the array.
++     * <pre>
++     * ArrayFill.fill(a, (byte) 0);
++     * </pre>
++     *
++     * @param a   the array to fill (may be null).
++     * @return the given array.
++     * @see Arrays#fill(byte[],byte)
++     * @see ArrayFill#fill(byte[],byte)
++     * @since 3.21.0
++     */
++    public static byte[] clear(final byte[] a) {
++        return fill(a, (byte) 0);
++    }
++
+     /**
+      * Fills and returns the given array, assigning {@code '\0'} to each element of the array.
+      * <p>
+@@ -50,19 +66,23 @@ public static char[] clear(final char[] a) {
+     }
+ 
+     /**
+-     * Fills and returns the given array, assigning {@code 0} to each element of the array.
++     * Fills and returns the given array, assigning {@code '\0'} to each element of the array.
++     * <p>
++     * Equivalent to:
++     * </p>
+      * <pre>
+-     * ArrayFill.fill(a, (byte) 0);
++     * ArrayFill.fill(a, fromIndex, toIndex, '\0'); // and not '0'!
+      * </pre>
+      *
+-     * @param a   the array to fill (may be null).
++     * @param a         the array to fill (may be null).
++     * @param fromIndex the index of the first element (inclusive) to be filled with {@code '\0'}.
++     * @param toIndex   the index of the last element (exclusive) to be filled with {@code '\0'}.
+      * @return the given array.
+-     * @see Arrays#fill(byte[],byte)
+-     * @see ArrayFill#fill(byte[],byte)
++     * @see Arrays#fill(char[], int, int, char)
+      * @since 3.21.0
+      */
+-    public static byte[] clear(final byte[] a) {
+-        return fill(a, (byte) 0);
++    public static char[] clear(char[] a, int fromIndex, int toIndex) {
++        return fill(a, fromIndex, toIndex, CharUtils.NUL);
+     }
+ 
+     /**
+@@ -111,6 +131,24 @@ public static char[] fill(final char[] a, final char val) {
+         return a;
+     }
+ 
++    /**
++     * Fills and returns the given array, assigning the given {@code char} value to each element of the array.
++     *
++     * @param a         the array to fill (may be null).
++     * @param val       the value to store in all elements of the array.
++     * @param fromIndex the index of the first element (inclusive) to be filled with the specified value.
++     * @param toIndex   the index of the last element (exclusive) to be filled with the specified value.
++     * @return the given array.
++     * @see Arrays#fill(char[], int, int, char)
++     * @since 3.21.0
++     */
++    public static char[] fill(char[] a, int fromIndex, int toIndex, char val) {
++        if (a != null) {
++            Arrays.fill(a, fromIndex, toIndex, val);
++        }
++        return a;
++    }
++
+     /**
+      * Fills and returns the given array, assigning the given {@code double} value to each element of the array.
+      *
+diff --git a/src/main/java/org/apache/commons/lang3/text/StrBuilder.java b/src/main/java/org/apache/commons/lang3/text/StrBuilder.java
+index acdf4abf7..0e53fa1cc 100644
+--- a/src/main/java/org/apache/commons/lang3/text/StrBuilder.java
++++ b/src/main/java/org/apache/commons/lang3/text/StrBuilder.java
+@@ -17,8 +17,11 @@
+ package org.apache.commons.lang3.text;
+ 
+ import java.io.IOException;
++import java.io.ObjectInputStream;
++import java.io.ObjectOutputStream;
+ import java.io.Reader;
+ import java.io.Serializable;
++import java.io.StreamCorruptedException;
+ import java.io.Writer;
+ import java.nio.CharBuffer;
+ import java.util.Arrays;
+@@ -26,8 +29,8 @@
+ import java.util.List;
+ import java.util.Objects;
+ 
++import org.apache.commons.lang3.ArrayFill;
+ import org.apache.commons.lang3.ArrayUtils;
+-import org.apache.commons.lang3.CharUtils;
+ import org.apache.commons.lang3.ObjectUtils;
+ import org.apache.commons.lang3.StringUtils;
+ import org.apache.commons.lang3.Strings;
+@@ -273,8 +276,8 @@ public void write(final String str, final int off, final int len) {
+      */
+     private static final long serialVersionUID = 7628716375283629643L;
+ 
+-    /** Internal data storage. */
+-    protected char[] buffer; // TODO make private?
++    /** Internal data storage. Serialized manually so streams carry only the logical content. */
++    protected transient char[] buffer; // TODO make private?
+ 
+     /** Current size of the buffer. */
+     protected int size; // TODO make private?
+@@ -1614,7 +1617,7 @@ public char charAt(final int index) {
+      */
+     public StrBuilder clear() {
+         size = 0;
+-        Arrays.fill(buffer, CharUtils.NUL);
++        ArrayFill.clear(buffer);
+         return this;
+     }
+ 
+@@ -1810,7 +1813,7 @@ public StrBuilder deleteFirst(final StrMatcher matcher) {
+     private void deleteImpl(final int startIndex, final int endIndex, final int len) {
+         System.arraycopy(buffer, endIndex, buffer, startIndex, size - endIndex);
+         size -= len;
+-        Arrays.fill(buffer, size, size + len, CharUtils.NUL);
++        ArrayFill.clear(buffer, size, size + len);
+     }
+ 
+     /**
+@@ -1850,7 +1853,9 @@ public boolean endsWith(final String str) {
+      */
+     public StrBuilder ensureCapacity(final int capacity) {
+         if (capacity > buffer.length) {
+-            buffer = ArrayUtils.arraycopy(buffer, 0, 0, size, () -> new char[capacity * 2]);
++            final char[] old = buffer;
++            buffer = ArrayUtils.arraycopy(old, 0, 0, size, () -> new char[capacity * 2]);
++            ArrayFill.clear(old);
+         }
+         return this;
+     }
+@@ -2484,14 +2489,15 @@ public String midString(int index, final int length) {
+      */
+     public StrBuilder minimizeCapacity() {
+         if (buffer.length > length()) {
+-            buffer = ArrayUtils.arraycopy(buffer, 0, 0, size, () -> new char[length()]);
++            final char[] old = buffer;
++            buffer = ArrayUtils.arraycopy(old, 0, 0, size, () -> new char[length()]);
++            ArrayFill.clear(old);
+         }
+         return this;
+     }
+ 
+     /**
+-     * If possible, reads chars from the provided {@link Readable} directly into underlying
+-     * character buffer without making extra copies.
++     * Reads chars from the provided {@link Readable} and appends them to this builder.
+      *
+      * @param readable  object to read from
+      * @return the number of characters read
+@@ -2500,33 +2506,85 @@ public StrBuilder minimizeCapacity() {
+      * @see #appendTo(Appendable)
+      */
+     public int readFrom(final Readable readable) throws IOException {
+-        final int oldSize = size;
+-        if (readable instanceof Reader) {
+-            final Reader r = (Reader) readable;
+-            ensureCapacity(size + 1);
+-            int read;
+-            while ((read = r.read(buffer, size, buffer.length - size)) != -1) {
+-                size += read;
+-                ensureCapacity(size + 1);
+-            }
+-        } else if (readable instanceof CharBuffer) {
++        return readFrom(readable, Integer.MAX_VALUE, false);
++    }
++
++    /**
++     * Reads up to the given maximum number of chars from the provided {@link Readable} and appends them to this builder.
++     *
++     * @param readable  object to read from
++     * @param maxChars  maximum number of characters to read
++     * @return the number of characters read
++     * @throws IllegalArgumentException if {@code maxChars} is negative
++     * @throws IOException if an I/O error occurs or the input exceeds {@code maxChars}
++     * @since 3.21.0
++     * @see #appendTo(Appendable)
++     */
++    public int readFrom(final Readable readable, final int maxChars) throws IOException {
++        if (maxChars < 0) {
++            throw new IllegalArgumentException("Maximum character count must not be negative: " + maxChars);
++        }
++        return readFrom(readable, maxChars, true);
++    }
++
++    /**
++     * Reads from a readable without exposing this builder's backing storage.
++     */
++    private int readFrom(final Readable readable, final int maxChars, final boolean bounded) throws IOException {
++        Objects.requireNonNull(readable, "readable");
++        if (readable instanceof CharBuffer) {
+             final CharBuffer cb = (CharBuffer) readable;
+             final int remaining = cb.remaining();
+-            ensureCapacity(size + remaining);
+-            cb.get(buffer, size, remaining);
+-            size += remaining;
+-        } else {
++            if (bounded && remaining > maxChars) {
++                throw new IOException("Readable exceeds maximum character count: " + maxChars);
++            }
++            final char[] chars = new char[remaining];
++            try {
++                cb.get(chars);
++                append(chars);
++                return remaining;
++            } finally {
++                ArrayFill.clear(chars);
++            }
++        }
++        final int readBufferSize = bounded ? (int) Math.min(1024L, (long) maxChars + 1) : 1024;
++        final char[] readBuffer = new char[Math.max(1, readBufferSize)];
++        final StrBuilder staged = new StrBuilder();
++        try {
+             while (true) {
+-                ensureCapacity(size + 1);
+-                final CharBuffer buf = CharBuffer.wrap(buffer, size, buffer.length - size);
+-                final int read = readable.read(buf);
++                final long available = bounded ? (long) maxChars - staged.size + 1 : readBuffer.length;
++                final int request = (int) Math.min(readBuffer.length, available);
++                final int read;
++                if (readable instanceof Reader) {
++                    read = ((Reader) readable).read(readBuffer, 0, request);
++                    if (read < -1 || read > request) {
++                        throw new IOException("Reader returned an invalid character count: " + read);
++                    }
++                } else {
++                    final CharBuffer target = CharBuffer.wrap(readBuffer, 0, request);
++                    read = readable.read(target);
++                    if (read < -1 || read > request || (read == -1 ? target.position() != 0 : read != target.position())) {
++                        throw new IOException("Readable returned an invalid character count: " + read);
++                    }
++                }
+                 if (read == -1) {
+                     break;
+                 }
+-                size += read;
++                if (read == 0) {
++                    continue;
++                }
++                if (bounded && staged.size > maxChars - read) {
++                    throw new IOException("Readable exceeds maximum character count: " + maxChars);
++                }
++                staged.append(readBuffer, 0, read);
++                ArrayFill.clear(readBuffer, 0, read);
+             }
++            append(staged);
++            return staged.size;
++        } finally {
++            ArrayFill.clear(readBuffer);
++            staged.clear();
+         }
+-        return size - oldSize;
+     }
+ 
+     /**
+@@ -2682,21 +2740,25 @@ public StrBuilder replaceFirst(final StrMatcher matcher, final String replaceStr
+     }
+ 
+     /**
+-     * Internal method to delete a range without validation.
++     * Internal method to replace a range without validation.
+      *
+-     * @param startIndex  the start index, must be valid
+-     * @param endIndex  the end index (exclusive), must be valid
+-     * @param removeLen  the length to remove (endIndex - startIndex), must be valid
+-     * @param insertStr  the string to replace with, null means delete range
+-     * @param insertLen  the length of the insert string, must be valid
+-     * @throws IndexOutOfBoundsException if any index is invalid
++     * @param startIndex  the start index (inclusive), must be valid.
++     * @param endIndex  the end index (exclusive), must be valid.
++     * @param removeLen  the length to remove (endIndex - startIndex), must be valid.
++     * @param insertStr  the string to replace with, null means delete range.
++     * @param insertLen  the length of the insert string, must be valid.
++     * @throws IndexOutOfBoundsException if any index is invalid.
+      */
+     private void replaceImpl(final int startIndex, final int endIndex, final int removeLen, final String insertStr, final int insertLen) {
++        final int oldSize = size;
+         final int newSize = size - removeLen + insertLen;
+         if (insertLen != removeLen) {
+             ensureCapacity(newSize);
+             System.arraycopy(buffer, endIndex, buffer, startIndex + insertLen, size - endIndex);
+             size = newSize;
++            if (newSize < oldSize) {
++                ArrayFill.clear(buffer, newSize, oldSize);
++            }
+         }
+         if (insertLen > 0) {
+             insertStr.getChars(0, insertLen, buffer, startIndex);
+@@ -2815,12 +2877,12 @@ public StrBuilder setLength(final int length) {
+             throw new StringIndexOutOfBoundsException(length);
+         }
+         if (length < size) {
+-            size = length;
++            ArrayFill.clear(buffer, length, size);
+         } else if (length > size) {
+             ensureCapacity(length);
+-            Arrays.fill(buffer, size, length, CharUtils.NUL);
+-            size = length;
++            ArrayFill.clear(buffer, size, length);
+         }
++        size = length;
+         return this;
+     }
+ 
+@@ -3068,4 +3130,35 @@ protected int validateRange(final int startIndex, int endIndex) {
+         return endIndex;
+     }
+ 
++    /**
++     * Restores this builder from a stream, allocating storage that exactly fits the logical content.
++     *
++     * @param in  the stream to read from
++     * @throws IOException if an I/O error occurs or the stream describes an invalid builder
++     * @throws ClassNotFoundException if a serialized class cannot be resolved
++     */
++    private void readObject(final ObjectInputStream in) throws IOException, ClassNotFoundException {
++        in.defaultReadObject();
++        if (size < 0) {
++            throw new StreamCorruptedException("Invalid builder length: " + size);
++        }
++        buffer = new char[size];
++        for (int i = 0; i < size; i++) {
++            buffer[i] = in.readChar();
++        }
++    }
++
++    /**
++     * Serializes this builder, writing only the logical content so unused capacity never reaches the stream.
++     *
++     * @param out  the stream to write to
++     * @throws IOException if an I/O error occurs
++     */
++    private void writeObject(final ObjectOutputStream out) throws IOException {
++        out.defaultWriteObject();
++        for (int i = 0; i < size; i++) {
++            out.writeChar(buffer[i]);
++        }
++    }
++
+ }

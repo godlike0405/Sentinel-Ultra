@@ -1,9 +1,9 @@
 diff --git a/specta-tags/tests/sentinel_transform_contract.rs b/specta-tags/tests/sentinel_transform_contract.rs
 new file mode 100644
-index 0000000..b3e3ee3
+index 0000000..b500d5f
 --- /dev/null
 +++ b/specta-tags/tests/sentinel_transform_contract.rs
-@@ -0,0 +1,789 @@
+@@ -0,0 +1,867 @@
 +#![allow(dead_code)]
 +
 +use std::{borrow::Cow, collections::BTreeMap, fs, process::Command};
@@ -219,9 +219,12 @@ index 0000000..b3e3ee3
 +        Primitive::bool,
 +        Primitive::str,
 +    ] {
-+        let spec = analyzer.analyze(&primitive.into(), &Types::default(), &[]);
-+        assert!(spec.is_identity());
-+        assert_eq!(spec.to_json(), "0");
++        assert_eq!(
++            analyzer
++                .analyze(&primitive.into(), &Types::default(), &[])
++                .to_json(),
++            "0"
++        );
 +    }
 +});
 +
@@ -250,7 +253,7 @@ index 0000000..b3e3ee3
 +        assert_eq!(analyzer.analyze(&dt, &types, &[]).to_json(), expected);
 +    }
 +    let (dt, types) = named_type("other", "DateTime");
-+    assert!(analyzer.analyze(&dt, &types, &[]).is_identity());
++    assert_eq!(analyzer.analyze(&dt, &types, &[]).to_json(), "0");
 +});
 +
 +contract_test!(v1_custom_matcher_contract, {
@@ -543,6 +546,81 @@ index 0000000..b3e3ee3
 +            { "status": "ok", "data": { "$bigint": "17" } },
 +            { "status": "error", "error": { "$date": "2026-04-05T06:07:08.000Z" } }
 +        ])
++    );
++
++    let typescript = render_runtime(RuntimeTarget::TypeScript, &req);
++    let typescript_body = format!(
++        r#"const objectValue = __TS_transform({{
++    big: "9",
++    date: "2026-03-25T01:02:03Z",
++    bytes: [1, 2],
++    maybe: null,
++    list: ["10", "11"],
++    tuple: ["2025-01-02T03:04:05Z", [3, 4]],
++    map: {{ first: "12" }},
++    plain: true,
++}}, {});
++const enumValue = __TS_transform({{ Data: {{ payload: "13" }} }}, {});
++const numberValue = __TS_transform(42, 1);
++const invalidDate = __TS_transform("not-a-date", 2);
++const invalidBytes = __TS_transform([1, 256], 3);
++const wrongList = __TS_transform({{ not: "a list" }}, [5, 1]);
++Promise.all([
++    __TS_transformResult<string, never>(
++        Promise.resolve({{ status: "ok" as const, data: "17" }}), 1, 2,
++    ),
++    __TS_transformResult<never, string>(
++        Promise.resolve({{ status: "error" as const, error: "2026-04-05T06:07:08Z" }}), 1, 2,
++    ),
++]).then(([okResult, errorResult]) => {{
++    const ok = okResult as any;
++    const error = errorResult as any;
++    console.log(JSON.stringify({{
++        number: numberValue.toString(),
++        big: objectValue.big.toString(),
++        date: objectValue.date.toISOString(),
++        bytes: Array.from(objectValue.bytes),
++        maybe: objectValue.maybe,
++        list: objectValue.list.map((value: bigint) => value.toString()),
++        tupleDate: objectValue.tuple[0].toISOString(),
++        tupleBytes: Array.from(objectValue.tuple[1]),
++        map: objectValue.map.first.toString(),
++        plain: objectValue.plain,
++        enumPayload: enumValue.Data.payload.toString(),
++        invalidDate,
++        invalidBytes,
++        wrongList,
++        okStatus: ok.status,
++        okData: ok.data.toString(),
++        errorStatus: error.status,
++        errorData: error.error.toISOString(),
++    }}));
++}});"#,
++        object_spec.to_json(),
++        enum_spec.to_json(),
++    );
++    assert_eq!(
++        run_typescript(&typescript, &typescript_body),
++        json!({
++            "number": "42",
++            "big": "9",
++            "date": "2026-03-25T01:02:03.000Z",
++            "bytes": [1, 2],
++            "maybe": null,
++            "list": ["10", "11"],
++            "tupleDate": "2025-01-02T03:04:05.000Z",
++            "tupleBytes": [3, 4],
++            "map": "12",
++            "plain": true,
++            "enumPayload": "13",
++            "invalidDate": "not-a-date",
++            "invalidBytes": [1, 256],
++            "wrongList": { "not": "a list" },
++            "okStatus": "ok",
++            "okData": "17",
++            "errorStatus": "error",
++            "errorData": "2026-04-05T06:07:08.000Z"
++        })
 +    );
 +});
 +
